@@ -1,0 +1,11 @@
+#mypub: /domain/topic/_param
+
+roleCert: /domain/role/roleID <= domainCert
+opCert: roleCert & {role: "operator"}
+userCert: roleCert & {role: "user"}
+
+domain: "myHouse"
+domainCert: /domain
+
+cmd: #mypub & {topic: "cmd"} <= opCert
+req: #mypub & {topic: "req"} <= opCert | userCert

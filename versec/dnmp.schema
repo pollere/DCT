@@ -1,0 +1,46 @@
+// DNMP command/reply trust schema
+
+// this network's namespace 
+network: "AliceNetOps"
+
+// the trust anchor cert name
+netCert:  network/_keyinfo
+
+// subdomain associated with this schema & associated cert 
+domain: "dnmp"
+dnmpCert: network/domain/_keyinfo <= netCert
+
+// command publication definition
+
+#command: network/domain/_target/topic/roleId/_pType/_pArgs/origin/cTS &
+                { topic: "command", origin: sysId(), cTS: timestamp() }
+
+// Operators can issue any command
+ocommand: #command <= opCert
+
+// Users can issue any command to local nod and ping commands to any nod
+ucommand: #command & { _target: "local" } | { _pType: "Pinger" } <= userCert
+
+// Certificates and signing chain for roles that can issue commands
+
+roleCert: network/domain/role/roleId/_keyinfo <= dnmpCert
+opCert:   roleCert & { role: "operator" }
+userCert: roleCert & { role: "user" }
+
+// reply publication definition
+
+#reply: replace(#command, topic, "reply")/nodId/rTS & { rTS: timestamp() } <= nodCert
+
+nodCert:    network/domain/"nod"/nodId/_keyinfo <= deviceCert
+deviceCert: network/"device"/devId/_keyinfo <= configCert
+configCert: network/"config"/confId/_keyinfo <= netCert
+
+// Prefix used at the NDN Interest/Data level to sync this collection.
+#wirePrefix: ndnprefix/domain/_target
+wpLocal: #wirePrefix & { ndnprefix: "localhost", _target: "local" }
+wpOther: #wirePrefix & { ndnprefix: "localnet" }
+
+// NDN certificate format v2 suffix for a cert name. Final 3 components
+// are keyID, issuerID and version. The key management system uses these
+// but not this schema so they're left anonymous here.
+_keyinfo: "KEY"/_/_/_

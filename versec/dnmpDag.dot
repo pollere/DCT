@@ -1,0 +1,18 @@
+digraph certDag {
+  graph [fontname = "Handlee"];
+  node [fontname = "Handlee"];
+  edge [fontname = "Handlee"];
+  bgcolor=transparent;
+  "#command" -> "ocommand";
+  "#command" -> "ucommand";
+  "ocommand" -> "opCert";
+  "opCert" -> "dnmpCert";
+  "ucommand" -> "userCert";
+  "userCert" -> "dnmpCert";
+  "dnmpCert" -> "netCert";
+  "#reply" -> "nodCert";
+  "nodCert" -> "deviceCert";
+  "deviceCert" -> "configCert";
+  "configCert" -> "netCert";
+  "netCert" [style="diagonals"];
+}
