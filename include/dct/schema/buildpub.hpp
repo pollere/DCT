@@ -1,0 +1,428 @@
+#ifndef BUILDPUB_HPP
+#define BUILDPUB_HPP
+/*
+ * Use a schema to build and sign publication objects
+ *
+ * Copyright (C) 2020 Pollere, Inc.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, see <https://www.gnu.org/licenses/>.
+ *  You may contact Pollere, Inc at info@pollere.net.
+ *
+ *  The DCT proof-of-concept is not intended as production code.
+ *  More information on DCT is available from info@pollere.net
+ */
+
+#include <algorithm>
+#include <array>
+#include <bitset>
+#include <chrono>
+#include <set>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include "certstore.hpp"
+#include "dct/format.hpp"
+#include "rdschema.hpp"
+
+extern "C" {
+    //int gethostname(const char*, size_t); //Posix
+    int gethostname(char*, size_t); //MacOS
+    pid_t getpid(void);
+}
+#ifndef HOST_NAME_MAX
+static constexpr size_t HOST_NAME_MAX = 64;  //Linux limit
+#endif
+
+using namespace std::string_literals;
+
+// parameter types allowed
+//using timeVal = std::chrono::sys_time<std::chrono::microseconds>;
+using timeVal = std::chrono::time_point<std::chrono::system_clock>;
+using paramVal = std::variant<std::monostate, std::string, std::string_view, uint64_t, timeVal>;
+
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+template <>
+struct fmt::formatter<paramVal>: fmt::dynamic_formatter<> {
+    auto format(const paramVal& v, format_context& ctx) -> decltype(ctx.out()) {
+        return std::visit(overloaded {
+            [&](const std::monostate&) { return fmt::format_to(ctx.out(), "(empty)"); },
+            [&](const timeVal& val) { return fmt::format_to(ctx.out(), "{:%H:%M:%S}", val); },
+            [&](const auto& val) { return fmt::dynamic_formatter<>::format(val, ctx); },
+        }, v);
+    }
+};
+
+template <>
+struct fmt::formatter<ndn::Name::Component>: fmt::dynamic_formatter<> {
+    auto format(const ndn::Name::Component& v, format_context& ctx) -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "{}", v.getValue().toRawStr());
+    }
+};
+
+template<bool pbdebug = false>
+struct pubBldr {
+    // make a 'builder' for pub 'pub' of binary schema 'bs' using certificate store 'cs'.
+    pubBldr(const bSchema& bs, const certStore& cs, bTok pub) : bs_{bs}, cs_{cs} {
+        pidx_ = bs_.findPub(pub);
+        if (pidx_ < 0) throw schema_error(format("pub {} not found", pub));
+        makePubTmplts(findCerts());
+    }
+    // internal struct and utility definitions
+    template <typename... Args>
+    void dprint(const auto& format_str, Args&&... args) const {
+        if constexpr (pbdebug) print(format_str, std::forward<Args>(args)...);
+    }
+    struct tagMap : std::unordered_map<bTok,compidx> {
+        using std::unordered_map<bTok,compidx>::unordered_map;
+        compidx operator[](bTok key) const {
+            if (const auto& v = find(key); v != end()) return v->second;
+            throw schema_error(format("no {} parameter for pub", key));
+        }
+    };
+    using valSet = std::bitset<sizeof(uint64_t)*8>;
+
+    struct pTmplt {
+        valSet vs_{};    // set of distinguishing parameter values
+        bName tmplt_{};  // cor-resolved template for pub
+        compidx dpar_{}; // index of template's distinguishing parameter
+    };
+
+    // *** methods
+    std::string formatTok(bComp c) const {
+        std::string res{};
+        if (c < maxTok) {
+            res = bs_.tok_[c];
+        } else if (isIndex(c)) {
+            res = ptok_[typeValue(c)];
+        } else if (c == SC_ANON) {
+            res = "_";
+        } else {
+            res = format("{:02x}", c);
+        }
+        return res;
+    }
+    std::string formatName(const bName& nm) {
+        std::string res{};
+        for (int n = nm.size(), i = 0; i < n; i++) {
+            res += '/';
+            res += formatTok(nm[i]);
+        }
+        return res;
+    }
+    bool matches(const certName& cert, const bName& bcert) const {
+       if (cert.size() != bcert.size()) return false;
+       auto ntok = bs_.tok_.size();
+       for (auto n = cert.size(), i=0ul; i < n; i++) {
+           if (bcert[i] < ntok && cert[i].getValue().toRawStr() != bs_.tok_[bcert[i]]) return false;
+       }
+       return true;
+    }
+    bool matches(const certVec& chain, const bChain& bchain) const {
+       if (chain.size() != bchain.size()) return false;
+       for (auto n = chain.size(), i=0ul; i < n; i++) if (! matches(chain[i], bs_.cert_[bchain[i]])) return false;
+       return true;
+    }
+    // find the first signing chain in the certStore consistent with the
+    // schema and use it to initialize the 'cert_' array.
+    auto findCerts() {
+        // candidate chains are 'or' of this pub's cor chain bitmaps
+        const auto& [param,disc,pub,tagi] = bs_.pub_[pidx_];
+        discSet ds{disc};
+        for (size_t d = 0, de = bs_.discrim_.size(); d < de; d++) if (ds[d]) cbm_ |= bs_.discrim_[d].cbm;
+        if (cbm_ == 0) {
+            dprint("chain: not needed\n");
+            return cbm_;
+        }
+        // find the first chain matching the cert store signing chain
+        auto cbm = cbm_;
+        for (auto bm = cbm; bm != 0; ) {
+            auto c = std::countr_zero(bm);
+            bm &=~ (1u << c);
+            if (!matches(cs_.signingChain(), bs_.chain_[c])) cbm &=~ (1u << c);
+        }
+        if (cbm == 0) throw schema_error("no valid signing cert found");
+        dprint("chain: {}, signing cert: /{}\n", std::countr_zero(cbm), fmt::join(cs_.signingChain()[0], "/"));
+        return cbm;
+    }
+
+    // add token 'tok' to the pub-specific token table and return its value.
+    // 'tok' must not be in the table. If tok's character sequence is in the string table, it's
+    // used to back the tok. Otherwise the char sequence is added to the pub-specific string
+    // table and used to back tok.
+    bComp newTok(bTok ntok) {
+        bComp t = ptok_.size();
+        if (t > SC_VALUE) throw schema_error(format("no room for token {}", ntok));
+        bTok tok{};
+        if (auto p = bs_.stab_.find(ntok); p == std::string::npos) {
+            // add to pub-specific strings
+            p = pstab_.size();
+            pstab_.emplace_back(ntok);
+            tok = bTok(pstab_[p].data(), ntok.size());
+        } else {
+            tok = bTok(bs_.stab_.data() + p, ntok.size());
+        }
+        t |= SC_INDEX;
+        ptok_.emplace_back(tok);
+        ptm_.emplace(tok, t);
+        return t;
+    }
+
+    // find or add token 'tok'
+    bComp findOrAddTok(bTok tok) {
+        if (auto t = bs_.tm_.find(tok); t != bs_.tm_.end()) return t->second;
+        if (auto t = ptm_.find(tok); t != ptm_.end()) return t->second;
+        return newTok(tok);
+    }
+
+    // return value of cert[chain[idx]] component 'c' under corespondence 'cor'.
+    // If the cor isn't for a pub or the pub's c component doesn't match
+    // 'cor' an error is thrown.
+    auto mapCor(auto idx, auto c, auto cor) {
+        c &= SC_VALUE;
+        auto cert = cs_.signingChain();
+        for (const auto& [cert1, comp1, cert2, comp2] : bs_.cor_[cor]) {
+            if (cert1 == idx && c == comp1) return findOrAddTok(cert[cert2-1][comp2].getValue().toRawStr());
+        }
+        throw schema_error(format("no corespondence for {:02x}({})", c, tag_[typeValue(c)]));
+    }
+
+    int exists(const pTmplt& pt) const noexcept {
+        for (int i = 0, n = pt_.size(); i < n; i++) {
+            if (pt.dpar_ == pt_[i].dpar_ && pt.tmplt_ == pt_[i].tmplt_) return i;
+        }
+        return -1;
+    }
+    // build a pub-specific template given the skeleton index 'tmplt',
+    // the discriminator component index 'comp', the list of expected
+    // comp values 'vlist' and the pub's corespondences 'cor'. The
+    // resulting template will be complete except for parameter values
+    // which are supplied to the build* calls.
+    void addTemplate(auto tmplt, auto comp, auto vlist, auto cor) {
+        pTmplt pt{};
+        pt.dpar_ = comp;
+        // build valset bitmap from vlist
+        if (vlist < maxTok) {
+            pt.vs_[vlist] = 1;
+        } else {
+            for (const auto v : bs_.vlist_[vlist & 0x7f]) pt.vs_[v] = 1;
+        }
+        // fill in cors from cert chain
+        for (auto c : bs_.tmplt_[tmplt]) {
+            if (isCor(c)) c = mapCor(0, c, cor);
+            pt.tmplt_.emplace_back(c);
+        }
+        if (int i = exists(pt); i >= 0) {
+            // this pt just adds more values to an existing pt
+            pt_[i].vs_ |= pt.vs_;
+        } else {
+            pt_.emplace_back(pt);
+        }
+    }
+    void printPubTemplates() {
+        if constexpr (pbdebug) {
+            for (const auto& pt : pt_) {
+                dprint(" {:12}({:d}): {:10x} {}\n", pt.dpar_ < maxTok? bs_.tok_[tag_[pt.dpar_]] : "*",
+                        pt.dpar_, pt.vs_.to_ulong(), formatName(pt.tmplt_));
+            }
+        }
+    }
+    // construct all the pub templates compatible with cert chains specified
+    // by 'cbm'. At this point, all the certs from these chains are
+    // available in the certStore cs_ so 'correspondences' between pub
+    // and cert name components can be resolved. The resulting templates
+    // will be complete except for parameter values and 'call' ops.
+    void makePubTmplts(chainBM cbm) {
+        const auto& [param,disc,pub,tagi] = bs_.pub_[pidx_];
+        discSet dset{disc};
+        parmbm_ = param;
+        // build tagmap
+        tag_ = bs_.tag_[tagi];
+        for (int i=0, n=tag_.size(); i < n; ++i) tm_.emplace(bs_.tok_[tag_[i]], i);
+
+        for (size_t d = 0, de = bs_.discrim_.size(); d < de; d++) {
+            if (! dset[d]) continue;
+            const auto& [chainbm,tmplt,comp,vlist,cor] = bs_.discrim_[d];
+            // if template needs to be signed but not with our key, skip it.
+            if (chainbm && (cbm & chainbm) == 0) continue;
+            addTemplate(tmplt, comp, vlist, cor);
+        }
+        // templates sorted so most specific match is first
+        std::sort(pt_.begin(), pt_.end(), [](const auto& a, const auto& b) { return a.vs_.count() > b.vs_.count(); });
+        printPubTemplates();
+    }
+
+    // routines to build and sign pubs
+    using Name = ndn::Name;
+    using Comp = ndn::Name::Component;
+ 
+    // A paramVal is a variant type capable of holding any type that can
+    // be put in a Name::Component. Params is a vector of paramVals the
+    // same size as the pub template. Thus pub tag, template and Param
+    // indices are the same making it easy to build pubs and detect
+    // missing or duplicate params in build calls.
+
+    using Params = std::vector<paramVal>;
+
+    // doParam converts build API variadic calls (zero or more 'tag, value'
+    // or 'compidx, value' argument pairs) into a filled-in Params
+    // array. The variadic calls are handled via a recursive template
+    // that picks off arguments two at a time until there are no args
+    // left. If the caller supplies an odd number of arguments, the
+    // compiler will spew reams of confusing error messages (until we
+    // can take advantage of c++20 'Concepts' to say what's really wrong).
+    void doParam(Params&) {}
+    template<typename... Rest>
+    void doParam(Params& par, compidx c, paramVal val, Rest... rest) {
+        if (c >= parmbm_.size() || !parmbm_[c]) throw schema_error(format("component {} isn't a parameter", c));
+        if (par[c].index() != 0)  throw schema_error(format("param {} set twice", c));
+
+        par[c] = val;
+        doParam(par, rest...);
+    }
+    template<typename... Rest>
+    void doParam(Params& par, std::string_view tag, Rest... rest) { doParam(par, tm_[tag], rest...); }
+
+    static const std::string& sysID() noexcept {
+        static std::string sysid{};
+        if (sysid.size() == 0) {
+            char h[HOST_NAME_MAX+1];
+            if (gethostname(&h[0], sizeof(h)-1) != 0) {
+                h[0] = h[1] = '?'; h[2] = 0;
+            }
+            sysid = format("p{}@{}", getpid(), h);
+        }
+        return sysid;
+    }
+    Comp compValue(const Params& par, bComp c) const {
+        if (isLit(c)) return std::string(bs_.tok_[c]);
+        if (isIndex(c)) return std::string(ptok_[typeValue(c)]);
+        if (isParam(c)) return std::visit(overloaded {
+                            [](std::monostate) { return Comp("(empty)"s); },
+                            [](std::string_view val) { return Comp(std::string(val)); },
+                            [](std::string val) { return Comp(val); },
+                            [](timeVal val) { return Comp::fromTimestamp(val); },
+                            [](uint64_t val) { return Comp::fromNumber(val); },
+                        }, par[typeValue(c)]);
+        if (!isCall(c)) throw schema_error(format("invalid comp {} in template", c));
+        // handle 'call()' ops
+        c = typeValue(c);
+        if (c == 0) return Comp::fromTimestamp(std::chrono::system_clock::now());
+        if (c == 1) return sysID();
+        throw schema_error(format("invalid call {} in template", c));
+    }
+    Name fillTmplt(const Params& par, pTmplt pt) const {
+        std::vector<Comp> res{};
+        for (auto c : pt.tmplt_) res.emplace_back(compValue(par, c));
+        return Name(res);
+    }
+    bComp parToTok(const Params& par, compidx c) const {
+        auto pval = format("{}", par[c]);
+        if (const auto v = bs_.tm_.find(pval); v != bs_.tm_.end()) return v->second;
+        return maxTok;
+    }
+    bool checkParVal(const Params& par, const pTmplt& pt, compidx c) const noexcept {
+        // assert(parmbm_[c] == true)
+        if (isParam(pt.tmplt_[c])) return true;
+        if (auto v = parToTok(par, c); v == pt.tmplt_[c]) return true;
+        return false;
+    }
+    // check that all literal params in the template match the correponding user pars
+    bool checkPars(const Params& par, const pTmplt& pt) const noexcept {
+        for (auto c = 0u; c < par.size(); c++) if (parmbm_[c] && !checkParVal(par, pt, c)) return false;
+        return true;
+    }
+    const auto& matchTmplt(const Params& par) const {
+        for (const auto& pt : pt_) {
+            // if template has no discriminator or the discrim is in the template,
+            // and if template literal components match pars, use it
+            if ((pt.dpar_ >= bs_.tok_.size() || pt.vs_ == 1u) && checkPars(par, pt)) return pt;
+ 
+            // template must have a discrim in the valset, check it and the template lits
+            if (auto t = parToTok(par, pt.dpar_); t != maxTok && pt.vs_[t] && checkPars(par, pt)) return pt;
+        }
+        throw schema_error("no matching pub template");
+    }
+
+    Name completeTmplt(const Params& par) const { return fillTmplt(par, matchTmplt(par)); }
+
+    // defaults(name, value ...) - set default pub parameter value(s)
+    //
+    // called with zero or more argument pairs where each pair has the form '<tag name>, <value>'
+    // or '<comp index>, <value>'.  E.g., default("_target", "local") makes "local" a default for the
+    // "_target" parameter. Defaults are used when name() calls are missing the associated parameter.
+    //
+    // Each tag or component index must refer to one of the pub's parameters or an error is thrown.
+    template<typename... Rest>
+    auto& defaults(const Rest... rest) {
+        static_assert((sizeof...(Rest) & 1) == 0, "must supply *pairs* of name,value arguments");
+        Params par{};
+        par.resize(tag_.size());
+        doParam(par, rest...);
+        pdefault_ = std::move(par);
+        return *this;
+    }
+
+    const auto& defaults() const noexcept { return pdefault_; }
+
+    // construct complete pub name given its parameters.
+    //
+    // called with zero or more argument pairs where each pair has
+    // the form '<tag name>, <value>' or '<comp index>, <value>'.
+    // E.g., name("_target", "local", 6, 1234u) constructs a name with
+    // the _target component containing the string "local" and the 6th
+    // component containing a Segment number 1234.
+    //
+    // Each tag or component index must refer to one of the pub's
+    // parameters and values for all the pub's parameters must be supplied.
+    // An error is thrown otherwise.
+    template<typename... Rest>
+    Name name(Rest&&... rest) {
+        static_assert((sizeof...(Rest) & 1) == 0, "must supply name,value argument pairs");
+        Params par{};
+        par.resize(tag_.size());
+        doParam(par, std::forward<Rest>(rest)...);
+        // make sure all parameters were supplied or defaulted
+        for (auto c = 0u; c < par.size(); c++) {
+            if (parmbm_[c] && par[c].index() == 0) {
+                if (pdefault_[c].index() == 0) throw schema_error(format("param {} missing", bs_.tok_[tag_[c]]));
+                par[c] = pdefault_[c];
+            }
+        }
+        // find a matching template, fill in params then return it
+        return completeTmplt(par);
+    }
+
+    // tag name to component index
+    auto index(std::string_view s) const { return tm_[s]; }
+
+    // *** variables
+    bName tag_;                 // pub's tags
+    tagMap tm_{};               // tag name-to-component-index map
+    std::vector<pTmplt> pt_{};  // viable templates for pub
+    Params pdefault_{};
+    parmSet parmbm_{};
+    chainBM cbm_{};
+    const bSchema& bs_;
+    const certStore& cs_;
+    std::unordered_map<bTok,bComp> ptm_{}; // pub-specific token map
+    std::vector<bTok> ptok_{};
+    std::vector<std::string> pstab_{};     // pub-specific string table
+    int pidx_{-1};              // pub's index in bs_.pub_
+};
+
+#endif // BUILDPUB_HPP

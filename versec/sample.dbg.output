@@ -1,4 +1,4 @@
-VerSec Schema Compiler Copyright (C) 2020 Pollere Inc., v0.9.0-0-g694a6e4
+VerSec Schema Compiler Copyright (C) 2020 Pollere Inc., v1.0.1-8-g6665ff0
 digraph certDag {
   "#mypub" -> "cmd";
   "#mypub" -> "req";
@@ -9,59 +9,63 @@ digraph certDag {
   "opCert" -> "domainCert";
   "domainCert";
 }
+#mypub[_topic]: 2 var of /"myHouse"/_topic/param
+Per-component instances:
+ #mypub:  _topic: 2
+
 Publication #mypub:
-  parameters: _param
-  tags: /domain/topic/_param
+  parameters: param
+  tags: /_domain/_topic/param
   signing chains:
     chain 0: cmd <= opCert <= domainCert
     chain 1: req <= opCert <= domainCert
     chain 2: req <= userCert <= domainCert
   templates:
-    /"myHouse"/"cmd"/_param { opCert }
-      [ * ]
-    /"myHouse"/"req"/_param { opCert userCert }
-      [ * ]
+    /"myHouse"/_topic/param { opCert }
+      [ _topic: cmd ]
+    /"myHouse"/_topic/param { opCert userCert }
+      [ _topic: req ]
 
 Certificate templates:
-  cert userCert: /"myHouse"/"user"/roleID
-  cert opCert: /"myHouse"/"operator"/roleID
+  cert userCert: /"myHouse"/"user"/_roleID
+  cert opCert: /"myHouse"/"operator"/_roleID
   cert domainCert: /"myHouse"
 
-10 strings, 54 bytes (0 overlaps, 54 bytes in stab)
-0: 33:6 #mypub
-1: 27:6 _param
-2: 21:6 domain
-3: 15:6 roleID
-4: 10:5 topic
+10 strings, 56 bytes (0 overlaps, 56 bytes in stab)
+0: 21:6 #mypub
+1: 10:5 param
+2: 41:7 _domain
+3: 34:7 _roleID
+4: 15:6 _topic
 5: 3:3 cmd
-6: 39:7 myHouse
-7: 46:8 operator
+6: 27:7 myHouse
+7: 48:8 operator
 8: 0:3 req
 9: 6:4 user
-cert 0(userCert): /"myHouse"/"user"/roleID
-cert 1(opCert): /"myHouse"/"operator"/roleID
+cert 0(userCert): /"myHouse"/"user"/_roleID
+cert 1(opCert): /"myHouse"/"operator"/_roleID
 cert 2(domainCert): /"myHouse"
 certvec_:
 {6, 9, 162}
 {6, 7, 162}
 {6}
-tags 0: /domain/topic/_param
+tags 0: /_domain/_topic/param
   2/4/1
 param 0004
 chain 0(cmd): 0: 1<2  cor 0: 
 chain 1(req): 0: 1<2  cor 0: 
 chain 2(req): 1: 0<2  cor 0: 
-tmplt 0: 06/05/82, cor 0, chainBM 01 ({0}), discrim 0: (1, 0, 128, 128, 0)
-tmplt 1: 06/08/82, cor 0, chainBM 03 ({1, 2}), discrim 1: (3, 1, 128, 128, 0)
-pub 0(#mypub): (par#4, tok=0, tags=0, disc=0:1)
-wrote 56(54) bytes for tlv str(132)
+tmplt 0: 06/a1/82, cor 0, chainBM 01 ({0}), discrim 0: (chns#1, tmpl=0, comp=1, vals=5, cor=0)
+tmplt 0: 06/a1/82, cor 0, chainBM 03 ({1, 2}), discrim 1: (chns#3, tmpl=0, comp=1, vals=8, cor=0)
+pub 0(#mypub): (par#4, disc#3, tok=0, tags=0)
+wrote 58(56) bytes for tlv str(132)
 wrote 22(20) bytes for tlv tok(133)
 wrote 12(10) bytes for tlv cert(134)
 wrote 8(6) bytes for tlv chain(135)
 wrote 3(1) bytes for tlv cor(136)
 wrote 6(4) bytes for tlv tag(137)
-wrote 10(8) bytes for tlv tmplt(138)
-wrote 3(1) bytes for tlv vlist(139)
+wrote 6(4) bytes for tlv tmplt(138)
+wrote 2(0) bytes for tlv vlist(139)
 wrote 12(10) bytes for tlv disc(140)
 wrote 8(6) bytes for tlv pub(141)
-binary schema  is 140 bytes
+binary schema  is 137 bytes

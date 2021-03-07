@@ -1,4 +1,4 @@
-VerSec Schema Compiler Copyright (C) 2020 Pollere Inc., v0.9.0-0-g694a6e4
+VerSec Schema Compiler Copyright (C) 2020 Pollere Inc., v1.0.1-8-g6665ff0
 digraph certDag {
   "#reply" -> "nodCert";
   "nodCert" -> "deviceCert";
@@ -13,125 +13,131 @@ digraph certDag {
   "dnmpCert" -> "netCert";
   "netCert";
 }
+Per-component instances:
+ #command:  target: 2 pType: 2
+ #reply: 
+ #wirePrefix:  _ndnprefix: 2 target: 2
+
 Publication #command:
-  parameters: _target _pType _pArgs
-  tags: /network/domain/_target/topic/roleId/_pType/_pArgs/origin/cTS
+  parameters: target pType pArgs
+  tags: /_network/_domain/target/_topic/_roleId/pType/pArgs/_origin/_cTS
   signing chains:
     chain 0: ocommand <= opCert <= dnmpCert <= netCert
                 ocommand[4]==opCert[3]
     chain 1: ucommand <= userCert <= dnmpCert <= netCert
                 ucommand[4]==userCert[3]
   templates:
-    /"AliceNetOps"/"dnmp"/_target/"command"/roleId/_pType/_pArgs/sysId()/timestamp() { opCert }
+    /"AliceNetOps"/"dnmp"/target/"command"/_roleId/pType/pArgs/sysId()/timestamp() { opCert }
       [ * ]
-    /"AliceNetOps"/"dnmp"/_target/"command"/roleId/_pType/_pArgs/sysId()/timestamp() { userCert }
-      [ _target: "local" | _pType: "Pinger" ]
+    /"AliceNetOps"/"dnmp"/"local"/"command"/_roleId/pType/pArgs/sysId()/timestamp() { userCert }
+      [ target: (local) ]
+    /"AliceNetOps"/"dnmp"/target/"command"/_roleId/"Pinger"/pArgs/sysId()/timestamp() { userCert }
+      [ pType: (Pinger) ]
 
 Publication #reply:
   parameters: #command
-  tags: /network/domain/_target/topic/roleId/_pType/_pArgs/origin/cTS/nodId/rTS
+  tags: /_network/_domain/target/_topic/_roleId/pType/pArgs/_origin/_cTS/_nodId/_rTS
   signing chains:
     chain 2: #reply <= nodCert <= deviceCert <= configCert <= netCert
                 #reply[9]==nodCert[3]
   templates:
-    /@#command/@netCert/"reply"/_/_/_/_/_/_/nodId/timestamp() { nodCert }
+    /@#command/@netCert/"reply"/_/_/_/_/_/_/_nodId/timestamp() { nodCert }
       [ * ]
 
 Publication #wirePrefix:
-  parameters: _target
-  tags: /ndnprefix/domain/_target
+  parameters: target
+  tags: /_ndnprefix/_domain/target
   templates:
-    /"localhost"/"dnmp"/_target { }
-      [ _target: "local" ]
-    /"localnet"/"dnmp"/_target { }
+    /"localhost"/"dnmp"/"local" { }
+      [ * ]
+    /"localnet"/"dnmp"/target { }
       [ * ]
 
 Certificate templates:
-  cert nodCert: /"AliceNetOps"/"dnmp"/"nod"/nodId/"KEY"/_/_/_
+  cert nodCert: /"AliceNetOps"/"dnmp"/"nod"/_nodId/"KEY"/_/_/_
   cert deviceCert: /"AliceNetOps"/"device"/devId/"KEY"/_/_/_
   cert configCert: /"AliceNetOps"/"config"/confId/"KEY"/_/_/_
-  cert userCert: /"AliceNetOps"/"dnmp"/"user"/roleId/"KEY"/_/_/_
-  cert opCert: /"AliceNetOps"/"dnmp"/"operator"/roleId/"KEY"/_/_/_
+  cert userCert: /"AliceNetOps"/"dnmp"/"user"/_roleId/"KEY"/_/_/_
+  cert opCert: /"AliceNetOps"/"dnmp"/"operator"/_roleId/"KEY"/_/_/_
   cert dnmpCert: /"AliceNetOps"/"dnmp"/"KEY"/_/_/_
   cert netCert: /"AliceNetOps"/"KEY"/_/_/_
 
-31 strings, 190 bytes (4 overlaps, 170 bytes in stab)
-0: 122:8 #command
-1: 86:6 #reply
-2: 159:11 #wirePrefix
-3: 80:6 _pArgs
-4: 74:6 _pType
-5: 99:7 _target
-6: 6:3 cTS
-7: 68:6 confId
-8: 27:5 devId
-9: 62:6 domain
-10: 139:9 ndnprefix
-11: 92:7 network
-12: 22:5 nodId
-13: 56:6 origin
-14: 3:3 rTS
-15: 50:6 roleId
-16: 17:5 topic
-17: 148:11 AliceNetOps
+31 strings, 196 bytes (4 overlaps, 176 bytes in stab)
+0: 127:8 #command
+1: 76:6 #reply
+2: 165:11 #wirePrefix
+3: 70:6 confId
+4: 29:5 devId
+5: 24:5 pArgs
+6: 19:5 pType
+7: 64:6 target
+8: 15:4 _cTS
+9: 96:7 _domain
+10: 144:10 _ndnprefix
+11: 119:8 _network
+12: 58:6 _nodId
+13: 89:7 _origin
+14: 11:4 _rTS
+15: 82:7 _roleId
+16: 52:6 _topic
+17: 154:11 AliceNetOps
 18: 0:3 KEY
-19: 44:6 Pinger
-20: 123:7 command
-21: 38:6 config
-22: 32:6 device
-23: 13:4 dnmp
-24: 114:5 local
-25: 130:9 localhost
-26: 114:8 localnet
-27: 22:3 nod
-28: 106:8 operator
-29: 87:5 reply
-30: 9:4 user
-cert 0(nodCert): /"AliceNetOps"/"dnmp"/"nod"/nodId/"KEY"/_/_/_
+19: 46:6 Pinger
+20: 128:7 command
+21: 40:6 config
+22: 34:6 device
+23: 7:4 dnmp
+24: 111:5 local
+25: 135:9 localhost
+26: 111:8 localnet
+27: 59:3 nod
+28: 103:8 operator
+29: 77:5 reply
+30: 3:4 user
+cert 0(nodCert): /"AliceNetOps"/"dnmp"/"nod"/_nodId/"KEY"/_/_/_
 cert 1(deviceCert): /"AliceNetOps"/"device"/devId/"KEY"/_/_/_
 cert 2(configCert): /"AliceNetOps"/"config"/confId/"KEY"/_/_/_
-cert 3(userCert): /"AliceNetOps"/"dnmp"/"user"/roleId/"KEY"/_/_/_
-cert 4(opCert): /"AliceNetOps"/"dnmp"/"operator"/roleId/"KEY"/_/_/_
+cert 3(userCert): /"AliceNetOps"/"dnmp"/"user"/_roleId/"KEY"/_/_/_
+cert 4(opCert): /"AliceNetOps"/"dnmp"/"operator"/_roleId/"KEY"/_/_/_
 cert 5(dnmpCert): /"AliceNetOps"/"dnmp"/"KEY"/_/_/_
 cert 6(netCert): /"AliceNetOps"/"KEY"/_/_/_
 certvec_:
 {17, 23, 27, 163, 18, 255, 255, 255}
-{17, 22, 162, 18, 255, 255, 255}
-{17, 21, 162, 18, 255, 255, 255}
+{17, 22, 4, 18, 255, 255, 255}
+{17, 21, 3, 18, 255, 255, 255}
 {17, 23, 30, 163, 18, 255, 255, 255}
 {17, 23, 28, 163, 18, 255, 255, 255}
 {17, 23, 18, 255, 255, 255}
 {17, 18, 255, 255, 255}
-tags 0: /network/domain/_target/topic/roleId/_pType/_pArgs/origin/cTS
-  11/9/5/16/15/4/3/13/6
+tags 0: /_network/_domain/target/_topic/_roleId/pType/pArgs/_origin/_cTS
+  11/9/7/16/15/6/5/13/8
 param 0064
 chain 0(ocommand): 0: 4<5<6  cor 0: 0.4=1.3
 chain 1(ucommand): 1: 3<5<6  cor 0: 0.4=1.3
-tmplt 0: 11/17/82/14/a4/85/86/c1/c0, cor 0, chainBM 01 ({0}), discrim 0: (1, 0, 128, 128, 0)
-tmplt 0: 11/17/82/14/a4/85/86/c1/c0, cor 0, chainBM 02 ({1}), discrim 1: (2, 0, 2, 24, 0)
-discrim 2: (2, 0, 5, 19, 0)
-pub 0(#command): (par#64, tok=0, tags=0, disc=0:2)
-tags 1: /network/domain/_target/topic/roleId/_pType/_pArgs/origin/cTS/nodId/rTS
-  11/9/5/16/15/4/3/13/6/12/14
+tmplt 0: 11/17/82/14/a4/85/86/c1/c0, cor 0, chainBM 01 ({0}), discrim 0: (chns#1, tmpl=0, comp=128, vals=0, cor=0)
+tmplt 1: 11/17/18/14/a4/85/86/c1/c0, cor 0, chainBM 02 ({1}), discrim 1: (chns#2, tmpl=1, comp=2, vals=0, cor=0)
+tmplt 2: 11/17/82/14/a4/13/86/c1/c0, cor 0, chainBM 02 ({1}), discrim 2: (chns#2, tmpl=2, comp=5, vals=0, cor=0)
+pub 0(#command): (par#64, disc#7, tok=0, tags=0)
+tags 1: /_network/_domain/target/_topic/_roleId/pType/pArgs/_origin/_cTS/_nodId/_rTS
+  11/9/7/16/15/6/5/13/8/12/14
 param 01f7
 chain 2(#reply): 2: 0<1<2<6  cor 1: 0.9=1.3
-tmplt 1: 80/81/82/1d/84/85/86/87/88/a9/c0, cor 1, chainBM 04 ({2}), discrim 3: (4, 1, 137, 128, 1)
-pub 1(#reply): (par#1f7, tok=1, tags=1, disc=3:3)
-tags 2: /ndnprefix/domain/_target
-  10/9/5
+tmplt 3: 80/81/1d/1d/84/85/86/87/88/a9/c0, cor 1, chainBM 04 ({2}), discrim 3: (chns#4, tmpl=3, comp=128, vals=0, cor=1)
+pub 1(#reply): (par#1f7, disc#8, tok=1, tags=1)
+tags 2: /_ndnprefix/_domain/target
+  10/9/7
 param 0004
-tmplt 2: 19/17/82, cor 0, chainBM 00 ({}), discrim 4: (0, 2, 2, 24, 0)
-tmplt 3: 1a/17/82, cor 0, chainBM 00 ({}), discrim 5: (0, 3, 128, 128, 0)
-pub 2(#wirePrefix): (par#4, tok=2, tags=2, disc=4:5)
-wrote 172(170) bytes for tlv str(132)
+tmplt 4: 19/17/18, cor 0, chainBM 00 ({}), discrim 4: (chns#0, tmpl=4, comp=128, vals=0, cor=0)
+tmplt 5: 1a/17/82, cor 0, chainBM 00 ({}), discrim 5: (chns#0, tmpl=5, comp=128, vals=0, cor=0)
+pub 2(#wirePrefix): (par#4, disc#30, tok=2, tags=2)
+wrote 178(176) bytes for tlv str(132)
 wrote 64(62) bytes for tlv tok(133)
 wrote 58(56) bytes for tlv cert(134)
 wrote 15(13) bytes for tlv chain(135)
 wrote 12(10) bytes for tlv cor(136)
 wrote 28(26) bytes for tlv tag(137)
-wrote 32(30) bytes for tlv tmplt(138)
-wrote 3(1) bytes for tlv vlist(139)
+wrote 52(50) bytes for tlv tmplt(138)
+wrote 2(0) bytes for tlv vlist(139)
 wrote 32(30) bytes for tlv disc(140)
 wrote 20(18) bytes for tlv pub(141)
-binary schema test/dnmp.bschm is 436 bytes
-wrote 440(436) bytes for tlv schema(131)
+binary schema  is 461 bytes
