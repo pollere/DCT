@@ -53,7 +53,7 @@ using namespace std::string_literals;
 template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
 template<class... Ts> overload(Ts...) -> overload<Ts...>;
 
-using Variants = std::variant<SigMgrSHA256,SigMgrECDSA,SigMgrRFC7693>;
+using Variants = std::variant<SigMgrSHA256,SigMgrECDSA>;
 
 struct SigMgrAny : Variants {
     using Variants::Variants;
@@ -75,7 +75,7 @@ static SigMgrAny sigMgrByType(uint8_t type) {
         case 3: return SigMgrECDSA();
         //case 7: return SigMgrAEAD();
         //case 8: return SigMgrEdDSA();
-        case 9: return SigMgrRFC7693();
+        //case 9: return SigMgrRFC7693();
     }
     throw std::runtime_error(format("sigMgrByType: unknown signer type {}", type));
 }
