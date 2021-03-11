@@ -45,7 +45,7 @@
 //#include "sigmgr_aead.hpp"
 #include "sigmgr_ecdsa.hpp"
 //#include "sigmgr_eddsa.hpp"
-#include "sigmgr_rfc7693.hpp"
+//#include "sigmgr_rfc7693.hpp"
 #include "sigmgr_sha256.hpp"
 
 using namespace std::string_literals;
