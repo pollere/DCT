@@ -1,0 +1,52 @@
+// Message-Based Pub/Sub 2 trust schema
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+
+// trust anchor name and subdomain associated with this schema
+_network:    "myNet"
+_domain:     "mbps2"
+
+// MBPS Publication definition
+// target, topic, topicArgs are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// A particular application process can make its subscription more
+// specific by using a subscription list with specific subCollections (designated
+// by targets) and related callback functions.
+
+#mbps2Pub: _network/_domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+    _origin:   sysId()
+}
+
+lockReport: #mbps2Pub & { target: "lock", topic: "event"|"status"
+    trgtLoc: _roleID
+    topicArgs: "locked" | "unlocked" | "battery_low"
+} <= devCert 
+
+lockCommand: #mbps2Pub & { target: "lock", topic: "command" } &
+    { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
+    { topicArgs:  "lock"|"unlock"|"report" } <= opCert
+
+roleCert:    _network/_domain/_role/_roleID/_keyinfo <= netCert
+opCert:  roleCert & { _role: "operator" }
+devCert: roleCert & { _role: "device" }
+
+netCert: _network/_domain/_keyinfo
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _network/_domain
+#pubValidator: "EdDSA"
+
+// Prefix used at the syncps (NDN Interest/Data) level to sync
+// this collection.
+
+#wirePrefix: _ndnprefix/_domain & { _ndnprefix: "localnet" }
+#wireValidator: "AEAD"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_
+
+// mbps2 uses a Publication validator that requires certs. 
+// The wire prefix that the key distributor will use to synchronize these certs
+// is #wirePrefix/"cert". Normal publications use #wirePrefix/"pubs"

@@ -27,8 +27,7 @@
  * SigMgr SHA256 provides a signing and validation methods that uses libsodium to
  * hash the signed portion of a passed in Data packet and check the received
  * value, respectively.
- * sign() sets the SignatureInfoEncoding (a Blob of the SignatureInfo),
- * computes the SHA256 hash and sets SignatureValue to that value.
+ * sign() computes the SHA256 hash and sets SignatureValue to that value.
  * validate() computes the SHA256 hash over the passed in Data packet's signed
  * portion and compares it to the value in SignatureValue.
  * Signed portion includes up to, not including the Signature Value TLV
@@ -53,15 +52,17 @@
 
 struct SigMgrSHA256 final : SigMgr {
 
-    SigMgrSHA256() : SigMgr(0, {0x16, 0x03, 0x1b, 0x01, 0x00}) {
+    SigMgrSHA256() : SigMgr(stSHA256, {0x16, 0x03, 0x1b, 0x01, stSHA256}) {
         if (sodium_init() == -1) exit(EXIT_FAILURE);
     }
-    bool sign(ndn::Data& data, const SigInfo& si) override final {
+    bool sign(ndn::Data& data, const SigInfo& si, const keyVal&) override final {
         // get Data in wire format then compute the SHA256 hash of the signed part
         auto dataWF = setupSignature(data, si);
-        std::array<uint8_t, crypto_hash_sha256_BYTES> sigVal;
-        crypto_hash_sha256(sigVal.data(), dataWF.signedBuf(), dataWF.signedSize());
-        data.getSignature()->setSignature(ndn::Blob(sigVal.data(), sigVal.size()));
+        std::vector<uint8_t> sigValue (crypto_hash_sha256_BYTES,0);
+        crypto_hash_sha256(sigValue.data(), dataWF.signedBuf(), dataWF.signedSize());
+        data.getSignature()->setSignature(sigValue);
+
+
         // Encode again to include the signature.
         dataWF = data.wireEncode();
         return true;
@@ -71,7 +72,7 @@ struct SigMgrSHA256 final : SigMgr {
      * Here just return true if success, false if failure
      * (Should log the reason)
      */
-     bool validate(ndn::Data& data) override final {
+    bool validate(const ndn::Data& data) override final {
         //get the Signed Portion of Data from wire format
         auto dataWF = data.wireEncode();
         //get its SHA256 hash
@@ -83,6 +84,8 @@ struct SigMgrSHA256 final : SigMgr {
 
         return std::memcmp(sigVal, dataHash.data(), dataHash.size()) == 0;
     }
+    bool validate(const ndn::Data& data, const dct_Cert&) override final { return validate(data); }
+
     bool needsKey() const noexcept override final { return 0; };
 };
 

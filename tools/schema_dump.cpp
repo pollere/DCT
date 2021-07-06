@@ -1,7 +1,5 @@
-#ifndef SCHEMAINSTALL_HPP
-#define SCHEMAINSTALL_HPP
 /*
- * Install a compiled schema in the NDN PIB
+ * schema_dump <file> - dump a binary schema file 
  *
  * Copyright (C) 2020 Pollere, Inc.
  *
@@ -22,22 +20,27 @@
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
  */
-
-#include <ndn-ind/security/pib/pib-sqlite3.hpp>
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
 #include "dct/format.hpp"
-#include "dct/schema/mkcert.hpp"
-#include "dct/sigmgrs/sigmgr_by_type.hpp"
+#include "dct/schema/rdschema.hpp"
 
-auto schemaInstall(const bSchema& bs, const auto& pk) {
-    auto certName = format("{}/schema/{}", bs.pubVal("#pubPrefix"), bs.pubName(0));
-    auto valtype = bs.pubVal("#pubValidator").substr(1);;
-    auto sm{sigMgrByType(valtype)};
-    auto cert = mkCert(certName, pk, sm.ref());
+int main(int argc, const char* argv[]) {
+    if (argc < 2) {
+        print("- usage: {} file\n", argv[0]);
+        exit(1);
+    }
+    std::ifstream is(argv[1], std::ios::binary);
+    rdSchema<true> rs(is);
+    try {
+        rs.read();
+    } catch (const schema_error& se) { print("schema error: {}\n", se.what()); }
 
-    ndn::PibSqlite3 pib;
-    pib.addCertificate(cert);
-    pib.setDefaultCertificateOfKey(cert.getKeyName(), cert.getName());
-    print("installed cert {} with validator {}\n", certName, valtype);
+    exit(0);
 }
-
-#endif // SCHEMAINSTALL_HPP

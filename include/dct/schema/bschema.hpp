@@ -82,14 +82,14 @@ static constexpr uint8_t SC_INDEX = 0xE0; // E0-FE reserved for runtime tokens
 static constexpr uint8_t SC_ANON  = 0xFF;
 static constexpr uint8_t SC_VALUE = 0x1F; // payload of non-string tokens
 
-static constexpr bool isLit(bComp c) noexcept { return (c & 0x80) == 0x00; };
-static constexpr bool isParam(bComp c) noexcept { return (c & 0xE0) == 0x80; };
-static constexpr bool isCor(bComp c) noexcept { return (c & 0xE0) == 0xA0; };
-static constexpr bool isCall(bComp c) noexcept { return (c & 0xE0) == 0xC0; };
-static constexpr bool isIndex(bComp c) noexcept { return (c & 0xE0) == 0xE0; };
-static constexpr bool isAnon(bComp c) noexcept { return c == 0xFF; };
-static constexpr bComp typeValue(bComp c) noexcept { return c & SC_VALUE; };
-static constexpr bool validType(bComp c) noexcept { return  c < SC_INDEX || c == SC_ANON; };
+static constexpr bool isLit(bComp c) noexcept { return (c & 0x80) == 0x00; }
+static constexpr bool isParam(bComp c) noexcept { return (c & 0xE0) == 0x80; }
+static constexpr bool isCor(bComp c) noexcept { return (c & 0xE0) == 0xA0; }
+static constexpr bool isCall(bComp c) noexcept { return (c & 0xE0) == 0xC0; }
+static constexpr bool isIndex(bComp c) noexcept { return (c & 0xE0) == 0xE0; }
+static constexpr bool isAnon(bComp c) noexcept { return c == 0xFF; }
+static constexpr bComp typeValue(bComp c) noexcept { return c & SC_VALUE; }
+static constexpr bool validType(bComp c) noexcept { return  c < SC_INDEX || c == SC_ANON; }
 
 using bName = std::vector<bComp>;
 using compidx = uint8_t;
@@ -99,7 +99,8 @@ using parmBM = uint16_t;
 using chainidx = uint8_t;
 using bChain = std::vector<chainidx>;
 using chainBM = uint8_t; // bitmap of bchain indices
-using corItem = struct{certidx ct1; compidx co1; certidx ct2; compidx co2;}; 
+//using corItem = struct{certidx ct1; compidx co1; certidx ct2; compidx co2;}; 
+struct corItem {certidx ct1; compidx co1; certidx ct2; compidx co2;}; 
 using chainCor = std::vector<corItem>;  // one chain's corespondences
 using coridx = uint8_t;
 using discidx = uint8_t;
@@ -107,16 +108,16 @@ using discBM = uint16_t;
 using bVLidx = uint8_t;
 using pubidx = uint8_t;
 using tmpltidx = uint8_t;
-using tDiscrim = struct{chainBM cbm; tmpltidx tmpl; tagidx disc; bVLidx vl; coridx cor;};
-using tPub = struct{parmBM par; discBM d; bComp pub; tagidx tag;};
+struct tDiscrim {chainBM cbm; tmpltidx tmpl; tagidx disc; bVLidx vl; coridx cor;};
+struct tPub {parmBM par; discBM d; bComp pub; tagidx tag;};
 
-inline constexpr bool operator<(const corItem& l, const corItem& r) {
+static inline constexpr bool operator<(const corItem& l, const corItem& r) {
     return std::tie(l.ct1, l.ct2, l.co1, l.co2) < std::tie(r.ct1, r.ct2, r.co1, r.co2);
 }
-inline constexpr bool operator<(const tDiscrim& l, const tDiscrim& r) {
+static inline constexpr bool operator<(const tDiscrim& l, const tDiscrim& r) {
     return std::tie(l.cbm, l.tmpl, l.disc, l.vl, l.cor) < std::tie(r.cbm, r.tmpl, r.disc, r.vl, r.cor);
 }
-inline constexpr bool operator<(const tPub& l, const tPub& r) {
+static inline constexpr bool operator<(const tPub& l, const tPub& r) {
     return std::tie(l.par, l.d, l.pub, l.tag) < std::tie(r.par, r.d, r.pub, r.tag);
 }
 
@@ -136,30 +137,6 @@ static inline const std::map<sTLV,const char*> tlvName{
 };
 
 struct bSchema {
-    // return the name of the pub at index 'i'
-    bTok pubName(pubidx i) const noexcept { return i < pub_.size()? tok_[pub_[i].pub] : bTok{}; }
-
-    // return index of pub with name 'nm' or -1 if none
-    int findPub(bTok nm) const noexcept {
-        for (int n = pub_.size(), i = 0; i < n; ++i) if (tok_[pub_[i].pub] == nm) return i;
-        return -1;
-    }
-    // return the value of a pub's first template as a string
-    std::string pubVal(bTok nm) const {
-        std::string res{};
-        auto i = findPub(nm);
-        if (i < 0) throw schema_error(format("no pub {} in schema", nm));
-        auto t = discrim_[std::countr_zero(pub_[i].d)].tmpl;
-        for (auto c : tmplt_[t]) {
-            res += '/';
-            if (c < tok_.size()) {
-                res += tok_[c];
-            } else {
-                res += format("{:02x}", c);
-            }
-        }
-        return res;
-    }
 
     std::string stab_{};
     std::vector<bTok> tok_{};
@@ -173,6 +150,39 @@ struct bSchema {
     std::vector<tPub> pub_{};
     std::unordered_map<bTok,bComp> tm_{};
 
+    // return the name of the pub at index 'i'
+    bTok pubName(pubidx i) const {
+        if (i >= pub_.size()) throw schema_error(format("no pub with index {} in schema", i));
+        return tok_[pub_[i].pub];
+    }
+
+    // return index of pub with name 'nm'
+    auto findPub(bTok nm) const {
+        for (pubidx n = pub_.size(), i = 0; i < n; ++i) if (tok_[pub_[i].pub] == nm) return i;
+        throw schema_error(format("no pub {} in schema", nm));
+    }
+    // return the first (or only) template of pub 'i'
+    const bName& pubTmpl0(pubidx i) const {
+        if (i >= pub_.size()) throw schema_error(format("no pub with index {} in schema", i));
+        auto t = discrim_[std::countr_zero(pub_[i].d)].tmpl;
+        return tmplt_[t];
+    }
+    auto bNameToStr(const bName& bnm) const {
+        std::string res{};
+        for (auto c : bnm) {
+            res += '/';
+            if (c < tok_.size()) {
+                res += tok_[c];
+            } else {
+                res += format("{:02x}", c);
+            }
+        }
+        return res;
+    }
+    // return the value of a pub's first template as a string
+    std::string pubVal(bTok nm) const { return bNameToStr(pubTmpl0(findPub(nm))); }
+
+    // tokens are string_views so their addresses have to be fixed when copying another schema
     void _fixup_tok(const bSchema& other) {
         stab_ = other.stab_;
         tok_ = other.tok_;
@@ -206,19 +216,19 @@ struct bSchema {
 
 template<>
 struct fmt::formatter<bschema::corItem>: fmt::dynamic_formatter<> {
-    auto format(const bschema::corItem& v, format_context& ctx) -> decltype(ctx.out()) {
+    auto format(const bschema::corItem& v, format_context& ctx) -> decltype(ctx.out()) const {
         return fmt::format_to(ctx.out(), "{}.{}={}.{}", v.ct1, v.co1, v.ct2, v.co2);
     }
 };
 template<>
 struct fmt::formatter<bschema::tDiscrim>: fmt::dynamic_formatter<> {
-    auto format(const bschema::tDiscrim& v, format_context& ctx) -> decltype(ctx.out()) {
+    auto format(const bschema::tDiscrim& v, format_context& ctx) -> decltype(ctx.out()) const {
         return fmt::format_to(ctx.out(), "(chns#{}, tmpl={}, comp={}, vals={}, cor={})", v.cbm, v.tmpl, v.disc, v.vl, v.cor);
     }
 };
 template<>
 struct fmt::formatter<bschema::tPub>: fmt::dynamic_formatter<> {
-    auto format(const bschema::tPub& v, format_context& ctx) -> decltype(ctx.out()) {
+    auto format(const bschema::tPub& v, format_context& ctx) -> decltype(ctx.out()) const {
         return fmt::format_to(ctx.out(), "(par#{:x}, disc#{:x}, tok={}, tags={})", v.par, v.d, v.pub, v.tag);
     }
 };

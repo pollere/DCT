@@ -1,7 +1,7 @@
-#ifndef GETSCHEMA_HPP
-#define GETSCHEMA_HPP
+#ifndef CERT_TO_SCHEMA_HPP
+#define CERT_TO_SCHEMA_HPP
 /*
- * Get a certificate containing a schema from the PIB
+ * Convert the schema from a DCTcert to its bSchema representation
  *
  * Copyright (C) 2020 Pollere, Inc.
  *
@@ -24,32 +24,18 @@
  */
 
 #include <sstream>
-#include <ndn-ind/security/pib/pib-sqlite3.hpp>
-#include <ndn-ind/generic-signature.hpp>
+#include "dct_cert.hpp"
 #include "dct/format.hpp"
-#include "rdschema.hpp"
 #include "dct/sigmgrs/sigmgr_by_type.hpp"
+#include "rdschema.hpp"
 
 // return the binary schema associated with certificate 'cert'
-bSchema getSchema(const ndn::Name& certname) {
-    ndn::PibSqlite3 pib;
-
-    auto cert = *pib.getCertificate(certname);
-    if (cert.getIssuerId() != "schema") {
-        throw schema_error(format("cert {} isn't a schema\n", cert.getName().toUri()));
-    }
-    // (next 3 lines of ugly setup just to get the signature type byte from the cert so we can validate it)
-    std::vector<ndn_NameComponent> n(32);
-    ndn::SignatureLite sig(n.data(), n.size());
-    cert.getSignature()->get(sig);
-
-    // validate the cert's signature then read and validate its schema
-    if (! sigMgrByType(sig.getType()).validate(cert)) {
-        throw schema_error(format("cert {} didn't validate\n", cert.getName().toUri()));
-    }
-    auto pk = *cert.getPublicKey();
+// It's assumed that the cert signature has been validated and
+// the cert name checked for conformance to schema conventions.
+bSchema certToSchema(const dctCert& cert) {
+    const auto& pk = *cert.getContent();
     std::istringstream is(std::string((char*)pk.data(), pk.size()), std::ios::binary);
     return rdSchema(is).read();
 }
 
-#endif // GETSCHEMA_HPP
+#endif // CERT_TO_SCHEMA_HPP

@@ -14,40 +14,24 @@ _domain:     "mbps0"
 // specific by using a subscription list with specific subCollections (designated
 // by targets) and related callback functions.
 
-#mbps0Pub: _network/_domain/target/trgtLoc/topic/topicArgs/_origin/msgID/sCnt/mts & {
+#mbps0Pub: _network/_domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
     _origin:   sysId()
-}
+} <= roleCert
 
-lockEvent: #mbps0Pub & {
-    target:     "lock"
-    trgtLoc:    "me"
-    topic:       "event"
-    topicArgs:  "locked" | "unlocked" | "battery_low"
-} <= devCert 
+roleCert:    _network/_domain/_role/_roleId/_keyinfo <= netCert
 
-devStatus: #mbps0Pub & {
-    target:     "lock"
-    trgtLoc:    "me"
-    topic:      "status"
-} <= devCert
-
-lockCommand: #mbps0Pub & { target: "lock", topic: "command" } &
-    { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
-    { topicArgs:  "lock"|"unlock"|"report" } <= opCert
-
-roleCert:    _network/_domain/_role <= netCert
-opCert:  roleCert & { _role: "operator" }
-devCert: roleCert & { _role: "device" }
-
-netCert: _network/_domain
+netCert: _network/_domain/_keyinfo
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _network/_domain
-//#pubValidator: "RFC7693"
-#pubValidator: "SHA256"
+#pubValidator: "EdDSA"
 
 // Prefix used at the syncps (NDN Interest/Data) level to sync
 // this collection.
-
 #wirePrefix: _ndnprefix/_domain & { _ndnprefix: "localnet" }
-#wireValidator: "SHA256"
+#wireValidator: "EdDSA"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_
+

@@ -26,9 +26,10 @@
 #include <bit>
 #include <bitset>
 #include <iostream>
+#include <istream>
 #include <map>
 #include <type_traits>
-#include <istream>
+#include <version>
 #include "bschema.hpp"
 #include "dct/format.hpp"
 
@@ -43,9 +44,9 @@ struct rdSchema {
     explicit rdSchema(std::istream& is) : is_(is), remaining_{65535} {}
 
     // ------ helper routines start here ------
-    template <typename... Args>
-    void dprint(const auto& format_str, Args&&... args) {
-        if constexpr (rsdebug) print(format_str, std::forward<Args>(args)...);
+    template <typename... T>
+    static inline void dprint(fmt::format_string<T...> format_str, T&&... args) {
+        if constexpr (rsdebug) print(format_str, std::forward<T>(args)...);
     }
     std::string formatTok(bComp c) const {
         std::string res{};
@@ -261,7 +262,7 @@ struct rdSchema {
                 for (auto chn = chain; chn != 0; ) {
                     size_t c = std::countr_zero(chn);
                     if (c >= bs_.chain_.size()) throw schema_error("invalid discrim chain index");
-                    chn &=~ 1 << c;
+                    chn &=~ 1u << c;
                 }
                 if (tmplt >= bs_.tmplt_.size()) throw schema_error("invalid discrim template index");
 
@@ -272,6 +273,9 @@ struct rdSchema {
                 // index or the index of a vector of tokens, depending on whether the high bit is set.
                 if ((vlist & (maxTok-1)) >= (vlist < maxTok? bs_.tok_.size() : bs_.vlist_.size()))
                     throw schema_error("invalid discrim vlist index");
+
+                // 'comp' == maxTok means no val(s) to check, 'vlist' should be 0 in this case
+                if (comp == maxTok && vlist != 0) throw schema_error("discrim vlist index should be zero");
 
                 // 'cor' is an index of the cert chain component correspondences that must hold
                 // for a publication with this discrim.
@@ -291,11 +295,13 @@ struct rdSchema {
 
                 // disc is a bitmap where a set bit indicates the pub uses the discrim with that index.
                 // validate that the MSB falls within the discrim vec
-                // XXX MacOS clang11 misnames std::bit_width as log2p1
-#ifdef __linux__
-                if (std::bit_width(disc) - 1 >= bs_.discrim_.size()) throw schema_error("invalid pub discrim index");
+                // XXX MacOS clang11 misnames std::bit_width as log2p1, fixed in clang12. The <version>
+                // defines are still broken in Apple's clang12 so we have to test the wrong define.
+//#if defined(__APPLE__) && !defined(__cpp_lib_bitops)
+#if defined(__APPLE__) && !defined(__cpp_lib_bounded_array_traits)
+                if (std::log2p1(disc) - 1u >= bs_.discrim_.size()) throw schema_error("invalid pub discrim index");
 #else
-                if (std::log2p1(disc) - 1 >= bs_.discrim_.size()) throw schema_error("invalid pub discrim index");
+                if (std::bit_width(disc) - 1u >= bs_.discrim_.size()) throw schema_error("invalid pub discrim index");
 #endif
 
                 // param is a bitmask with each bit corresponding to one component of the pub.
@@ -305,7 +311,7 @@ struct rdSchema {
                 for (auto par = param; par != 0; ) {
                     size_t p = std::countr_zero(par);
                     if (p >= bs_.tag_[tagi].size()) throw schema_error("invalid pub param index");
-                    par &=~ 1 << p;
+                    par &=~ 1u << p;
                 }
                 return n;
             });
@@ -319,7 +325,7 @@ struct rdSchema {
     void chkCor(chainBM chainbm, const bName& tmplt, const chainCor& chnCor) {
         while (chainbm != 0) {
             auto c = std::countr_zero(chainbm);
-            chainbm &=~ 1 << c;
+            chainbm &=~ 1u << c;
             for (auto [cert1,comp1,cert2,comp2] : chnCor) {
                 if (cert1 >= cert2) throw schema_error("cor cert indices error");
                 auto c1 = corName(tmplt, c, cert1, comp1);
@@ -343,7 +349,8 @@ struct rdSchema {
                 parmSet pset{param};
                 const auto tmpl = bs_.tmplt_[tmplt];
                 for (int c = 0, n = tmpl.size(); c < n; c++) {
-                    if (pset[c] && !isParam(tmpl[c]) && tmpl[c] >= bs_.tok_.size())
+                    // comps in the param set must be literals, params or cors
+                    if (pset[c] && !isParam(tmpl[c]) && !isCor(tmpl[c]) && tmpl[c] >= bs_.tok_.size())
                             throw schema_error("parameter not in template");
                     if (!pset[c] && isParam(tmpl[c])) throw schema_error("template param not in param set");
                     if (isParam(tmpl[c]) && typeValue(tmpl[c]) != c) throw schema_error("param value wrong");
@@ -354,7 +361,7 @@ struct rdSchema {
                 // comp of maxTok means no component is a discrim. Comp = maxTok+n indicates a 'replace'
                 // operator that will take a pub name with 'n' components as its only argument and will
                 // put each of those components into the corresponding param slot.
-                if (comp > maxTok && typeValue(comp) >= tmpl.size()) throw schema_error("'reply' size error");
+                if (comp > maxTok && typeValue(comp) >= tmpl.size()) throw schema_error("'replace' size error");
  
                 // validate the cor entry.  Each item in it is a correspondence vector for one named field
                 // containing the chain's cert index and cert's component index of each place the field appears.

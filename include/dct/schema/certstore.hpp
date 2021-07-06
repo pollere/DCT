@@ -28,25 +28,104 @@
 #include <span>
 #include <string>
 #include <vector>
-#include "ndn-ind/name.hpp"
 #include "bschema.hpp"
+#include "dct_cert.hpp"
 
 using certName = ndn::Name;
 using certVec = std::vector<certName>;
+using certChain = std::vector<thumbPrint>;
+using keyVal = std::vector<uint8_t>;
+using certAddCb = std::function<void(const dctCert&)>;
+using chainAddCb = std::function<void(const dctCert&)>;
 
-struct certStore : std::set<certName> {
-    using std::set<certName>::set;
+struct certStore {
+    std::unordered_map<thumbPrint,dctCert> certs_{}; // validated certs
+    std::multimap<certName,thumbPrint> certnames_{}; // name-to-validated cert(s)
+    std::unordered_map<thumbPrint,keyVal> key_{};    // cert-to-key (for signing certs)
+    certChain chains_{}; // array of signing chain heads (thumbprints of signing certs)
+    certAddCb addCb_{[](const dctCert&){}};          // called when a cert is added
+    chainAddCb chainAddCb_{[](const dctCert&){}};    // called when a new signing chain is added
 
-    certVec  chain_{};
+    void dumpcerts() const {
+        print("Cert Dump\n");
+        int i = 0;
+        for (const auto& [tp, cert] : certs_) print("{} {} tp {:x}\n", i++, cert.getName().toUri(), fmt::join(tp," "));
+    }
 
-    const auto& signingChain() const noexcept { return chain_; }
-    auto& signingChain(const certVec& chain) { chain_ = chain; return *this; }
-    auto& signingChain(certVec&& chain) { chain_ = std::move(chain); return *this; }
+    auto begin() const { return certs_.cbegin(); }
+    auto end() const { return certs_.cend(); }
 
+    // lookup a cert given its thumbprint
+    const dctCert& get(const thumbPrint& tp) const { return certs_.at(tp); }
+    const auto& operator[](const thumbPrint& tp) const { return get(tp); }
+
+    auto contains(const thumbPrint& tp) const noexcept { return certs_.contains(tp); }
+
+    // lookup the signing cert of 'data'
+    const dctCert& signingCert(const ndn::Data& data) const {
+        const auto& tp = dctCert::getKeyLoc(data);
+        return dctCert::selfSigned(tp)? reinterpret_cast<const dctCert&>(data) : get(tp);
+    }
+    const auto& operator[](const ndn::Data& data) const { return signingCert(data); }
+
+    const auto& key(const thumbPrint& tp) const { return key_.at(tp); }
+    auto canSign(const thumbPrint& tp) const { return key_.contains(tp); }
+
+    auto finishAdd(auto it) {
+        if (it.second) {
+            const auto& [tp, cert] = *it.first;
+            certnames_.emplace(cert.getName(), tp);
+            addCb_(cert);
+        }
+        return it;
+    }
+    // Routines to add a cert to the store. The first two add non-signing certs.
+    // The third adds a signing cert with its secret key. If the thumbprint is
+    // already in the store, nothing is added or changed (since the thumbprint
+    // is a 1-1 mapping to its cert, it should be an error for the mapping
+    // to change but this is not currently checked).
+    // All return an <iterator,status> pair the points to the element added with
+    // 'status' true if the element was added and false if it was already there.
+    auto add(const dctCert& c) { return finishAdd(certs_.try_emplace(c.computeThumbPrint(), c)); }
+    auto add(dctCert&& c) { return finishAdd(certs_.try_emplace(c.computeThumbPrint(), std::move(c))); }
+
+    auto add(const dctCert& c, const keyVal& k) {
+        auto it = finishAdd(certs_.try_emplace(c.computeThumbPrint(), c));
+        if (k.size() && it.second) {
+            const auto& [tp, cert] = *it.first;
+            key_.try_emplace(tp, k);
+        }
+        return it;
+    }
+
+    // construct a vector of the names of each cert in cert's signing chain.
+    certVec chainNames(const dctCert& cert) const {
+        certVec cv{};
+        const auto* c = &cert;
+        cv.emplace_back(c->getName());
+        for (const auto* tp = &c->getKeyLoc(); !dctCert::selfSigned(*tp); tp = &c->getKeyLoc()) {
+            c = &get(*tp);
+            cv.emplace_back(c->getName());
+        }
+        return cv;
+    }
+
+    auto signingChain() const { return chains_.empty()? certVec{} : chainNames(get(chains_[0])); } //XXX
+
+    void addChain(const dctCert& cert) {
+        chains_.emplace_back(cert.computeThumbPrint());
+        chainAddCb_(cert);
+    }
+    const auto& Chains() const { return chains_; }
+    //auto& Chains(const certChain& chain) { chains_ = chain; return *this; }
+    //auto& Chains(certChain&& chain) { chains_ = std::move(chain); return *this; }
+
+
+    // routines to return the *names* of validated certs matching some predicate
     template<class Pred>
     certVec copy_if(Pred pred) const {
         certVec cv{};
-        for (const auto& n : *this) if (pred(n)) cv.emplace_back(n);
+        for (const auto& [n, tp] : certnames_) if (pred(n)) cv.emplace_back(n);
         return cv;
     }
     certVec ends_with(const certName& substr) const {
@@ -63,9 +142,12 @@ struct certStore : std::set<certName> {
                 return false;
             });
     }
+
+    //default just calls the start callback with true (e.g., okay to start)
+    virtual void start(std::function<void(bool)>&& scb) { scb(true); }
 };
 
-static inline certVec match(certVec&& in, const certName& substr) {
+static inline certVec match(const certVec& in, const certName& substr) {
     certVec cv{};
     for (const auto& c : in) {
         for (int i = 0, n = c.size() - substr.size(); i < n; i++) {

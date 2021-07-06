@@ -6,10 +6,6 @@
  * publish a message, an optional list of arguments can also be
  * included.
  *
- * This version publishes messages to the domain of the client
- * and subscribes to all the messsages in that domain's collection
- * (i.e., targets are not used to particularize subscriptions).
- *
  * app3 publishes a message and waits for a message from
  * another member of the enclave. When a message is received, a new
  * message is scheduled for publication.
@@ -42,38 +38,43 @@
 #include <iostream>
 #include <chrono>
 
-#include "mbps0.hpp"
+#include "mbps.hpp"
 
 // handles command line
 static struct option opts[] = {
-    {"count", required_argument, nullptr, 'c'},
-    {"role", required_argument, nullptr, 'r'},
+    {"capability", required_argument, nullptr, 'c'},
     {"debug", no_argument, nullptr, 'd'},
-    {"help", no_argument, nullptr, 'h'}
+    {"help", no_argument, nullptr, 'h'},
+    {"location", required_argument, nullptr, 'l'}
 };
 static void usage(const char* cname)
 {
-    std::cerr << "usage: " << cname << " [flags] -f file_name\n";
+    std::cerr << "usage: " << cname << " [flags] id.bundle\n";
 }
 static void help(const char* cname)
 {
     usage(cname);
     std::cerr << " flags:\n"
-           "  -r |--role        role of this process\n"
+           "  -c capability     defaults to 'lock'\n"
            "  -d |--debug       enable debugging output\n"
-           "  -h |--help        print help then exit\n";
+           "  -h |--help        print help then exit\n"
+           "  -l location       defaults to 'all'\n";
 }
 
+
 /* Globals */
-static std::string role("device");     //default
-static std::string myId {};
+static std::string myPID {};
 static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static bool Pending = false;
 static Timer timer;
+static std::string capability{"lock"};
+static std::string location{"all"};
+static std::string role{};
+static std::string myId{};
 
 //options for the argument list that can be randomly selected
-std::string loc[] = {"all", "frontdoor", "gate", "backdoor"};
+std::string loc[] = {"all", "frontdoor", "gate", "backdoor", "all"};
 std::string topic[] = {"status", "event"};
 std::string args[] = {"lock", "unlock", "report"};
 
@@ -83,11 +84,11 @@ std::string args[] = {"lock", "unlock", "report"};
 
 void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
     msgArgs a;
-    a.cap = "lock";
+    a.cap = capability;
     if(role == "operator") {
         a.topic = "command";
         //randomly select loc
-        auto k = randombytes_uniform((uint32_t)4);
+        auto k = randombytes_uniform((uint32_t)5);
         a.loc = loc[k];
         //randomly select topic args
         k = randombytes_uniform((uint32_t)3);
@@ -96,7 +97,7 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
         //randomly select topic
         auto k = randombytes_uniform((uint32_t)(2));
         a.topic = topic[k];
-        a.loc = "me";
+        a.loc = myId;
         //randomly select topic args
         k = randombytes_uniform((uint32_t)2);
         a.args = args[k] + "ed";
@@ -110,11 +111,9 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
 }
 
 /*
- * msgRecv handles a message received in subscription.
- * Used as callback passed to subscribe()
- * The message is opaque to the mbps client which uses
- * an argument list to pass any necssary data that was
- * not carried in the message body
+ * msgRecv handles a message received in subscription (callback passed to subscribe)
+ * The message is opaque to the mbps client which uses an argument list to pass
+ * any necssary data that was not carried in the message body
  *
  * Prints the message content
  * Could take action(s) based on message content
@@ -123,13 +122,10 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
 void msgRecv(mbps &cm, std::vector<uint8_t>& msgPayload, const msgArgs& a)
 {
     try {
-    std::cout << "Application entity " << myId << " received message:" << std::endl;
-    std::cout << "\tcapability = " << a.cap << std::endl;
-    std::cout << "\tspecifier = " << a.loc << std::endl;
-    std::cout << "\tdirective = " << a.topic << std::endl;
-    std::cout << "\tmodifiers = " << a.args << std::endl;
-    std::cout << "\tmessage creation time = " << a.ts << std::endl;
-    //auto content = reinterpret_cast<appMsg*>(msgPayload.data());
+        std::cout << "Application entity " << role << ":" << myId << "-" << myPID << " received message:" << std::endl
+        << "\tcapability = " << a.cap << std::endl << "\tlocation = " << a.loc << std::endl
+        << "\ttopic = " << a.topic << std::endl << "\ttopic args = " << a.args << std::endl
+        << "\tmessage creation time = " << a.ts.time_since_epoch().count() << std::endl;
     auto content = std::string(msgPayload.begin(), msgPayload.end());
     std::cout << "\tmessage body: " << content << std::endl;
     } catch (const std::exception& e) {
@@ -144,8 +140,7 @@ void msgRecv(mbps &cm, std::vector<uint8_t>& msgPayload, const msgArgs& a)
     if(!Pending) {
         Pending = true;
         timer = cm.schedule(pubWait, [&cm](){
-            std::string s = "Message number " + std::to_string(++Cnt)
-                            + " from " + myId;
+            std::string s = "Message number " + std::to_string(++Cnt) + " from " + role + ":" + myId + "-" + myPID;
             std::vector<uint8_t> m(s.begin(), s.end());
             msgPubr(cm, m);
         });
@@ -166,10 +161,13 @@ int main(int argc, char* argv[])
     INIT_LOGGERS();
     // parse input line
     for (int c;
-        (c = getopt_long(argc, argv, "r:dh", opts, nullptr)) != -1;) {
+        (c = getopt_long(argc, argv, "c:dhl", opts, nullptr)) != -1;) {
         switch (c) {
-                case 'r':
-                    role = optarg;
+                case 'c':
+                    capability = optarg;
+                    break;
+                case 'l':
+                    location = optarg;
                     break;
                 case 'd':
                     ++debug;
@@ -179,17 +177,29 @@ int main(int argc, char* argv[])
                     exit(0);
         }
     }
+    if (optind >= argc) {
+        usage(argv[0]);
+        exit(1);
+    }
 
-    myId = std::to_string(getpid());
-    mbps cm(role);     //Create the mbps client
+    myPID = std::to_string(getpid());
+    mbps cm(argv[optind]);     //Create the mbps client
+    role = cm.myRole();
+    myId = cm.myId();
 
     // Connect and pass in the handler
     try {
         cm.connect(    /* main task for this entity */
             [&cm]() {
-                cm.subscribe(msgRecv);   //single callback for all messages
+                if (role == "operator") {
+                    cm.subscribe(msgRecv);   //single callback for all messages
+                } else {
+                    //here devices just subscribe to command topic
+                    cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
+                    cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
+                }
                 // make a message to publish
-                std::string s("Message number 0 from " + myId);
+                std::string s("Message number 0 from " + role + ":" + myId + "-" + myPID);
                 std::vector<uint8_t> toSend(s.begin(), s.end());
                 msgPubr(cm, toSend);    //send initial message
             });

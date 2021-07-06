@@ -23,10 +23,20 @@
 
 // use local version of c++20 formatted output until std library catches up.
 // Download fmt from https://fmt.dev/latest/index.html or https://github.com/fmtlib/fmt
+
+// As of June 2021, get spurious warnings when compiling fmt because
+// std::codecvt is deprecated but there is no standardized replacement.
+// Theses pragmas are to prevent the warning from this.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
 #define FMT_HEADER_ONLY
+#include "fmt/compile.h"
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include "fmt/chrono.h"
+
+#pragma GCC diagnostic pop
 
 using fmt::print;
 using fmt::format;

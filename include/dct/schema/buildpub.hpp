@@ -35,16 +35,8 @@
 #include <variant>
 #include "certstore.hpp"
 #include "dct/format.hpp"
+#include "dct/utility.hpp"
 #include "rdschema.hpp"
-
-extern "C" {
-    //int gethostname(const char*, size_t); //Posix
-    int gethostname(char*, size_t); //MacOS
-    pid_t getpid(void);
-}
-#ifndef HOST_NAME_MAX
-static constexpr size_t HOST_NAME_MAX = 64;  //Linux limit
-#endif
 
 using namespace std::string_literals;
 
@@ -58,7 +50,7 @@ template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 template <>
 struct fmt::formatter<paramVal>: fmt::dynamic_formatter<> {
-    auto format(const paramVal& v, format_context& ctx) -> decltype(ctx.out()) {
+    auto format(const paramVal& v, format_context& ctx) -> decltype(ctx.out()) const {
         return std::visit(overloaded {
             [&](const std::monostate&) { return fmt::format_to(ctx.out(), "(empty)"); },
             [&](const timeVal& val) { return fmt::format_to(ctx.out(), "{:%H:%M:%S}", val); },
@@ -69,23 +61,35 @@ struct fmt::formatter<paramVal>: fmt::dynamic_formatter<> {
 
 template <>
 struct fmt::formatter<ndn::Name::Component>: fmt::dynamic_formatter<> {
-    auto format(const ndn::Name::Component& v, format_context& ctx) -> decltype(ctx.out()) {
+    auto format(const ndn::Name::Component& v, format_context& ctx) -> decltype(ctx.out()) const {
         return fmt::format_to(ctx.out(), "{}", v.getValue().toRawStr());
     }
+};
+
+
+// template describing one viable pub for some particular signing chain.
+// An array of such templates is the primary structure used by both the
+// pub builder and verifier.
+struct pTmplt {
+    using valSet = std::bitset<sizeof(uint64_t)*8>;
+
+    valSet vs_{};    // set of distinguishing parameter values
+    bName tmplt_{};  // cor-resolved template for pub
+    compidx dpar_{}; // index of template's distinguishing parameter
 };
 
 template<bool pbdebug = false>
 struct pubBldr {
     // make a 'builder' for pub 'pub' of binary schema 'bs' using certificate store 'cs'.
-    pubBldr(const bSchema& bs, const certStore& cs, bTok pub) : bs_{bs}, cs_{cs} {
+    pubBldr(const bSchema& bs, certStore& cs, bTok pub) : bs_{bs}, cs_{cs} {
         pidx_ = bs_.findPub(pub);
         if (pidx_ < 0) throw schema_error(format("pub {} not found", pub));
         makePubTmplts(findCerts());
     }
     // internal struct and utility definitions
-    template <typename... Args>
-    void dprint(const auto& format_str, Args&&... args) const {
-        if constexpr (pbdebug) print(format_str, std::forward<Args>(args)...);
+    template <typename... T>
+    static inline void dprint(fmt::format_string<T...> format_str, T&&... args) {
+        if constexpr (pbdebug) print(format_str, std::forward<T>(args)...);
     }
     struct tagMap : std::unordered_map<bTok,compidx> {
         using std::unordered_map<bTok,compidx>::unordered_map;
@@ -93,13 +97,6 @@ struct pubBldr {
             if (const auto& v = find(key); v != end()) return v->second;
             throw schema_error(format("no {} parameter for pub", key));
         }
-    };
-    using valSet = std::bitset<sizeof(uint64_t)*8>;
-
-    struct pTmplt {
-        valSet vs_{};    // set of distinguishing parameter values
-        bName tmplt_{};  // cor-resolved template for pub
-        compidx dpar_{}; // index of template's distinguishing parameter
     };
 
     // *** methods
@@ -118,9 +115,9 @@ struct pubBldr {
     }
     std::string formatName(const bName& nm) {
         std::string res{};
-        for (int n = nm.size(), i = 0; i < n; i++) {
+        for (auto c : nm) {
             res += '/';
-            res += formatTok(nm[i]);
+            res += formatTok(c);
         }
         return res;
     }
@@ -150,6 +147,7 @@ struct pubBldr {
         }
         // find the first chain matching the cert store signing chain
         auto cbm = cbm_;
+        auto schain = cs_.signingChain();
         for (auto bm = cbm; bm != 0; ) {
             auto c = std::countr_zero(bm);
             bm &=~ (1u << c);
@@ -215,13 +213,14 @@ struct pubBldr {
     void addTemplate(auto tmplt, auto comp, auto vlist, auto cor) {
         pTmplt pt{};
         pt.dpar_ = comp;
-        // build valset bitmap from vlist
+        // build valset bitmap from vlist. A bit will be set for every
+        // valid value of 'comp' in this pub.
         if (vlist < maxTok) {
             pt.vs_[vlist] = 1;
         } else {
             for (const auto v : bs_.vlist_[vlist & 0x7f]) pt.vs_[v] = 1;
         }
-        // fill in cors from cert chain
+        // got through components filling in cors from cert chain
         for (auto c : bs_.tmplt_[tmplt]) {
             if (isCor(c)) c = mapCor(0, c, cor);
             pt.tmplt_.emplace_back(c);
@@ -235,6 +234,11 @@ struct pubBldr {
     }
     void printPubTemplates() {
         if constexpr (pbdebug) {
+            if (parmbm_.any()) {
+                dprint("parameters: {:x} {{", parmbm_.to_ulong());
+                for (size_t t = 0; t < parmbm_.size(); t++) if (parmbm_[t]) print(" {}", bs_.tok_[tag_[t]]);
+                dprint(" }}\n");
+            }
             for (const auto& pt : pt_) {
                 dprint(" {:12}({:d}): {:10x} {}\n", pt.dpar_ < maxTok? bs_.tok_[tag_[pt.dpar_]] : "*",
                         pt.dpar_, pt.vs_.to_ulong(), formatName(pt.tmplt_));
@@ -297,17 +301,6 @@ struct pubBldr {
     template<typename... Rest>
     void doParam(Params& par, std::string_view tag, Rest... rest) { doParam(par, tm_[tag], rest...); }
 
-    static const std::string& sysID() noexcept {
-        static std::string sysid{};
-        if (sysid.size() == 0) {
-            char h[HOST_NAME_MAX+1];
-            if (gethostname(&h[0], sizeof(h)-1) != 0) {
-                h[0] = h[1] = '?'; h[2] = 0;
-            }
-            sysid = format("p{}@{}", getpid(), h);
-        }
-        return sysid;
-    }
     Comp compValue(const Params& par, bComp c) const {
         if (isLit(c)) return std::string(bs_.tok_[c]);
         if (isIndex(c)) return std::string(ptok_[typeValue(c)]);
@@ -337,8 +330,9 @@ struct pubBldr {
     }
     bool checkParVal(const Params& par, const pTmplt& pt, compidx c) const noexcept {
         // assert(parmbm_[c] == true)
-        if (isParam(pt.tmplt_[c])) return true;
-        if (auto v = parToTok(par, c); v == pt.tmplt_[c]) return true;
+        if (isParam(pt.tmplt_[c])) return true;     // template doesn't constrain value
+        if (auto v = parToTok(par, c); v == pt.tmplt_[c]) return true; // value must match template
+        if (isIndex(pt.tmplt_[c])) return ptok_[typeValue(c)] == format("{}", par[c]); // value must match cor
         return false;
     }
     // check that all literal params in the template match the correponding user pars
@@ -418,7 +412,7 @@ struct pubBldr {
     parmSet parmbm_{};
     chainBM cbm_{};
     const bSchema& bs_;
-    const certStore& cs_;
+    certStore& cs_;
     std::unordered_map<bTok,bComp> ptm_{}; // pub-specific token map
     std::vector<bTok> ptok_{};
     std::vector<std::string> pstab_{};     // pub-specific string table

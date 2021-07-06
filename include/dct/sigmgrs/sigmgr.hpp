@@ -32,12 +32,15 @@
 /*
  * Five signature-managers and using SIGNER_TYPE:
  *  0x00 SHA256
- *  0x03 ECDSA
  *  0x07 AEAD
  *  0x08 EdDSA
  *  0x09 RFC7693
+ *  0x0a NULL
+ * Note that NULL is used to bypass signing for dctCerts which are already
+ * signed and should not be used otherwise.
  */
 
+#include <ndn-ind/data.hpp>
 #include <ndn-ind/generic-signature.hpp>
 
 // this file is included by syncps.hpp so libsodium calls can be available
@@ -46,38 +49,57 @@ extern "C" {
 };
 
 // type signatures for validate() callbacks 
-using ValidDataCb = std::function<void(const ndn::Data&)>;
-using FailedDataCb = std::function<void(const ndn::Data&, const std::string&)>;
+using ValidDataCb = std::function<void(ndn::Data&)>;
+using FailedDataCb = std::function<void(ndn::Data&, const std::string&)>;
+
 using keyVal = std::vector<uint8_t>;
 using SigInfo = std::vector<uint8_t>;
 using SigType = uint8_t;
+using dct_Cert = ndn::Data;
+
+using KeyCb = std::function<const std::vector<uint8_t>&(const ndn::Data&)>;
 
 struct SigMgr {
-    SigMgr(SigType typ, SigInfo&& si = {}) : m_type{typ}, m_sigInfo{si} {}
-    virtual bool sign(ndn::Data& d) { return sign(d, m_sigInfo); };
-    virtual bool sign(ndn::Data&, const SigInfo&) { return false; };
-    virtual bool validate(ndn::Data&) { return true; };
-    virtual void addKey(const std::vector<uint8_t>, uint64_t) {};
-    virtual void updateSigningKey(const std::vector<uint8_t>, const ndn::CertificateV2) {};
+    const SigType m_type;
+    SigInfo m_sigInfo;
+    keyVal m_signingKey;
+    KeyCb m_keyCb;
+ 
+    // Signature types (must match equivalent NDN TLV when there is one)
+    static constexpr SigType stSHA256 = 0;
+    static constexpr SigType stAEAD = 7;
+    static constexpr SigType stEdDSA = 8;
+    static constexpr SigType stRFC7693 = 9;
+    static constexpr SigType stNULL = 10;
+
+    SigMgr(SigType typ, SigInfo&& si = {}) : m_type{typ}, m_sigInfo{std::move(si)} {}
+    bool sign(ndn::Data& d) { return sign(d, m_sigInfo, m_signingKey); };
+    bool sign(ndn::Data& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
+    virtual bool sign(ndn::Data&, const SigInfo&, const keyVal&) { return false; };
+    virtual bool validate(const ndn::Data&) { return false; };
+    virtual bool validate(const ndn::Data&, const dct_Cert&) { return false; };
+    virtual bool validateDecrypt(ndn::Data& d) { return validate(d); };
+    virtual void addKey(const keyVal&, uint64_t = 0) {};
+    virtual void updateSigningKey(const keyVal&, const dct_Cert&) {};
     virtual bool needsKey() const noexcept { return 1; };
+
+    // if validate requires public keys of publishers, m_keyCb returns by keylocator
+    void setKeyCb(KeyCb&& kcb) { m_keyCb = std::move(kcb);}
 
     void validate(ndn::Data& d, const ValidDataCb& vCB, const FailedDataCb& fCB) {
         validate(d) ? vCB(d) : fCB(d, "signature error");
     }
 
     SigType type() const noexcept { return m_type; };
-    SigInfo getSignatureInfo() const noexcept { return m_sigInfo; }
+    SigInfo getSigInfo() const noexcept { return m_sigInfo; }
 
     // sign() helper method
     auto setupSignature(ndn::Data& data, const SigInfo& si) const {
-        auto signatureInfo = ndn::GenericSignature();
-        signatureInfo.setSignatureInfoEncoding(ndn::Blob(si.data(), si.size()));
-        data.setSignature(signatureInfo);
+        auto sigInfo = ndn::GenericSignature();
+        sigInfo.setSignatureInfoEncoding(si);
+        data.setSignature(sigInfo);
         return data.wireEncode();
     }
-
-    const SigType m_type;
-    SigInfo m_sigInfo;
 };
 
 #endif //SIGMGR_HPP

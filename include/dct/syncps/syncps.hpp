@@ -34,12 +34,13 @@
 #include <ndn-ind/lite/util/crypto-lite.hpp>
 #include <ndn-ind/util/scheduler.hpp>
 
+#include "dct/format.hpp"
 #include "dct/sigmgrs/sigmgr.hpp"
 #include "iblt.hpp"
 
 namespace syncps
 {
-INIT_LOGGER("syncps.SyncPubsub");
+INIT_LOGGER("syncps");
 
 using Name = ndn::Name;         // type of a name
 using Publication = ndn::Data;  // type of a publication
@@ -102,6 +103,7 @@ using FilterPubsCb = std::function<VPubPtr(VPubPtr&,VPubPtr&)>;
 class SyncPubsub
 {
   public:
+    using Nonce = std::array<uint8_t,4>; // Interest Nonce format
     struct Error : public std::runtime_error { using std::runtime_error::runtime_error; };
 
     static ndn::AsyncFace& getFace() {
@@ -135,9 +137,10 @@ class SyncPubsub
           m_pcbiblt(maxDifferences),
           m_sigmgr(wsig),
           m_pubSigmgr(psig),
+          staticModuleLogger{log4cxx::Logger::getLogger(m_syncPrefix.toUri())},
           m_registeredPrefix(m_face.registerPrefix(
               m_syncPrefix,
-              [this](auto& prefix, auto& i, auto& face, auto id, auto& filter) { onSyncInterest(*prefix, *i); },
+              [this](auto& prefix, auto& i, auto&/*face*/, auto/*id*/, auto&/*filter*/) { onSyncInterest(*prefix, *i); },
               [this](auto& n) { onRegisterFailed(*n); },
               [this](auto&/*n*/, auto/*id*/) { m_registering = false; sendSyncInterest(); }))
     { }
@@ -158,6 +161,10 @@ class SyncPubsub
      */
     SyncPubsub& syncInterestLifetime(std::chrono::milliseconds time) {
         m_syncInterestLifetime = time;
+        return *this;
+    }
+    SyncPubsub& syncDataLifetime(std::chrono::milliseconds time) {
+        m_syncDataLifetime = time;
         return *this;
     }
     SyncPubsub& pubLifetime(std::chrono::milliseconds time) {
@@ -182,7 +189,7 @@ class SyncPubsub
     uint32_t publish(Publication&& pub)
     {
         if (isKnown(pub)) {
-            _LOG_WARN("republish of '" << pub.getName() << "' ignored");
+            _LOG_INFO("republish of '" << pub.getName() << "' ignored");
             return 0;
         }
         _LOG_INFO("Publish: " << pub.getName());
@@ -232,7 +239,7 @@ class SyncPubsub
         // 'cb' will be called with each matching item in the active
         // publication list. Otherwise subscription will be
         // only be changed to the new callback.
-        _LOG_INFO("SyncPubSub::subscribeTo: " << topic);
+        _LOG_INFO("subscribeTo: " << topic);
         if (auto t = m_subscription.find(topic); t != m_subscription.end()) {
             t->second = std::move(cb);
             return *this;
@@ -262,20 +269,9 @@ class SyncPubsub
     }
 
     /**
-     * @brief set Sync Interest lifetime
-     *
-     * @param t interest lifetime in ms
-     */
-    SyncPubsub& setSyncInterestLifetime(std::chrono::milliseconds t)
-    {
-        m_syncInterestLifetime = t;
-        return *this;
-    }
-
-    /**
      * @brief start running the event manager main loop
      *
-     * (usually doesn't return) 
+     * (usually doesn't return)
      */
     void run() { m_face.getIoService().run(); }
 
@@ -320,8 +316,7 @@ class SyncPubsub
         //
         // note: previously scheduled timer is automatically cancelled.
         auto when = m_syncInterestLifetime - std::chrono::milliseconds(20);
-        m_scheduledSyncInterestId =
-            m_scheduler.schedule(when, [this] { sendSyncInterest(); });
+        m_scheduledSyncInterestId = m_scheduler.schedule(when, [this] { sendSyncInterest(); });
     }
 
     /**
@@ -334,9 +329,8 @@ class SyncPubsub
     {
         // if an interest is sent before the initial register is done the reply can't
         // reach us. don't send now since the register callback will do it.
-        if (m_registering) {
-            return;
-        }
+        if (m_registering) return;
+
         // schedule the next send
         reExpressSyncInterest();
 
@@ -346,31 +340,28 @@ class SyncPubsub
         m_iblt.appendToName(name);
 
         ndn::Interest syncInterest(name);
-        uint8_t nonceBytes[4];
-        ndn::CryptoLite::generateRandomBytes(nonceBytes, 4);
-        m_currentInterest = ndn::Blob(nonceBytes, 4);
-        syncInterest.setNonce(m_currentInterest)
+        ndn::CryptoLite::generateRandomBytes(m_nonce.data(), m_nonce.size());
+        syncInterest.setNonce(ndn::Blob{m_nonce.data(), m_nonce.size()})
             .setCanBePrefix(true)
             .setMustBeFresh(true)
             .setInterestLifetime(m_syncInterestLifetime);
         // For logging, interpret the nonce as a hex integer.
-        _LOG_DEBUG("sendSyncInterest " << m_syncPrefix << " " << std::hex
-                      << *((uint32_t*)m_currentInterest.buf()) << "/" << hashIBLT(name) << std::dec);
+        _LOG_DEBUG(format(fmt::runtime("sendSyncInterest {} {:x}/{:x}"), fmt::join(m_syncPrefix,"/"),
+                          fmt::join(m_nonce,""), hashIBLT(name)));
         m_face.expressInterest(syncInterest,
                 [this](auto& i, auto& d) {
-                    if (! m_sigmgr.validate(*d)) {
-                        _LOG_DEBUG("syncPubSub can't validate: " << d->getName().toUri());
+                    if (! m_sigmgr.validateDecrypt(*d)) {
+                        _LOG_DEBUG("can't validate: " << d->getName());
                         // if data consumed our current interest refresh it soon
                         // but not immediately since if we get the same Data back
                         // from the content store we'll just loop here.
-                        if (i->getNonce().equals(m_currentInterest)) {
-                            sendSyncInterestSoon();
-                        }
+                        const auto& n = *i->getNonce();
+                        if (std::equal(n.begin(), n.end(), m_nonce.begin())) sendSyncInterestSoon();
                     } else
                         onValidData(*i, *d);
                 },
-                [](auto& i) { _LOG_INFO("Timeout for " << i->toUri()); },
-                [](auto& i, auto&/*n*/) { _LOG_INFO("Nack for " << i->toUri()); });
+                [this](auto& i) { _LOG_INFO("Timeout for " << i->toUri()); },
+                [this](auto& i, auto&/*n*/) { _LOG_INFO("Nack for " << i->toUri()); });
         ++m_interestsSent;
     }
 
@@ -396,23 +387,20 @@ class SyncPubsub
      */
     void onSyncInterest(const ndn::Name& prefixName, const ndn::Interest& interest)
     {
-        if (interest.getNonce().equals(m_currentInterest)) {
-            // library looped back our interest
-            return;
-        }
+        if (std::equal(m_nonce.begin(), m_nonce.end(), interest.getNonce()->begin())) return; // interest looped back
+
         const ndn::Name& name = interest.getName();
         _LOG_DEBUG("onSyncInterest " << std::hex << *((uint32_t*)interest.getNonce().buf()) << "/"
                       << hashIBLT(name) << std::dec);
 
         if (name.size() - prefixName.size() != 1) {
-            _LOG_INFO("invalid sync interest: " << interest.toUri());
+            _LOG_INFO("invalid sync interest: " << name);
             return;
         }
         if (!  handleInterest(name)) {
             // couldn't handle interest immediately - remember it until
             // we satisfy it or it times out;
-            m_interests[name] = std::chrono::system_clock::now() +
-                                    m_syncInterestLifetime;
+            m_interest = { name, std::chrono::system_clock::now() + m_syncInterestLifetime};
         }
     }
 
@@ -420,14 +408,8 @@ class SyncPubsub
     {
         _LOG_DEBUG("handleInterests");
         auto now = std::chrono::system_clock::now();
-        for (auto i = m_interests.begin(); i != m_interests.end(); ) {
-            const auto& [name, expires] = *i;
-            if (expires <= now || handleInterest(name)) {
-                i = m_interests.erase(i);
-            } else {
-                ++i;
-            }
-        }
+        auto& [name, expires] = m_interest;
+        if (name.size() && expires > now) if (handleInterest(name)) expires = now;
     }
 
     bool handleInterest(const ndn::Name& name)
@@ -446,29 +428,27 @@ class SyncPubsub
         std::set<uint32_t> have;
         std::set<uint32_t> need;
         if(m_pubCbs.size()) {
-            // we have some publications with cbs so we want a list
-            // of pubs they have that can include those pubs - in need
+            // some publications have delivery callbacks so see if any
+            // are in this iblt (they'll be in the 'need' set).
             ((m_iblt - m_pcbiblt) - iblt).listEntries(have, need);
             for (const auto hash : need) {
-            if (auto h = m_hash2pub.find(hash); h != m_hash2pub.end()) {
-                // 2^0 bit of p->second is =0 if pub expired; 2^1 bit is 1 if we
-                // did publication.
-                if (const auto p = m_active.find(h->second); p != m_active.end()
-                    && (p->second & 3) == 3) {
-                    if(m_pubCbs.count(hash)) {  //published here and has cb
-                        m_pubCbs[hash]((*(h->second)), true);  //publication confirmed
-                        m_pubCbs.erase(hash);
-                        m_pcbiblt.erase(hash);
-                    }
-                }
-            }
-
+                if (!m_pubCbs.contains(hash)) continue;
+                // there's a callback for this hash. make sure the pub is still active
+                auto h = m_hash2pub.find(hash);
+                if (h == m_hash2pub.end()) continue;
+                // 2^0 bit of p->second is =0 if pub expired; 2^1 bit is 1 if we did publication.
+                const auto p = m_active.find(h->second);
+                if (p == m_active.end() || (p->second & 3) != 3) continue;
+                //published here and has cb - do the cb then erase it
+                m_pubCbs[hash](*h->second, true);
+                m_pubCbs.erase(hash);
+                m_pcbiblt.erase(hash);
             }
             have.clear();
             need.clear();
         }
         (m_iblt - iblt).listEntries(have, need);
-        _LOG_DEBUG("handleInterest " << std::hex << hashIBLT(name) << std::dec
+        _LOG_INFO("handleInterest " << std::hex << hashIBLT(name) << std::dec
                       << " need " << need.size() << ", have " << have.size());
 
         // If we have things the other side doesn't, send as many as
@@ -519,7 +499,8 @@ class SyncPubsub
     {
         _LOG_INFO("sendSyncData: " << name);
         ndn::Data data(name);
-        data.getMetaInfo().setFreshnessPeriod(m_pubLifetime / 2);
+        // data only useful until iblt changes so limit freshness
+        data.getMetaInfo().setFreshnessPeriod(m_syncDataLifetime);
         //data.getMetaInfo().setType(tlv::syncpsContent);
         if (pubs.size() > 1) {
             // have to concatenate the pubs
@@ -599,8 +580,13 @@ class SyncPubsub
         auto initpubs = m_publications;
 
         for (auto& pub : parsePubs(*data.getContent(), tlv::Data)) {
-            if (m_isExpired(pub) || isKnown(pub) || !m_pubSigmgr.validate(pub)) {
-                _LOG_DEBUG("ignore expired, known or invalid " << pub.getName());
+            if (isKnown(pub)) {
+                _LOG_DEBUG("ignore known " << pub.getName());
+                continue;
+            }
+            if (m_isExpired(pub) || ! m_pubSigmgr.validate(pub)) {
+                // unwanted pubs have to go in our iblt or we'll keep getting them
+                ignorePub(pub);
                 continue;
             }
 
@@ -630,12 +616,9 @@ class SyncPubsub
         // If deliveries resulted in new publications, try to satisfy
         // pending peer interests.
         m_delivering = false;
-        if (interest.getNonce().equals(m_currentInterest)) {
-            sendSyncInterest();
-        }
-        if (initpubs != m_publications) {
-            handleInterests();
-        }
+        if (std::equal(m_nonce.begin(), m_nonce.end(), interest.getNonce()->begin())) sendSyncInterest();
+
+        if (initpubs != m_publications) handleInterests();
     }
 
     /**
@@ -647,9 +630,8 @@ class SyncPubsub
 
     uint32_t hashPub(const Publication& pub) const
     {
-        const auto& b = pub.wireEncode();
-        return ndn::CryptoLite::murmurHash3(N_HASHCHECK,
-                           b.buf(), b.size());
+        const auto& b = *pub.wireEncode();
+        return ndn::CryptoLite::murmurHash3(N_HASHCHECK, b.data(), b.size());
     }
 
     bool isKnown(uint32_t h) const
@@ -685,10 +667,12 @@ class SyncPubsub
         // as we delete it.
 
         auto pubLifetime = m_pubLifetime; //in case becomes a function of *p
+        if (pubLifetime == decltype(pubLifetime)::zero()) return p; // pubs don't expire in this collection
+
         m_scheduler.schedule(pubLifetime, [this, p, hash] {
                                                 m_active[p] &=~ 1U;
-                                                if(m_pubCbs.count(hash)) {
-                                                    m_pubCbs[hash]((*p), false);
+                                                if(m_pubCbs.contains(hash)) {
+                                                    m_pubCbs[hash](*p, false);
                                                     m_pubCbs.erase(hash);
                                                     m_pcbiblt.erase(hash);
                                                 } });
@@ -699,9 +683,19 @@ class SyncPubsub
         return p;
     }
 
+    /*
+     * @brief ignore a publication by temporarily adding it to the our iblt
+     */
+    void ignorePub(const Publication& pub) {
+        _LOG_DEBUG("ignorePub: " << pub.getName());
+        auto hash = hashPub(pub);
+        m_iblt.insert(hash);
+        m_scheduler.schedule(m_pubLifetime + maxClockSkew, [this, hash] { m_iblt.erase(hash); });
+    }
+
     void removeFromActive(const PubPtr& p)
     {
-        _LOG_DEBUG("removeFromActive: " << (*p).getName());
+        _LOG_DEBUG("removeFromActive: " << p->getName());
         m_active.erase(p);
         m_hash2pub.erase(hashPub(*p));
     }
@@ -727,7 +721,7 @@ class SyncPubsub
     ndn::AsyncFace& m_face;
     ndn::Name m_syncPrefix;
     ndn::scheduler::Scheduler m_scheduler;
-    std::map<const Name, std::chrono::system_clock::time_point> m_interests{};
+    std::pair<ndn::Name,std::chrono::system_clock::time_point> m_interest{};
     IBLT m_iblt;
     IBLT m_pcbiblt;
     // currently active published items
@@ -738,11 +732,13 @@ class SyncPubsub
     SigMgr& m_sigmgr;               // SyncData packet signing and validation
     SigMgr& m_pubSigmgr;            // Publication validation
     std::chrono::milliseconds m_syncInterestLifetime{std::chrono::seconds(4)};
+    std::chrono::milliseconds m_syncDataLifetime{std::chrono::seconds(1)};
     std::chrono::milliseconds m_pubLifetime{maxPubLifetime};
     std::chrono::milliseconds m_pubExpirationGB{maxPubLifetime};
     ndn::scheduler::ScopedEventId m_scheduledSyncInterestId;
+    log4cxx::LoggerPtr staticModuleLogger;
     uint64_t m_registeredPrefix;
-    ndn::Blob m_currentInterest;    // nonce of current sync interest
+    Nonce  m_nonce{};               // nonce of current sync interest
     uint32_t m_publications{};      // # local publications
     uint32_t m_interestsSent{};
     bool m_delivering{false};       // currently processing a Data

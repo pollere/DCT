@@ -117,22 +117,22 @@ will cause the runtime to set that component to the value of `_roleID` in the si
 
 There are currently five levels of output verbosity:
 
-| level | verbosity                                                    |
-|:-----:| ------------------------------------------------------------ |
+| level | verbosity                                                                                                                               |
+|:-----:| --------------------------------------------------------------------------------------------------------------------------------------- |
 | 0     | no output                                                                                                                               |
 | 1     | minimum information needed to use the runtime API: Gives the name, parameters and tags of each publication and templates for each cert. |
 | 2     | adds each publication's signing chains                                                                                                  |
-| 3     | adds the information used to build and validate each publication (templates, signers, discriminators and correspondences)                |
+| 3     | adds the information used to build and validate each publication (templates, signers, discriminators and correspondences)               |
 | 4     | adds internal state information (the cert DAG, token table and binary schema sections)                                                  |
 
 The compiler's default verbosity is 1. Each`-v` flag increments the level, `-d` sets it to max and `-q` sets it to zero.
 
 #### Other flags
 
-`-o file`	dumps the binary schema to 'file' (for debugging)
+`-o file`    dumps the binary schema to 'file' (for debugging)
 
-`-p`		turns on (voluminous) parser debug output (see the bison manual for details)
+`-p`        turns on (voluminous) parser debug output (see the bison manual for details)
 
-------
+---
 
 Copyright (C) 2019-21 Pollere, Inc

@@ -19,7 +19,7 @@
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
  *  You may contact Pollere, Inc at info@pollere.net.
  *
- *  The DCT proof-of-concept is not intended as production code.
+ *  This proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
  */
 
@@ -32,17 +32,20 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+
+//if not using syncps defaults, set these here
+static constexpr size_t MAX_CONTENT=768; //max content size in bytes, <= maxPubSize in syncps.hpp
+static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
+
 #include "dct/syncps/syncps.hpp"
 #include "dct/schema/dct_model.hpp"
 
 using namespace syncps;
 
-
 /* 
  * MBPS (message-based publish/subscribe) provides a pub/sub
  * data-centric transport inspired by the MQTT API.
- * MBPS uses Pollere's SignatureManager approach to signing
- * and validation,Operant's ndn-ind library, and Pollere's
+ * MBPS uses the DCT run-time library, Operant's ndn-ind library, and Pollere's
  * patches to NFD.
  *
  * Messages passed from the application may exceed the size of
@@ -50,15 +53,9 @@ using namespace syncps;
  * are segmented and sent in multiple Publications and reassembled into
  * messages that are passed to the application's callback.
  *
- * This version (0) only integrity checks and signs the Publications
- * and syncData packets and is the simplest possible instantiation
- * of MBPS.
  */
 
 using error = std::runtime_error;
-static constexpr size_t MAX_CONTENT=768; //max content size in bytes, <= maxPubSize in syncps.hpp
-static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
-
 using confHndlr = std::function<void(const bool, const uint32_t)>;
 using connectCb = std::function<void()>;
 using MsgID = uint32_t;
@@ -73,37 +70,25 @@ using mbpsPub = DCTmodel::sPub;
 /*
  * Passes information about messages not in message body
  * These arguments are intended for an iot application
- * Might add payload to this struct in future
  */
 struct msgArgs {
     msgArgs() {}
     bool dup{0};
     std::string cap{};      //capability
-    std::string loc{};      //location
     std::string topic{};    //message type
-    std::string args{};     //specifiers
-    std::string ts{};       //message creation time
+    std::string loc{};      //location
+    std::string args{};     //arguments
+    std::chrono::sys_time<std::chrono::microseconds> ts;   //message creation time
 };
 
 struct mbps;
 using msgHndlr = std::function<void(mbps&, std::vector<uint8_t>&, const msgArgs&)>;
 
-/* For subscription to multiple subCollections with different callbacks */
-struct subscriptionInfo {
-    subscriptionInfo(const msgHndlr&& mh) : sbcoll{}
-    { cb = std::move(mh); }
-    std::string sbcoll;
-    msgHndlr cb;
-};
-using subscriptionList = std::vector<subscriptionInfo>;
-
 struct mbps
 {   
-    std::string m_role {};  //temporary way to get role
-    bool m_connected = false;
     connectCb m_connectCb;
+    connectCb m_connFailCb;
     DCTmodel m_pb;
-    syncps::SyncPubsub m_sync;
     Name m_pubpre{};     // full prefix for Publications
     std::unordered_map<MsgID, confHndlr> m_msgConfCb;
     MsgInfo m_pending{};  // unconfirmed published messages
@@ -111,85 +96,102 @@ struct mbps
     MsgCache m_reassemble{}; //reassembly of received message segments
     Timer m_timer;
 
-    mbps(std::string& role) : m_role{role},
-        m_pb("mbps0", role),
-        m_sync(m_pb.wirePrefix(), m_pb.wireSigMgr(), m_pb.pubSigMgr()),    //handles Sync Data/Interests
-        m_pubpre{m_pb.pubPrefix()}  { }
+    mbps(std::string_view bootstrap) : m_pb(bootstrap), m_pubpre{m_pb.pubPrefix()}  { }
 
-    void run() { m_sync.run(); }
+    void run() { m_pb.run(); }
     const auto& pubPrefix() const noexcept { return m_pubpre; } //calling can convert to Name
-    const std::string& myRole() const noexcept { return m_role; }
+
+    //these two rely on knowledge from trust schema specifying layout of signing cert
+    std::string_view myRole() const noexcept {
+        // the role is in the signing cert, 6 components back the end
+        auto& cs = m_pb.certs();
+        auto v = cs[cs.Chains()[0]].getName()[-6].getValue();
+        return std::string_view((const char*)v.buf(), v.size());
+    }
+    std::string_view myId() const noexcept {
+        // the identifier (within the role) is in the signing cert, 5 components back the end
+        // this value appears in the location field for subtopics specific to this entity
+        auto& cs = m_pb.certs();
+        auto v = cs[cs.Chains()[0]].getName()[-5].getValue();
+        return std::string_view((const char*)v.buf(), v.size());
+    }
+    bool alwaysOn() { return true;} //should set to false for device types that sleep
 
     /*
-     * Kicks off the set up necessary for an application
-     * to publish or receive publications.
-     * This mbps0 client is not using signing keys so a client is considered "connected"
-     * once everything is initialized and there's no need to wait for events like the
-     * acquisition of keys.
+     * Kicks off the set up necessary for an application to publish or receive
+     * publications.  A client is considered "connected" once communications are
+     * initialized which may include key distribution and/or acquisition. The callback
+     * should be how the application starts its work that involves communication.
+     * If m_pb.start results in a callback indicating success, m_connectCb is
+     * invoked. If failure is indicated, m_connFailCb, which defaults to a
+     * simple exit, is invoked.
      *
      * This is loosely analogous to MQTT's connect() which connects to a server,
-     * but MBPS is serverless; this just makes things ready to communicate.
+     * but MBPS is serverless; this simply makes a client "ready" to communicate.
+     *
+     * connect does not timeout; if there is a wait time limit meaningful to an
+     * application it should set its own timeout.
      */
-    void connect(connectCb&& rf)
+
+    void connect(connectCb&& scb, connectCb&& fcb = [](){exit(1);})
     {
         //libsodium set up
-        if (sodium_init() == -1)
-           throw error("Connect unable to set up libsodium");
-        m_connectCb = std::move(rf);
-        m_connected = true;
-        m_connectCb(); //could schedule this with a small delay
+        if (sodium_init() == -1) throw error("Connect unable to set up libsodium");
+        m_connFailCb = std::move(fcb);
+        m_connectCb = std::move(scb);
+        // call start() with lambda to confirm success/failure
+        // A second, optional argument can pass a function that returns a boolean
+        // indicator of whether this entity can be used to make group keys. (Here, using
+        // an indicator of whether the device is "always on.") Defaults to true.
+        m_pb.start([this](bool success) {
+                if(!success) {
+                    _LOG_ERROR("mbps failed to initialize connection");
+                    m_connFailCb();
+                } else {
+                    _LOG_INFO("mbps connect successfully initialized connection");
+                    m_connectCb();
+                }
+            }, [this](){ return alwaysOn();}
+            );
     }
 
     /*
-     * Subscribe to all topics in the m_sync Collection with a single callback.
-     * An incoming Publication will cause cause the lambda callback to invoke
-     * receivePub with the Publication and the application's msgHndlr callback
+     * Subscribe to all topics in the sync Collection with a single callback.
+     *
+     * An incoming Publication will cause cause the lambda to invoke
+     * receivePub() with the Publication and the application's msgHndlr callback
     */
     mbps& subscribe(const msgHndlr& mh)    {
         _LOG_INFO("mbps:subscribe: single callback for client topic " << m_pubpre);
-        m_sync.subscribeTo(pubPrefix(),
-                [this,mh](auto p) {receivePub((mbpsPub&)(p),mh);});
+        m_pb.subscribeTo(pubPrefix(), [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
-    /*
-     * Subscribes to the subCollections on the list
-     * For an mbps client that is not target-specific, the subCollection
-     * passed on the subscription list is used as a target
-     */
-
-    mbps& subscribe(const subscriptionList& subList) {
-        // Derive subscriptions from the list
-        for(auto s : subList) {
-            //replace "/" in subcollection with "|" since currently a single component
-            std::size_t f = (s.sbcoll).find_first_of("/");
-            while(f != std::string::npos)   {
-                (s.sbcoll)[f] = '|';
-                f = (s.sbcoll).find_first_of("/", f+1);
-            }
-            _LOG_INFO("mbps:subscribe set up subscription to target: " << m_pubpre << "/" + s.sbcoll);
-            m_sync.subscribeTo((pubPrefix().toUri() + "/" + s.sbcoll),
-                [this,s](auto p) { receivePub((mbpsPub&)(p),s.cb); });
-        }
+    // distinguish subscriptions further by topic or topic/location
+    mbps& subscribe(const std::string& suffix, const msgHndlr& mh)    {
+        auto target = pubPrefix().toUri() + "/" + suffix;
+        _LOG_INFO("mbps:subscribe set up subscription to target: " << target);
+        m_pb.subscribeTo(target, [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
 
     /*
-     * receivePub() is passed as a callback to m_sync.subscribe and is
-     * called when a new Publication (carrying a message segment) is received
-     * in a subscribed topic.
+     * receivePub() is called when a new Publication (carrying a message segment) is
+     * received in a subscribed topic.
      *
      * A message is uniquely identified by its msgID and its timestamp.
      * and each name is identical except for the k in the k out of n sCnt.
      * When all n pieces received,reassemble into a message and callback
      * the message handler associated with subscription.
      *
-     * This receivePub guarantees in-order delivery within a message.
-     * If in-order delivery is required across messages for a particular
-     * application, messages can be held by their origin and timestamp until ordering can be determined
-     * or an additional sequence number can be introduced.
+     * This receivePub guarantees in-order delivery of Publications within a message.
+     *
+     * If in-order delivery is required across messages from an origin for a particular
+     * application, messages can be held by their origin and timestamp until ordering can
+     * be determined or an additional sequence number can be introduced.
      */
-     void receivePub(mbpsPub& p, const msgHndlr& mh)
+     void receivePub(const Publication& pub, const msgHndlr& mh)
      {      
+        const mbpsPub& p = mbpsPub(pub);
         SegCnt k = p.number("sCnt"), n = 1u;
         std::vector<uint8_t> msg;
         if (k == 0) { //single publication in this message
@@ -218,14 +220,14 @@ struct mbps
             m_reassemble.erase(mId);
         }                
         /*
-         * Complete message received, prepare msgHndlr callback
+         * Complete message received, prepare arguments for msgHndlr callback
          */
         _LOG_INFO("receivePiece: msgID " << p.number("msgID") << "(" << n << " pieces) delivered in " << p.timeDelta("mts") << " sec.");
         msgArgs ma;
-        ma.ts =  ndn::toIsoString(p.time("mts"), true);
+        ma.ts =  p.time("mts");
         ma.cap = p["target"];
-        ma.loc = p["trgtLoc"];
         ma.topic = p["topic"];
+        ma.loc = p["trgtLoc"];
         ma.args = p["topicArgs"];
         mh(*this, msg, ma);
     }
@@ -244,8 +246,9 @@ struct mbps
      * passed to shim. (a confHndlr callback)
      *
      */
-    void confirmPublication(const mbpsPub& p, bool success)
+    void confirmPublication(const Publication& pub, bool success)
     {
+        const mbpsPub& p = mbpsPub(pub);
         MsgID mId = p.number("msgID");
         SegCnt k = p.number("sCnt"), n = 1u;
         if (k != 0) {
@@ -277,20 +280,18 @@ struct mbps
 
     /*
      * Publish the passed in message by building mbpsPubs to carry the message
-     * content and passing to m_sync to publish
+     * content and passing to m_pb to publish
      *
      * An application calls this method and passes a message, and an argument
      * list that should contain target (if the client isn't target-specific),
-     * topic, and topicArgs. (The argument list could be made optional for a
-     * simple example like version 0 or where the shim knows how to extract needed
-     * component parameters directly from the message.)
+     * topic, and topicArgs.
      *
      * The message may need to be broken into content-sized segments.
      * Publications for all segments have the same message ID and timestamp.
      * mId uniquely identifies using uint32_t hash of (origin, timestamp, message)
      *
      * For messages with a confirmation callback (roughly mqtt QoS 1) set, a cb
-     * is set in m_sync.publish to confirm each publication of msg and the app
+     * is set in m_pb.publish to confirm each publication of msg and the app
      * callback function (a confHndlr) gets called
      * either when all segments of a message were published or if any segments
      * timed out without showing up in the off-node collection. An application
@@ -302,18 +303,23 @@ struct mbps
     MsgID publish(std::span<uint8_t> msg, const msgArgs& a,
                      const confHndlr&& ch = nullptr)
     {
-        //if any msgArgs are required, check here
         /*
          * Set up and publish Publication(s)
-         * msgID is an uint32_t hash of the message
-         * incorporating process ID and timestamp to make unique
+         * can check here for required arguments
+         * msgID is an uint32_t hash of the message, incorporating ID and timestamp to make unique
          */
         auto size = msg.size();
         auto mts = std::chrono::system_clock::now();
-        uint64_t tms = duration_cast<ndn::microseconds>(mts.time_since_epoch()).count();
-        auto mId = ndn::CryptoLite::murmurHash3((uint32_t)tms, tms >> 32);
-        mId = ndn::CryptoLite::murmurHash3(mId, getpid());
-        mId = ndn::CryptoLite::murmurHash3(mId, msg.data(), size);
+        uint64_t tms = duration_cast<std::chrono::microseconds>(mts.time_since_epoch()).count();
+        std::vector<uint8_t> emsg;
+        for(size_t i=0; i<sizeof(tms); i++)
+            emsg.push_back( tms >> i*8 );
+        emsg.insert(emsg.end(), myRole().begin(), myRole().end());
+        emsg.insert(emsg.end(), myId().begin(), myId().end());
+        emsg.insert(emsg.end(), msg.begin(),msg.end());
+        std::array<uint8_t, 4> h;        //so fits in uint32_t
+        crypto_generichash(h.data(), h.size(), emsg.data(), emsg.size(), NULL, 0);
+        uint32_t mId = h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24;
 
         // determine number of message segments: sCnt forces n < 256,
         // iblt is sized for 80 but 64 fits in an int bitset
@@ -323,20 +329,20 @@ struct mbps
         for (auto off = 0u; off < size; off += MAX_CONTENT) {
             auto len = std::min(size - off, MAX_CONTENT);
             if(ch) {
-                m_sync.publish(m_pb.pub(msg.subspan(off, len), "target",
+                m_pb.publish(m_pb.pub(msg.subspan(off, len), "target",
                         a.cap, "trgtLoc", a.loc, "topic", a.topic,
                         "topicArgs", a.args, "msgID", mId, "sCnt", sCnt,
                         "mts", mts), [this](auto p, bool s) {
-                            confirmPublication((const mbpsPub&)(p),s); });
+                            confirmPublication(mbpsPub(p),s); });
             } else {
-                m_sync.publish(m_pb.pub(msg.subspan(off, len), "target", a.cap,
+                m_pb.publish(m_pb.pub(msg.subspan(off, len), "target", a.cap,
                             "trgtLoc", a.loc, "topic", a.topic, "topicArgs", a.args,
                             "msgID", mId, "sCnt", sCnt, "mts", mts));
             }
             sCnt += 256;    //segment names differ only in sCnt
         }
         if(ch) {
-            _LOG_INFO("mbps publish with call back for mId: " << mId);
+            _LOG_INFO("mbps has published (with call back) mId: " << mId);
             m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
         }
         return mId;
@@ -344,9 +350,8 @@ struct mbps
 
     // Can be used by application to schedule
     Timer schedule(std::chrono::nanoseconds d, const TimerCb& cb) {
-        return m_sync.schedule(d, cb);
+        return m_pb.schedule(d, cb);
     }
-
 };
 
 #endif

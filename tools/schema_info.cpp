@@ -1,7 +1,7 @@
 /*
- * schema_install <file> - install a compiled scheme in the NDN PIB
+ * schema_info - print selected info from a binary schema
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2021 Pollere, Inc.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,7 +21,6 @@
  *  More information on DCT is available from info@pollere.net
  */
 #include <iostream>
-#include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -29,35 +28,46 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <ndn-ind/security/pib/pib-sqlite3.hpp>
 #include "dct/format.hpp"
 #include "dct/schema/rdschema.hpp"
-#include "dct/schema/schema_install.hpp"
+
+
+void usage(const char** argv) {
+    print("- usage: {} [-t] bschema [pubname]\n", argv[0]);
+    exit(1);
+}
 
 int main(int argc, const char* argv[]) {
-    if (argc != 2) {
-        print("- usage: {} schemaFile\n", argv[0]);
-        exit(1);
+    bool trim = false;
+    std::string_view pub = "pub0";
+
+    if (argc < 2) usage(argv);
+
+    const char** ap = argv + 1;
+    const char** ape = argv + argc;
+    if (ap < ape && std::string_view(*ap) == "-t") {
+        trim = true;
+        ap++;
     }
+    if (ape - ap < 1 || std::string_view(*ap)[0] == '-') usage(argv);
+
+    const char* sfile = *ap++;
+    if (ap < ape) pub = *ap++;
+ 
     try {
-        std::ifstream is{argv[1], std::ios::binary|std::ios::ate};
-        auto sz = is.tellg();
-        if (sz < 32 || sz > 1200) {
-            print("- error: {} file size unreasonable ({} bytes)\n", argv[1], sz);
-            exit(1);
+        std::ifstream is(sfile, std::ios::binary);
+        rdSchema rs(is);
+        bSchema bs{rs.read()};
+
+        std::string val{};
+        if (pub == "pub0") {
+            val = bs.pubName(0);
+        } else {
+            val = bs.pubVal(pub);
         }
-        is.seekg(0);
-        std::vector<uint8_t> buf(sz);
-        if (! is.read((char*)buf.data(), buf.size())) {
-            print("- error: couldn't read file {}\n", argv[1]);
-            exit(1);
-        }
-        is.close();
-        std::istringstream ss(std::string((char*)buf.data(), buf.size()), std::ios::binary);
-        rdSchema rs(ss);
-        auto bs = rs.read();
-        schemaInstall(bs, buf);
-    } catch (const std::runtime_error& se) { print("runtime error: {}\n", se.what()); }
+        if (trim) val = val.substr(1);
+        print("{}\n", val);
+    } catch (const schema_error& se) { print("schema error: {}\n", se.what()); }
 
     exit(0);
 }
