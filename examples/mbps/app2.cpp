@@ -105,9 +105,11 @@ static void msgPubr(mbps &cm) {
         a.args = myState;
     }
     if constexpr (deliveryConfirmation) {
-        cm.publish(toSend, a, [](bool delivered, uint32_t /*mId*/) {
-                    print("{}:{}-{} msg #{} {} Collection.\n", role, myId, myPID, Cnt,
-                          delivered? "published to" : "timed out without reaching");
+        cm.publish(toSend, a, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t /*mId*/) {
+                    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+                    auto dt = ticks(std::chrono::system_clock::now() - ts).count() / 1000.;
+                    print("{}:{}-{} msg #{} {} Collection. ({} mS)\n", role, myId, myPID, Cnt,
+                          delivered? "published to" : "timed out without reaching", dt);
                     });
     } else {
         cm.publish(toSend, a);  //no callback to skip message confirmation
