@@ -90,7 +90,7 @@ static std::string myState{"unlocked"};       // simulated state (for devices)
  */
 static void msgPubr(mbps &cm) {
     // make a message to publish
-    std::string s = format("Message number {} from {}:{}-{}", ++Cnt, role, myId, myPID);
+    std::string s = format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
     std::vector<uint8_t> toSend(s.begin(), s.end());
 
     msgArgs a;
@@ -105,24 +105,30 @@ static void msgPubr(mbps &cm) {
         a.args = myState;
     }
     if constexpr (deliveryConfirmation) {
-        cm.publish(toSend, a, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t /*mId*/) {
+        cm.publish(toSend, a, [a,ts=std::chrono::system_clock::now()](bool delivered, uint32_t /*mId*/) {
                     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-                    auto dt = ticks(std::chrono::system_clock::now() - ts).count() / 1000.;
-                    print("{}:{}-{} msg #{} {} Collection. ({} mS)\n", role, myId, myPID, Cnt,
-                          delivered? "published to" : "timed out without reaching", dt);
+                    auto now = std::chrono::system_clock::now();
+                    auto dt = ticks(now - ts).count() / 1000.;
+                    print("{:%M:%S} {}:{}-{} #{} published and {} +{:.3} mS: {} {}: {} {}\n",
+                            ticks(ts.time_since_epoch()), role, myId, myPID, Cnt,
+                            delivered? "confirmed":"timed out", dt, a.cap, a.topic, a.loc, a.args); 
                     });
     } else {
         cm.publish(toSend, a);  //no callback to skip message confirmation
     }
 
     if(Cnt >= nMsgs && nMsgs) {
-        print("{}:{}-{} published {} messages", role, myId, myPID, Cnt);
-        timer = cm.schedule(2*pubWait, [](){ print(" and exits.\n"); exit(0); });
+        timer = cm.schedule(2*pubWait, [](){
+                    print("{}:{}-{} published {} messages and exits\n", role, myId, myPID, Cnt);
+                    exit(0);
+                });
         return;
     }
 
     // operators send periodic messages, devices respond to incoming msgs
-    if (role == "operator") timer = cm.schedule(pubWait, [&cm](){ msgPubr(cm); });
+    if (role == "operator") {
+        timer = cm.schedule(pubWait + std::chrono::milliseconds(rand() & 0x1ff), [&cm](){ msgPubr(cm); });
+    }
 }
 
 /*
@@ -139,15 +145,12 @@ static void msgPubr(mbps &cm) {
 static void msgRecv(mbps &cm, std::vector<uint8_t>& msgPayload, const msgArgs& a)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-    auto dt = ticks(std::chrono::system_clock::now() - a.ts).count() / 1000.;
+    auto now = std::chrono::system_clock::now();
+    auto dt = ticks(now - a.ts).count() / 1000.;
 
-    std::cout << "Application entity " << role << ":" << myId << "-" << myPID << " received message:" << std::endl;
-    std::cout << "\tcapability = " << a.cap << std::endl;
-    std::cout << "\ttopic = " << a.topic << std::endl;
-    std::cout << "\tlocation = " << a.loc << std::endl;
-    std::cout << "\targuments = " << a.args << std::endl;
-    std::cout << "\tmessage creation time = " << a.ts.time_since_epoch().count() << " (" << dt << "mS)\n";
-    std::cout << "\tmessage body: " << std::string(msgPayload.begin(), msgPayload.end()) << std::endl;
+    print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
+            ticks(now.time_since_epoch()), role, myId, myPID, dt, a.cap, a.topic, a.loc, a.args, 
+            std::string(msgPayload.begin(), msgPayload.end()));
 
     // further action can be conditional upon msgArgs and msgPayload
 

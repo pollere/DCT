@@ -66,6 +66,8 @@ struct DistCert
         m_sync(wPre, m_syncSigMgr.ref(), m_certSigMgr.ref()),
         m_addCertCb{std::move(addCb)}
     {
+        m_sync.syncInterestLifetime(std::chrono::milliseconds(359));   // (quick refresh until have peer)
+        m_sync.syncDataLifetime(std::chrono::milliseconds(877));       // (data caching not useful)
         m_sync.pubLifetime(std::chrono::milliseconds(0)); // pubs don't auto expire
         m_sync.isExpiredCb(std::move(eCb));
         m_sync.filterPubsCb([](auto& pOurs, auto& pOthers) mutable {
@@ -116,7 +118,10 @@ struct DistCert
                         auto item = std::hash<ndn::Data>{}(d);
                         if (m_initialPubs.contains(item)) m_initialPubs.erase(item);
                         if (! m_havePeer && (!acked || m_initialPubs.empty())) {
-                            if (acked) m_havePeer = true; 
+                            if (acked) {
+                                m_havePeer = true; 
+                                m_sync.syncInterestLifetime(std::chrono::milliseconds(13537)); // (long prime interval)
+                            }
                             m_connCb(acked);
                         }
                     });

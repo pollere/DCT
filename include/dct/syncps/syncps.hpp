@@ -56,7 +56,7 @@ enum class tlv : uint8_t {
 //default values
 static constexpr int maxPubSize = 1024; // max payload in Data (with 1460B MTU
                                         // and 400B iblt, 1K left for payload)
-static constexpr std::chrono::milliseconds maxPubLifetime = std::chrono::seconds(1);
+static constexpr std::chrono::milliseconds maxPubLifetime = std::chrono::seconds(4);
 static constexpr std::chrono::milliseconds maxClockSkew = std::chrono::seconds(1);
 static constexpr uint32_t maxDifferences = 85u;  // = 128/1.5 (see detail/iblt.hpp)
 
@@ -346,8 +346,8 @@ class SyncPubsub
             .setMustBeFresh(true)
             .setInterestLifetime(m_syncInterestLifetime);
         // For logging, interpret the nonce as a hex integer.
-        _LOG_DEBUG(format(fmt::runtime("sendSyncInterest {} {:x}/{:x}"), fmt::join(m_syncPrefix,"/"),
-                          fmt::join(m_nonce,""), hashIBLT(name)));
+        _LOG_DEBUG(format(fmt::runtime("sendSyncInterest {:x}/{:x} {}"), hashIBLT(name), *(uint32_t*)m_nonce.data(),
+                    fmt::join(m_syncPrefix,"/")));
         m_face.expressInterest(syncInterest,
                 [this](auto& i, auto& d) {
                     if (! m_sigmgr.validateDecrypt(*d)) {
@@ -390,14 +390,14 @@ class SyncPubsub
         if (std::equal(m_nonce.begin(), m_nonce.end(), interest.getNonce()->begin())) return; // interest looped back
 
         const ndn::Name& name = interest.getName();
-        _LOG_DEBUG("onSyncInterest " << std::hex << *((uint32_t*)interest.getNonce().buf()) << "/"
-                      << hashIBLT(name) << std::dec);
+        _LOG_DEBUG(format(fmt::runtime("onSyncInterest {:x}/{:x}"), hashIBLT(name),
+                    *(uint32_t*)interest.getNonce().buf()));
 
         if (name.size() - prefixName.size() != 1) {
             _LOG_INFO("invalid sync interest: " << name);
             return;
         }
-        if (!  handleInterest(name)) {
+        if (! handleInterest(name)) {
             // couldn't handle interest immediately - remember it until
             // we satisfy it or it times out;
             m_interest = { name, std::chrono::system_clock::now() + m_syncInterestLifetime};
@@ -497,7 +497,7 @@ class SyncPubsub
      */
     void sendSyncData(const ndn::Name& name, const VPubPtr& pubs)
     {
-        _LOG_INFO("sendSyncData: " << name);
+        _LOG_DEBUG(format(fmt::runtime("sendSyncData {:x} {}"), hashIBLT(name), name.toUri()));
         ndn::Data data(name);
         // data only useful until iblt changes so limit freshness
         data.getMetaInfo().setFreshnessPeriod(m_syncDataLifetime);
@@ -570,9 +570,8 @@ class SyncPubsub
      */
     void onValidData(const ndn::Interest& interest, const ndn::Data& data)
     {
-        _LOG_DEBUG("onValidData: " << interest.getNonce().toHex() << "/"
-                       << hashIBLT(interest.getName())
-                       << " " << data.getName());
+        _LOG_DEBUG(format(fmt::runtime("onValidData {:x}/{:x} {}"), hashIBLT(interest.getName()),
+                    *(uint32_t*)interest.getNonce().buf(), data.getName().toUri()));
 
         // if publications result from handling this data we don't want to
         // respond to a peer's interest until we've handled all of them.
@@ -611,12 +610,11 @@ class SyncPubsub
         }
 
         // We've delivered all the publications in the Data.
-        // If this is our currently active sync interest, send an
-        // interest to replace the one consumed by the Data.
+        // Send an interest to replace the one consumed by the Data.
         // If deliveries resulted in new publications, try to satisfy
         // pending peer interests.
         m_delivering = false;
-        if (std::equal(m_nonce.begin(), m_nonce.end(), interest.getNonce()->begin())) sendSyncInterest();
+        sendSyncInterest();
 
         if (initpubs != m_publications) handleInterests();
     }
@@ -676,8 +674,7 @@ class SyncPubsub
                                                     m_pubCbs.erase(hash);
                                                     m_pcbiblt.erase(hash);
                                                 } });
-        m_scheduler.schedule(pubLifetime + maxClockSkew,
-            [this, hash] { m_iblt.erase(hash); sendSyncInterestSoon(); });
+        m_scheduler.schedule(pubLifetime + maxClockSkew, [this, hash] { m_iblt.erase(hash); });
         m_scheduler.schedule(pubLifetime + m_pubExpirationGB, [this, p] { removeFromActive(p); });
 
         return p;
@@ -731,8 +728,8 @@ class SyncPubsub
     std::unordered_map <uint32_t, PublishCb> m_pubCbs;
     SigMgr& m_sigmgr;               // SyncData packet signing and validation
     SigMgr& m_pubSigmgr;            // Publication validation
-    std::chrono::milliseconds m_syncInterestLifetime{std::chrono::seconds(4)};
-    std::chrono::milliseconds m_syncDataLifetime{std::chrono::seconds(1)};
+    std::chrono::milliseconds m_syncInterestLifetime{std::chrono::milliseconds(557)};
+    std::chrono::milliseconds m_syncDataLifetime{std::chrono::seconds(3)};
     std::chrono::milliseconds m_pubLifetime{maxPubLifetime};
     std::chrono::milliseconds m_pubExpirationGB{maxPubLifetime};
     ndn::scheduler::ScopedEventId m_scheduledSyncInterestId;
