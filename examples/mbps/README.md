@@ -117,17 +117,21 @@ MBPS provides mechanisms that enable applications to set a callback (if desired)
 
 ### Notes on the included trust schemas
 
+Identity bundles can be made using each of these trust schemas. Since a trust schema determines a particular trust zone, applications invoked with identity bundles with different trust schema will not communicate with each other. The security model can be changed just by using a set of identity bundles with the new trust schema while the application binary remains the same.
+
 #### mbps0.trust
 
-An entity has to have the correct identity and the trust schema in order to build and validate Publications. Publications and syncData are signed for integrity checking using a SHA256 hash. The trust schema in mbps0.trust allows for two roles, device and operator.  In this simple schema, an *operator* role is required to publish **command** messages and a *device* role is required to publish **status** and **event** messages.
+An entity needs the trust schema and a valid signing identity in order to sign and validate Publications. Both Publications and syncData are signed with the private key of the signing cert in the identity bundle using the EdDSA signature manager. There is no role differentiation so the schema has only type of Publication. 
+
+Management and distribution of the signing certs is handled within the schema library modules and is transparent to both the application and mbps.hpp. The distributor *dist_cert.hpp* manages access to a cert Collection that contains all the certs needed to validate Publication and sync Data for an application. During connect(), each entity publishes its signing cert chain and subscribes to that of others in the Collection;  the application is called back when signing chain publication is confirmed.
 
 #### mbps1.trust
 
-During connect(), each entity publishes its signing cert chain and subscribes to that of others in the domain. Publications are signed with the private key of their published signing certificate (using the EdDSA signature manager) while the syncData are integrity signed using the RFC7693 signature manager. Management and distribution of the signing certs is handled within the schema library modules and is transparent to both the application and mbps.hpp. The distributor *dist_cert.hpp* manages access to a cert Collection that contains all the certs needed to validate Publication and sync Data for an application. During connect(), an entity's signing cert chain is published and the Collection is subscribed; the application is called back when signing chain publication is confirmed.
+This schema introduces operator and device role certs and derives additional Publication types that can require particular signing certs to be considered valid. As in mbps0.trust, the EdDSA signature manager is used for cryptographic signing of both Publications and syncData.
 
 #### mbps2.trust
 
- If a signature manager is used that requires a group key, an additional distributor, *dist_gkey.hpp* is automatically employed. Any client whose role permits it to create and distribute group keys attempts to become the key maker for the domain. (The simple self-selection algorithm used here could certainly be improved upon but is provided as an illustration.) Once a valid symmetric key is obtained, messages can be encrypted/decrypted so the application connect handler is called back. The AEAD signature manager is used to encrypt/decrypt SyncData while the Publications may use either an integrity signature or EdDSA (mbps2 uses EdDSA).
+This schema differs from mbps1.trust only in that the wireValidator ensures privacy by encrypting all sync Data payloads using dynamically created and distributed symmetric keys. Its AEAD signature manager  requires a group key so an additional distributor, *dist_gkey.hpp* is automatically employed. Any client whose role permits it to create and distribute group keys attempts to become the key maker for the domain. (The simple self-selection algorithm used here could certainly be improved upon but is provided as an illustration.) Once a valid symmetric key is obtained, messages can be encrypted/decrypted so the application connect handler is called back. The AEAD signature manager is used to encrypt/decrypt SyncData while the Publications use EdDSA.
 
 ---
 
