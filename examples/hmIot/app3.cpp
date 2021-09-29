@@ -38,7 +38,7 @@
 #include <iostream>
 #include <chrono>
 
-#include "mbps.hpp"
+#include "../shims/mbps.hpp"
 
 // handles command line
 static struct option opts[] = {
@@ -63,52 +63,58 @@ static void help(const char* cname)
 
 
 /* Globals */
-static std::string myPID {};
+static std::string myPID, myId, role;
 static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static bool Pending = false;
 static Timer timer;
 static std::string capability{"lock"};
 static std::string location{"all"};
-static std::string role{};
-static std::string myId{};
 
 //options for the argument list that can be randomly selected
 std::string loc[] = {"all", "frontdoor", "gate", "backdoor", "all"};
 std::string topic[] = {"status", "event"};
 std::string args[] = {"lock", "unlock", "report"};
 
+void repCmd(mbps &cm) {
+    if(role != "operator") return;
+    msgParms mp;
+    mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc","all"s},{"topicArgs", "report"s}};
+    std::string s("Status command to all from operator: " + myId + "-" + myPID);
+    std::vector<uint8_t> opNote(s.begin(), s.end());
+    try {
+        cm.publish(std::move(mp), opNote);
+        std::cout << "Operator: " << myId << "-" << myPID << " published status command to all." << std::endl;
+    } catch (const std::exception& e) {
+        _LOG_INFO("msgPubr got exception trying to publish message: " << e.what());
+   }
+}
+
 /*
  * msgPubr passes messages to publish to the mbps client.
  */
 
 void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
-    msgArgs a;
-    a.cap = capability;
+    msgParms mp;
     if(role == "operator") {
-        a.topic = "command";
-        //randomly select loc
-        auto k = randombytes_uniform((uint32_t)5);
-        a.loc = loc[k];
-        //randomly select topic args
-        k = randombytes_uniform((uint32_t)3);
-        a.args = args[k];
+        mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",loc[randombytes_uniform((uint32_t)5)]},
+            {"topicArgs", args[randombytes_uniform((uint32_t)3)]}};
     } else {
-        //randomly select topic
-        auto k = randombytes_uniform((uint32_t)(2));
-        a.topic = topic[k];
-        a.loc = myId;
-        //randomly select topic args
-        k = randombytes_uniform((uint32_t)2);
-        a.args = args[k] + "ed";
+        mp = msgParms{{"target", capability},{"topic", topic[randombytes_uniform((uint32_t)(2))]},{"trgtLoc",myId},
+            {"topicArgs", args[randombytes_uniform((uint32_t)2)] + "ed"}};
     }
+
     try {
-        cm.publish(toSend, a);
+        cm.publish(std::move(mp), toSend);
         Pending = false;
+        std::cout << "Entity " << role << ":" << myId << "-" << myPID << " published." << std::endl;
     } catch (const std::exception& e) {
         _LOG_INFO("msgPubr got exception trying to publish message: " << e.what());
     }
+    if(role == "operator")
+        repCmd(cm);
 }
+
 
 /*
  * msgRecv handles a message received in subscription (callback passed to subscribe)
@@ -119,15 +125,15 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
  * Could take action(s) based on message content
  */
 
-void msgRecv(mbps &cm, std::vector<uint8_t>& msgPayload, const msgArgs& a)
+void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
     try {
-        std::cout << "Application entity " << role << ":" << myId << "-" << myPID << " received message:" << std::endl
-        << "\tcapability = " << a.cap << std::endl << "\tlocation = " << a.loc << std::endl
-        << "\ttopic = " << a.topic << std::endl << "\ttopic args = " << a.args << std::endl
-        << "\tmessage creation time = " << a.ts.time_since_epoch().count() << std::endl;
-    auto content = std::string(msgPayload.begin(), msgPayload.end());
-    std::cout << "\tmessage body: " << content << std::endl;
+        std::cout << "Entity " << role << ":" << myId << "-" << myPID << " received message:" << std::endl
+                  << "\tcapability = " << mt["target"] << std::endl << "\ttopic = " << mt["topic"] << std::endl
+                      << "\tlocation = " << mt["trgtLoc"] << std::endl << "\targuments = " << mt["topicArgs"] << std::endl
+                      << "\tmessage creation time = " << mt.time("mts").time_since_epoch().count() << std::endl;
+        auto content = std::string(msgPayload.begin(), msgPayload.end());
+        std::cout << "\tmessage body: " << content << std::endl;
     } catch (const std::exception& e) {
         _LOG_INFO("msgRecv got exception while parsing message and args: " << e.what());
     }
@@ -184,23 +190,25 @@ int main(int argc, char* argv[])
 
     myPID = std::to_string(getpid());
     mbps cm(argv[optind]);     //Create the mbps client
-    role = cm.myRole();
-    myId = cm.myId();
+    role = cm.attribute("_role");
+    myId = cm.attribute("_roleId");
 
     // Connect and pass in the handler
     try {
         cm.connect(    /* main task for this entity */
             [&cm]() {
-                if (role == "operator") {
+                std::cout << "Entity " << role << ":" << myId << "-" << myPID << " connected to TZ" << std::endl;
+                 //going to publish in this function
+                if (role == "operator")  {
                     cm.subscribe(msgRecv);   //single callback for all messages
                 } else {
                     //here devices just subscribe to command topic
                     cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
                     cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
                 }
-                // make a message to publish
                 std::string s("Message number 0 from " + role + ":" + myId + "-" + myPID);
                 std::vector<uint8_t> toSend(s.begin(), s.end());
+                Pending = true;
                 msgPubr(cm, toSend);    //send initial message
             });
     } catch (const std::exception& e) {

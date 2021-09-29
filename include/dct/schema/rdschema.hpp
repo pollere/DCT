@@ -289,7 +289,7 @@ struct rdSchema {
         readVec(sTLV::pub, vec,
             [this](int last) {
                 auto n = getItem<decltype(vec)>(last);
-                const auto& [param,disc,pub,tagi] = n;
+                const auto& [param,pub,tagi,disc] = n;
                 if (pub >= bs_.tok_.size()) throw schema_error("invalid pub tok index");
                 if (tagi >= bs_.tag_.size()) throw schema_error("invalid pub tag index");
 
@@ -301,7 +301,9 @@ struct rdSchema {
 #if defined(__APPLE__) && !defined(__cpp_lib_bounded_array_traits)
                 if (std::log2p1(disc) - 1u >= bs_.discrim_.size()) throw schema_error("invalid pub discrim index");
 #else
-                if (std::bit_width(disc) - 1u >= bs_.discrim_.size()) throw schema_error("invalid pub discrim index");
+                if (std::bit_width(disc) - 1u >= bs_.discrim_.size())
+                    throw schema_error(format("invalid pub discrim index {} ({:x}) >= {}",
+                                std::bit_width(disc) - 1u, disc, bs_.discrim_.size()));
 #endif
 
                 // param is a bitmask with each bit corresponding to one component of the pub.
@@ -339,7 +341,7 @@ struct rdSchema {
     }
     void chkConsist() {
         int pubidx{};
-        for (const auto& [param,disc,pub,tagi] : bs_.pub_) {
+        for (const auto& [param,pub,tagi,disc] : bs_.pub_) {
             dprint("pub {}: {}\n", bs_.tok_.at(pub), bs_.pub_[pubidx++]);
             discSet ds{disc};
             for (size_t d = 0, de = bs_.discrim_.size(); d < de; d++) {

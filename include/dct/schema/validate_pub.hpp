@@ -41,10 +41,10 @@ struct pubValidator {
     std::vector<pTmplt> ptmplts_;
     std::unordered_map<bTok,bComp> ptm_;    // pub-specific token map
     std::vector<bTok> ptok_;                // pub-specific tokens
-    std::vector<std::string> pstab_;        // pub-specific string table
+    std::string pstab_;                     // pub-specific string table
  
     pubValidator(std::vector<pTmplt>&& pt, std::unordered_map<bTok,bComp>&& ptm,
-                 std::vector<bTok>&& ptok, std::vector<std::string>&& pstab) :
+                 std::vector<bTok>&& ptok, std::string&& pstab) :
                     ptmplts_{std::move(pt)}, ptm_{std::move(ptm)}, ptok_{std::move(ptok)}, pstab_{std::move(pstab)} {
         // specialize templates for validation (vs construction)
         for (auto& pt : ptmplts_) {

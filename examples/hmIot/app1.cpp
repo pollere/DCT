@@ -33,7 +33,7 @@
 #include <iostream>
 #include <chrono>
 
-#include "mbps.hpp"
+#include "../shims/mbps.hpp"
 
 // handles command line
 static struct option opts[] = {
@@ -60,7 +60,7 @@ static void help(const char* cname)
 }
 
 /* Globals */
-static std::string myPID {};
+static std::string myPID, myId, role;
 static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static int Done = 10;
@@ -68,8 +68,6 @@ static bool Persist = false;
 static Timer timer;
 static std::string capability{"lock"};
 static std::string location{"all"};
-static std::string role{};
-static std::string myId{};
 
 /*
  * msgPubr passes messages to publish to the mbps client. A simple lambda
@@ -78,21 +76,17 @@ static std::string myId{};
  */
 
 void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
-    msgArgs a;
-    a.cap = capability;
+    msgParms mp;
+
     if(role == "operator") {
-        a.topic = "command";
-        a.loc = location;
-        a.args = "unlock";
+        mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",location},{"topicArgs", "unlock"s}};
     } else {
-        a.topic = "status";
-        a.loc = myId;
-        a.args = "unlocked";
+        mp = msgParms{{"target", capability},{"topic", "status"s},{"trgtLoc",myId},{"topicArgs", "unlocked"s}};
     }
     /*
-    cm.publish(toSend, a);  //no callback to skip message confirmation
+    cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
     */
-    cm.publish(toSend, a, [](bool s, uint32_t mId) {
+    cm.publish(std::move(mp), toSend, [](bool s, uint32_t mId) {
         if(s){
             std::cout << role << ":" << myId << "-" << myPID << " published message number " << Cnt-1 << " identifier " << mId
                   << " to Collection." << std::endl;
@@ -130,13 +124,13 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
  * May take action(s) based on message content
  */
 
-void msgRecv(mbps&, std::vector<uint8_t>& msgPayload, const msgArgs& a)
+void msgRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
 
     std::cout << "Entity " << myPID << " received message:"
-        << "\tcapability = " << a.cap << std::endl << "\ttopic = " << a.topic << std::endl
-        << "\tlocation = " << a.loc << std::endl << "\targuments = " << a.args << std::endl
-        << "\tmessage creation time = " << a.ts.time_since_epoch().count() << std::endl;
+        << "\tcapability = " << mt["target"] << std::endl << "\ttopic = " << mt["target"] << std::endl
+        << "\tlocation = " << mt["trgtLoc"] << std::endl << "\targuments = " << mt["topicArgs"] << std::endl
+        << "\tmessage creation time = " << mt.time("mts").time_since_epoch().count() << std::endl;
     auto content = std::string(msgPayload.begin(), msgPayload.end());
     std::cout << "\tmessage body: " << content << std::endl;
 
@@ -215,8 +209,8 @@ int main(int argc, char* argv[])
     }
     myPID = std::to_string(getpid());        //process id useful for debugging
     mbps cm(argv[optind]);     //Create the mbps client
-    role = cm.myRole();
-    myId = cm.myId();
+    role = cm.attribute("_role");
+    myId = cm.attribute("_roleId");
 
     // Connect and pass in the handler
     try {

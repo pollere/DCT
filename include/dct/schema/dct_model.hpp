@@ -40,6 +40,7 @@
 
 
 using Publication = ndn::Data;
+using Name = ndn::Name;
 
 //template<typename sPub>
 struct DCTmodel {
@@ -59,7 +60,13 @@ struct DCTmodel {
     SigMgr& wireSigMgr() { return wsm_.ref(); }
     SigMgr& pubSigMgr() { return psm_.ref(); }
     auto pubPrefix() const { return bs_.pubVal("#pubPrefix"); }
-    auto wirePrefix() const { return bs_.pubVal("#wirePrefix"); }
+
+    // the wirePrefix is a Name whose first component(s) are the #wirePrefix string from the schema and
+    // last component is the first 8 bytes of the trust anchor thumbprint to make it trust-zone specific.
+    auto wirePrefix() const {
+        const auto& tp = cs_.trustAnchorTP(0);
+        return Name(bs_.pubVal("#wirePrefix")).append(tp.data(), 8);
+    }
 
     const auto& certs() const { return cs_; }
 
@@ -164,12 +171,12 @@ struct DCTmodel {
             psm_{getSigMgr(bs_)},
             wsm_{getWireSigMgr(bs_)},
             syncSm_{psm_.ref(), bs_, pv_},
-            m_sync{syncps::SyncPubsub(wirePrefix() + "/pub", wireSigMgr(), syncSm_)},
-            m_ckd{ bs_.pubVal("#pubPrefix"), bs_.pubVal("#wirePrefix") + "/cert",
+            m_sync{syncps::SyncPubsub(wirePrefix().append("pubs"), wireSigMgr(), syncSm_)},
+            m_ckd{ pubPrefix(), wirePrefix().append("cert"),
                    [this](auto cert){ addCert(cert);},  [](auto /*p*/){return false;} }
     {
         if(wsm_.ref().type() == SigMgr::stAEAD) {
-            m_gkd = new DistGKey(pubPrefix(), wirePrefix() + "/key",
+            m_gkd = new DistGKey(pubPrefix(), wirePrefix().append("keys"),
                              [this](auto& gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
         }
         // cert distributor needs a callback when cert added to certstore.
@@ -226,14 +233,24 @@ struct DCTmodel {
         return m_sync.schedule(after, cb);
     }
 
-    // construct a pub name
+    // construct a pub name from pairs of tag, value parameters
     template<typename... Rest>
+        requires ((sizeof...(Rest) & 1) == 0)
     auto name(Rest&&... rest) { return bld_.name(std::forward<Rest>(rest)...); }
 
     // construct a publication with the given content using rest of args to construct its name
     template<typename... Rest>
+        requires ((sizeof...(Rest) & 1) == 0)
     auto pub(std::span<const uint8_t> content, Rest&&... rest) {
         Publication pub(name(std::forward<Rest>(rest)...));
+        pubSigMgr().sign(pub.setContent(content.data(), content.size()));
+        return pub;
+    }
+
+    auto name(const std::vector<parItem>& pvec) { return bld_.name(pvec); }
+
+    auto pub(std::span<const uint8_t> content, const std::vector<parItem>& pvec) {
+        Publication pub(name(pvec));
         pubSigMgr().sign(pub.setContent(content.data(), content.size()));
         return pub;
     }
@@ -255,6 +272,32 @@ struct DCTmodel {
                     if (!connected) cb(false); else gkd.setup(cb, km);
                 });
         }
+    }
+
+    // inspection API to extract information from the schema.
+
+    // return a vector containing the tag or parameter names for the default pub
+    // or a named pub.
+    auto tagNames() const { return bld_.tagNames(); }
+    auto paramNames() const { return bld_.paramNames(); }
+
+    auto tagNames(std::string_view pubnm) const { return bs_.tagNames(pubnm); }
+    auto paramNames(std::string_view pubnm) const { return bs_.paramNames(pubnm); }
+
+    // return the 'value' of some publication in the schema, either as a Name or,
+    // if a tag for the pub is given, the value of that component. This is intended
+    // to extract information from parameter-less meta-information pubs like
+    // #wirePrefix or #chainInfo. If used on a pub that requires parameters it
+    // will throw an error.
+    auto pubVal(std::string_view pubnm) const {
+        auto cs{cs_};
+        pubBldr<false> bld{bs_, cs, pubnm};
+        return bld.name();
+    }
+    auto pubVal(std::string_view pubnm, std::string_view fldNm) const {
+        auto cs{cs_};
+        pubBldr<false> bld{bs_, cs, pubnm};
+        return bld.name()[bld.index(fldNm)].getValue().toRawStr();
     }
 
     struct sPub : Publication {

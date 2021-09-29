@@ -1,11 +1,13 @@
 /*
  * app2.cpp: command-line application to exercise mbps.hpp
  *
- * This is an application using mbps client. Messages packaged
- * in int8_t vectors are passed between application and client. To
- * publish a message, an optional list of arguments can also be
- * included along with an optional callback if message qos is
- * desired (here, confirmation that the message has been published).
+ * This is an application using mbps client. Message body is packaged
+ * in int8_t vectors are passed between application and client. Parameters
+ * are passed to mpbs in an vector of pairs (msgParms) along with an optional
+ * callback if message qos is desired (confirmation that the message has been published).
+ * Parameters are passed from mbps to the application in a mbpsMsg structure that
+ * contains an unordered_map where values are indexed by the tags (components of Names)
+ * that are defined in the trust schema for this particular application.
  *
  * app2 models an asymmetric, request/response style protocol between controlling
  * agent(s) ("operator" role in the schema) and controlled agent(s) ("device" role
@@ -42,7 +44,9 @@
 #include <iostream>
 #include <random>
 
-#include "mbps.hpp"
+#include "../shims/mbps.hpp"
+
+using namespace std::literals;
 
 static constexpr bool deliveryConfirmation = true; // get per-message delivery confirmation
 
@@ -72,15 +76,13 @@ static void help(const char* cname)
 }
 
 /* Globals */
-static std::string myPID {};
+static std::string myPID, myId, role;
 static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static int nMsgs = 10;
 static Timer timer;
 static std::string capability{"lock"};
 static std::string location{"all"}; // target's location (for operators)
-static std::string role{};          // this instance's role
-static std::string myId{};
 static std::string myState{"unlocked"};       // simulated state (for devices)
 
 /*
@@ -92,29 +94,25 @@ static void msgPubr(mbps &cm) {
     // make a message to publish
     std::string s = format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
     std::vector<uint8_t> toSend(s.begin(), s.end());
+    msgParms mp;
 
-    msgArgs a;
-    a.cap = capability;
     if(role == "operator") {
-        a.topic = "command";
-        a.loc = location;
-        a.args = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
+        std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
+        mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",location},{"topicArgs", a}};
     } else {
-        a.topic = "event";
-        a.loc = myId;
-        a.args = myState;
+        mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", myState}};
     }
     if constexpr (deliveryConfirmation) {
-        cm.publish(toSend, a, [a,ts=std::chrono::system_clock::now()](bool delivered, uint32_t /*mId*/) {
+        cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
                     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
                     auto now = std::chrono::system_clock::now();
                     auto dt = ticks(now - ts).count() / 1000.;
-                    print("{:%M:%S} {}:{}-{} #{} published and {} +{:.3} mS: {} {}: {} {}\n",
+                    print("{:%M:%S} {}:{}-{} #{} published and {} +{:.3} mS\n",
                             ticks(ts.time_since_epoch()), role, myId, myPID, Cnt,
-                            delivered? "confirmed":"timed out", dt, a.cap, a.topic, a.loc, a.args); 
+                            delivered? "confirmed":"timed out", dt);
                     });
     } else {
-        cm.publish(toSend, a);  //no callback to skip message confirmation
+        cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
     }
 
     if(Cnt >= nMsgs && nMsgs) {
@@ -135,28 +133,28 @@ static void msgPubr(mbps &cm) {
  * msgRecv handles a message received in subscription.
  * Used as callback passed to subscribe()
  * The message is opaque to the mbps client which uses
- * an argument list to pass any necssary data that was
- * not carried in the message body
+ * a msgMsg to pass tag data (tags from trust schema)
  *
  * Prints the message content
  * Could take action(s) based on message content
  */
 
-static void msgRecv(mbps &cm, std::vector<uint8_t>& msgPayload, const msgArgs& a)
+void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - a.ts).count() / 1000.;
+    auto dt = ticks(now - mt.time("mts")).count() / 1000.;
 
     print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
-            ticks(now.time_since_epoch()), role, myId, myPID, dt, a.cap, a.topic, a.loc, a.args, 
-            std::string(msgPayload.begin(), msgPayload.end()));
+            ticks(now.time_since_epoch()), role, myId, myPID, dt, mt["target"],
+                mt["topic"], mt["trgtLoc"], mt["topicArgs"],
+                std::string(msgPayload.begin(), msgPayload.end()));
 
     // further action can be conditional upon msgArgs and msgPayload
 
     // devices set their 'state' from the incoming 'arg' value then immediately reply
     if (role == "device") {
-        myState = a.args == "lock"? "locked":"unlocked";
+        myState = mt["topicArgs"] == "lock"? "locked":"unlocked";
         msgPubr(cm);
     }
 }
@@ -204,8 +202,8 @@ int main(int argc, char* argv[])
     }
     myPID = std::to_string(getpid());
     mbps cm(argv[optind]);     //Create the mbps client
-    role = cm.myRole();
-    myId = cm.myId();
+    role = cm.attribute("_role");
+    myId = cm.attribute("_roleId");
 
     // Connect and pass in the handler
     try {

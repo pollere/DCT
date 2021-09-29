@@ -1,5 +1,5 @@
 #! /bin/bash
-# mkIDs schema - script to create id bundles needed to run an app with some mbps schema
+# mkIDs schema - script to create id bundles needed to run an app with some iot mbps schema
 #  'schema' is the filename of the schema's .trust file
 PATH=../../../tools:$PATH
 
@@ -35,7 +35,7 @@ for nm in ${operator[@]}; do
     make_cert -s $PubValidator -o $nm.cert $PubPrefix/operator/$nm $RootCert
 done
 
-# The mbps schema signing certs are signed by the root cert.
+# The schema signing certs are signed by the root cert.
 # Each identity's bundle consist of the root cert, the schema cert and the
 # role cert, in that order. The "+" on the role cert indicates that its
 # signing key should be included in the bundle.

@@ -102,7 +102,8 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
         const auto& [cert, key] = cb[c];
         const auto& prev = cb[l].first;
         if (cert.getSigType() != sigType) throw schema_error("bundle certs don't all have same signing type");
-        if (cert.getKeyLoc() != prev.computeThumbPrint()) throw schema_error("signing chain invalid");
+        if (cert.getKeyLoc() != prev.computeThumbPrint())
+            throw schema_error(format("cert{} signing chain invalid",cert.getName().toUri()));
         if (! sm.validate(cert, prev)) throw schema_error(format("cert {} doesn't validate", c));
         if (matchesAny(bs, cert.getName()) < 0) throw schema_error(format("cert {} doesn't match a schema cert", cert.getName().toUri()));
         cs.add(cert, key);

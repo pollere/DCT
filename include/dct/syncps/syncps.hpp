@@ -56,7 +56,7 @@ enum class tlv : uint8_t {
 //default values
 static constexpr int maxPubSize = 1024; // max payload in Data (with 1460B MTU
                                         // and 400B iblt, 1K left for payload)
-static constexpr std::chrono::milliseconds maxPubLifetime = std::chrono::seconds(4);
+static constexpr std::chrono::milliseconds maxPubLifetime = std::chrono::seconds(2);
 static constexpr std::chrono::milliseconds maxClockSkew = std::chrono::seconds(1);
 static constexpr uint32_t maxDifferences = 85u;  // = 128/1.5 (see detail/iblt.hpp)
 

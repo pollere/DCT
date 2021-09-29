@@ -61,7 +61,7 @@ struct DistCert
     std::unordered_set<size_t> m_initialPubs{};
     log4cxx::LoggerPtr staticModuleLogger{log4cxx::Logger::getLogger("certDist")};
 
-    DistCert(const std::string& pPre, const std::string& wPre, addCertCb&& addCb, syncps::IsExpiredCb&& eCb) :
+    DistCert(const std::string& pPre, const ndn::Name& wPre, addCertCb&& addCb, syncps::IsExpiredCb&& eCb) :
         m_pubPrefix{pPre},
         m_sync(wPre, m_syncSigMgr.ref(), m_certSigMgr.ref()),
         m_addCertCb{std::move(addCb)}

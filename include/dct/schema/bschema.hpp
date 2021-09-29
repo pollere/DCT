@@ -104,12 +104,12 @@ struct corItem {certidx ct1; compidx co1; certidx ct2; compidx co2;};
 using chainCor = std::vector<corItem>;  // one chain's corespondences
 using coridx = uint8_t;
 using discidx = uint8_t;
-using discBM = uint16_t;
+using discBM = uint64_t;
 using bVLidx = uint8_t;
 using pubidx = uint8_t;
 using tmpltidx = uint8_t;
 struct tDiscrim {chainBM cbm; tmpltidx tmpl; tagidx disc; bVLidx vl; coridx cor;};
-struct tPub {parmBM par; discBM d; bComp pub; tagidx tag;};
+struct tPub {parmBM par; bComp pub; tagidx tag; discBM d;};
 
 static inline constexpr bool operator<(const corItem& l, const corItem& r) {
     return std::tie(l.ct1, l.ct2, l.co1, l.co2) < std::tie(r.ct1, r.ct2, r.co1, r.co2);
@@ -118,7 +118,7 @@ static inline constexpr bool operator<(const tDiscrim& l, const tDiscrim& r) {
     return std::tie(l.cbm, l.tmpl, l.disc, l.vl, l.cor) < std::tie(r.cbm, r.tmpl, r.disc, r.vl, r.cor);
 }
 static inline constexpr bool operator<(const tPub& l, const tPub& r) {
-    return std::tie(l.par, l.d, l.pub, l.tag) < std::tie(r.par, r.d, r.pub, r.tag);
+    return std::tie(l.par, l.pub, l.tag, l.d) < std::tie(r.par, r.pub, r.tag, r.d);
 }
 
 static inline const std::map<sTLV,const char*> tlvName{
@@ -181,6 +181,21 @@ struct bSchema {
     }
     // return the value of a pub's first template as a string
     std::string pubVal(bTok nm) const { return bNameToStr(pubTmpl0(findPub(nm))); }
+
+    auto tagNames(bTok nm) const {
+        std::vector<std::string> res{};
+        for (const auto& t : tag_[pub_[findPub(nm)].tag]) res.emplace_back(tok_[t]);
+        return res;
+    }
+
+    auto paramNames(bTok nm) const {
+        std::vector<std::string> res{};
+        const auto& p = pub_[findPub(nm)];
+        const auto pbm = p.par;
+        const auto& tag = tag_[p.tag];
+        for (size_t t = 0; t < tag.size(); t++) if (pbm & (1u << t)) res.emplace_back(tok_[tag[t]]);
+        return res;
+    }
 
     // tokens are string_views so their addresses have to be fixed when copying another schema
     void _fixup_tok(const bSchema& other) {

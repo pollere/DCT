@@ -85,7 +85,7 @@ struct DistGKey
     bool m_init{true};      //key maker status unknown while in initialization
     bool m_conn{false};     //haven't called connection cb yet
 
-    DistGKey(const std::string& pPre, const std::string& wPre, addKeyCb&& gkeyCb, const certStore& cs,
+    DistGKey(const std::string& pPre, const ndn::Name& wPre, addKeyCb&& gkeyCb, const certStore& cs,
         std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
         std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
         std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
@@ -196,18 +196,13 @@ struct DistGKey
         auto it = m_gkrList.begin();
         for(auto i=0; i<p; ++i) {
             auto r = s < max_gkRs ? s : max_gkRs;
-            try {
-                std::vector<gkr> gkrSet;    // holds one Publication's content
-                for(size_t j=0; j < r; ++j, ++it)
-                    gkrSet.push_back({it->first, it->second});
-                tlvEncoder gkrEnc{};    //tlv encoded content
-                gkrEnc.addNumber(36, m_curKeyCT);
-                gkrEnc.addArray(130, gkrSet);    //says Array but it's okay with vector
-                addToCollection(dCnt, pubTS, gkrEnc.vec());
-                dCnt += 256;   // increment the publication# part of dCnt
-            } catch (const std::runtime_error& e) {
-                std::cerr << "publishKeyList encountered exception: " << e.what() << std::endl;e.what();
-            }
+            std::vector<gkr> gkrSet;    // holds one Publication's content
+            for(size_t j=0; j < r; ++j, ++it) gkrSet.push_back({it->first, it->second});
+            tlvEncoder gkrEnc{};    //tlv encoded content
+            gkrEnc.addNumber(36, m_curKeyCT);
+            gkrEnc.addArray(130, gkrSet);    //says Array but it's okay with vector
+            addToCollection(dCnt, pubTS, gkrEnc.vec());
+            dCnt += 256;   // increment the publication# part of dCnt
             s -= r;
         }
     }
@@ -331,52 +326,44 @@ struct DistGKey
         }
         // decode the Content
         _LOG_INFO("receiveGKeyList will try to locate and decrypt group key from publication");
+        uint64_t newCT{};
+        std::vector<gkr> gkrSet{};
         try {
             tlvParser decode(*p.getContent());
             // the first tlv should be type 36 and it should decode to a uint64_t
-            auto newCT = decode.nextBlk(36).toNumber();
+            newCT = decode.nextBlk(36).toNumber();
+            // the second tlv should be type 130 and should be a vector of gkr pairs
+            gkrSet = decode.nextBlk(130).toVector<gkr>();
             // a new key will have a creation time larger than m_curKeyCT
             // (future: ensure it's from the same creator as last time?)
-            if(newCT <= m_curKeyCT)
-            {
-                _LOG_INFO("key is not newer: new key time " << newCT << " have key time " << m_curKeyCT);
-                return;
-            }
-            // the second tlv should be type 130 and should be a vector of gkr pairs
-            auto gkrSet = decode.nextBlk(130).toVector<gkr>();
-            for (auto it : gkrSet) {  // go through the pairs look for match to m_tp
-                if(m_tp == it.first) {
-                    auto nk = it.second;    // decrypt the key
-                    uint8_t m[aeadKeySz];
-                    if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
-                        _LOG_INFO("receiver can't open encrypted key");
-                        return;
-                    }
-                    m_curKeyCT = newCT; //save the key
-                    m_curKey = std::vector<uint8_t>(m, m+ aeadKeySz);
-                    _LOG_INFO("received new key with creation time " << m_curKeyCT);
-                    m_newKeyCb(m_curKey, m_curKeyCT);   // call back parent with new key
-                    if(!m_conn) {   //have the group key so invoke completion callback
-                        m_conn = true;
-                        m_connCb(m_conn);
-                    }
-                    return;
-                }
-            }
         } catch (std::runtime_error& ex) {
             _LOG_WARN("Ignoring groupKey message: content type error: " << ex.what());
             return;
         }
+        if(newCT <= m_curKeyCT) {
+            _LOG_INFO("key is not newer: new key time " << newCT << " have key time " << m_curKeyCT);
+            return;
+        }
+        for (auto it : gkrSet) {  // go through the pairs look for match to m_tp
+            if(m_tp == it.first) {
+                auto nk = it.second;    // decrypt the key
+                uint8_t m[aeadKeySz];
+                if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
+                    _LOG_INFO("receiver can't open encrypted key");
+                    return;
+                }
+                m_curKeyCT = newCT; //save the key
+                m_curKey = std::vector<uint8_t>(m, m+ aeadKeySz);
+                _LOG_INFO("received new key with creation time " << m_curKeyCT);
+                m_newKeyCb(m_curKey, m_curKeyCT);   // call back parent with new key
+                if(!m_conn) {   //have the group key so invoke completion callback
+                    m_conn = true;
+                    m_connCb(m_conn);
+                }
+                return;
+            }
+        }
         _LOG_INFO("receiveGKeyList: didn't find a key in publication");
-        /*
-        pubCnt dc =  p["dCnt"].toNumber();
-        pubCnt n = 255 & dc;
-        pubCnt k = (dc >> 8);
-        if(n)       //means multiple packets carry this encrypted group key
-        {
-            _LOG_INFO("No group key found for " << sysID() << " in Data packet "
-                                        << k << " of " << n);
-        } */
     }
     /*
      * Called to process a new local signing key. Passes to the SigMgrs.

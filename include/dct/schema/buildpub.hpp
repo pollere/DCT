@@ -44,6 +44,7 @@ using namespace std::string_literals;
 //using timeVal = std::chrono::sys_time<std::chrono::microseconds>;
 using timeVal = std::chrono::time_point<std::chrono::system_clock>;
 using paramVal = std::variant<std::monostate, std::string, std::string_view, uint64_t, timeVal>;
+using parItem = std::pair<std::string_view, paramVal>;
 
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
@@ -138,7 +139,7 @@ struct pubBldr {
     // schema and use it to initialize the 'cert_' array.
     auto findCerts() {
         // candidate chains are 'or' of this pub's cor chain bitmaps
-        const auto& [param,disc,pub,tagi] = bs_.pub_[pidx_];
+        const auto& [param,pub,tagi,disc] = bs_.pub_[pidx_];
         discSet ds{disc};
         for (size_t d = 0, de = bs_.discrim_.size(); d < de; d++) if (ds[d]) cbm_ |= bs_.discrim_[d].cbm;
         if (cbm_ == 0) {
@@ -168,9 +169,10 @@ struct pubBldr {
         bTok tok{};
         if (auto p = bs_.stab_.find(ntok); p == std::string::npos) {
             // add to pub-specific strings
+            pstab_.reserve(1024); //XXX try to avoid reallocs (need better way)
             p = pstab_.size();
-            pstab_.emplace_back(ntok);
-            tok = bTok(pstab_[p].data(), ntok.size());
+            pstab_.append(ntok);
+            tok = bTok(pstab_.data() + p, ntok.size());
         } else {
             tok = bTok(bs_.stab_.data() + p, ntok.size());
         }
@@ -232,6 +234,20 @@ struct pubBldr {
             pt_.emplace_back(pt);
         }
     }
+
+    // inspection interface
+    auto tagNames() const noexcept {
+        std::vector<std::string> res{};
+        for (size_t t = 0; t < tag_.size(); t++) res.emplace_back(bs_.tok_[tag_[t]]);
+        return res;
+    }
+
+    auto paramNames() const noexcept {
+        std::vector<std::string> res{};
+        for (size_t t = 0; t < parmbm_.size(); t++) if (parmbm_[t]) res.emplace_back(bs_.tok_[tag_[t]]);
+        return res;
+    }
+
     void printPubTemplates() {
         if constexpr (pbdebug) {
             if (parmbm_.any()) {
@@ -251,7 +267,7 @@ struct pubBldr {
     // and cert name components can be resolved. The resulting templates
     // will be complete except for parameter values and 'call' ops.
     void makePubTmplts(chainBM cbm) {
-        const auto& [param,disc,pub,tagi] = bs_.pub_[pidx_];
+        const auto& [param,pub,tagi,disc] = bs_.pub_[pidx_];
         discSet dset{disc};
         parmbm_ = param;
         // build tagmap
@@ -282,6 +298,13 @@ struct pubBldr {
 
     using Params = std::vector<paramVal>;
 
+    // common routine for checking and adding one parameter value 'val' at component index 'c' of 'par'
+    void doOneParam(Params& par, compidx c, paramVal val) {
+        if (c >= parmbm_.size() || !parmbm_[c]) throw schema_error(format("component {} isn't a parameter", c));
+        if (par[c].index() != 0)  throw schema_error(format("param {} set twice", c));
+        par[c] = val;
+    }
+
     // doParam converts build API variadic calls (zero or more 'tag, value'
     // or 'compidx, value' argument pairs) into a filled-in Params
     // array. The variadic calls are handled via a recursive template
@@ -291,11 +314,8 @@ struct pubBldr {
     // can take advantage of c++20 'Concepts' to say what's really wrong).
     void doParam(Params&) {}
     template<typename... Rest>
-    void doParam(Params& par, compidx c, paramVal val, Rest... rest) {
-        if (c >= parmbm_.size() || !parmbm_[c]) throw schema_error(format("component {} isn't a parameter", c));
-        if (par[c].index() != 0)  throw schema_error(format("param {} set twice", c));
-
-        par[c] = val;
+    void doParam(Params& par, compidx c, const paramVal& val, Rest... rest) {
+        doOneParam(par, c, val);
         doParam(par, rest...);
     }
     template<typename... Rest>
@@ -330,9 +350,10 @@ struct pubBldr {
     }
     bool checkParVal(const Params& par, const pTmplt& pt, compidx c) const noexcept {
         // assert(parmbm_[c] == true)
-        if (isParam(pt.tmplt_[c])) return true;     // template doesn't constrain value
-        if (auto v = parToTok(par, c); v == pt.tmplt_[c]) return true; // value must match template
-        if (isIndex(pt.tmplt_[c])) return ptok_[typeValue(c)] == format("{}", par[c]); // value must match cor
+        auto cv = pt.tmplt_[c];
+        if (isParam(cv)) return true;     // template doesn't constrain value
+        if (auto v = parToTok(par, c); v == cv) return true; // value must match template
+        if (isIndex(cv)) return ptok_[typeValue(cv)] == format("{}", par[c]); // value must match cor
         return false;
     }
     // check that all literal params in the template match the correponding user pars
@@ -352,7 +373,16 @@ struct pubBldr {
         throw schema_error("no matching pub template");
     }
 
-    Name completeTmplt(const Params& par) const { return fillTmplt(par, matchTmplt(par)); }
+    Name completeTmplt(Params& par) const {
+        // make sure all parameters were supplied or defaulted
+        for (auto c = 0u; c < par.size(); c++) {
+            if (parmbm_[c] && par[c].index() == 0) {
+                if (pdefault_[c].index() == 0) throw schema_error(format("param {} missing", bs_.tok_[tag_[c]]));
+                par[c] = pdefault_[c];
+            }
+        }
+        return fillTmplt(par, matchTmplt(par));
+    }
 
     // defaults(name, value ...) - set default pub parameter value(s)
     //
@@ -385,19 +415,25 @@ struct pubBldr {
     // parameters and values for all the pub's parameters must be supplied.
     // An error is thrown otherwise.
     template<typename... Rest>
+        requires ((sizeof...(Rest) & 1) == 0)
     Name name(Rest&&... rest) {
         static_assert((sizeof...(Rest) & 1) == 0, "must supply name,value argument pairs");
         Params par{};
         par.resize(tag_.size());
         doParam(par, std::forward<Rest>(rest)...);
-        // make sure all parameters were supplied or defaulted
-        for (auto c = 0u; c < par.size(); c++) {
-            if (parmbm_[c] && par[c].index() == 0) {
-                if (pdefault_[c].index() == 0) throw schema_error(format("param {} missing", bs_.tok_[tag_[c]]));
-                par[c] = pdefault_[c];
-            }
-        }
         // find a matching template, fill in params then return it
+        return completeTmplt(par);
+    }
+
+    // construct complete pub name given vector of <tag name> <value> pairs
+    //
+    // Each tag must refer to one of the pub's parameters and values for all
+    // the pub's parameters must be supplied.  Errors are thrown otherwise.
+
+    Name name(const std::vector<parItem>& pvec) {
+        Params par{};
+        par.resize(tag_.size());
+        for (auto& [tag, val] : pvec) doOneParam(par, tm_[tag], val);
         return completeTmplt(par);
     }
 
@@ -415,7 +451,7 @@ struct pubBldr {
     certStore& cs_;
     std::unordered_map<bTok,bComp> ptm_{}; // pub-specific token map
     std::vector<bTok> ptok_{};
-    std::vector<std::string> pstab_{};     // pub-specific string table
+    std::string pstab_{};       // pub-specific string table
     int pidx_{-1};              // pub's index in bs_.pub_
 };
 

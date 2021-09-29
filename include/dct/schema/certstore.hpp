@@ -31,6 +31,8 @@
 #include "bschema.hpp"
 #include "dct_cert.hpp"
 
+using schema_error = bschema::schema_error;
+
 using certName = ndn::Name;
 using certVec = std::vector<certName>;
 using certChain = std::vector<thumbPrint>;
@@ -111,6 +113,16 @@ struct certStore {
     }
 
     auto signingChain() const { return chains_.empty()? certVec{} : chainNames(get(chains_[0])); } //XXX
+
+    // return the trust anchor thumbprint of signing chain 'idx'.
+    const auto& trustAnchorTP(size_t idx) const {
+        static const thumbPrint ztp{};
+
+        if (chains_.empty()) throw schema_error(format("trustAnchorTP: signing chain {} doesn't exist", idx));
+        const auto* ltp = &ztp;;
+        for (const auto* tp = &chains_[idx]; !dctCert::selfSigned(*tp); tp = &get(*tp).getKeyLoc()) { ltp = tp; }
+        return *ltp;
+    }
 
     void addChain(const dctCert& cert) {
         chains_.emplace_back(cert.computeThumbPrint());

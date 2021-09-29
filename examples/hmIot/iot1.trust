@@ -1,52 +1,56 @@
-// Message-Based Pub/Sub 1 trust schema
+// Home IoT Message-Based Pub/Sub 1 trust schema
 
 // Each process has an identity associated with a particular type of
 // certificate that is signed and validatable.
 
-// trust anchor name and subdomain associated with this schema
-_network:    "myNet"
-_domain:     "mbps1"
+// trust anchor name associated with this schema
+_network:    "iot1"
 
 // MBPS Publication definition
 // target, topic, topicArgs are set using application parameters
 // msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
 // A particular application process can make its subscription more
 // specific by using a subscription list with specific subCollections (designated
 // by targets) and related callback functions.
 
-#mbps1Pub: _network/_domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+#iotPub: _network/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
     _origin:   sysId()
 }
 
-lockReport: #mbps1Pub & { target: "lock", topic: "event"|"status"
-    trgtLoc: _roleID
+lockReport: #iotPub & { target: "lock", topic: "event"|"status"
+    trgtLoc: _roleId
     topicArgs: "locked" | "unlocked" | "battery_low"
 } <= devCert 
 
-lockCommand: #mbps1Pub & { target: "lock", topic: "command" } &
+lockCommand: #iotPub & { target: "lock", topic: "command" } &
     { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
     { topicArgs:  "lock"|"unlock"|"report" } <= opCert
 
-roleCert:    _network/_domain/_role/_roleID/_keyinfo <= netCert
+roleCert:    _network/_role/_roleId/_keyinfo <= netCert
 opCert:  roleCert & { _role: "operator" }
 devCert: roleCert & { _role: "device" }
 
-netCert: _network/_domain/_keyinfo
+netCert: _network/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= roleCert
 
 // schema's Publication prefix and validator type
-#pubPrefix:    _network/_domain
+#pubPrefix:    _network
 #pubValidator: "EdDSA"
 
 // Prefix used at the syncps (NDN Interest/Data) level to sync
 // this collection.
 
-#wirePrefix: _ndnprefix/_domain & { _ndnprefix: "localnet" }
+#wirePrefix: _ndnprefix & { _ndnprefix: "localnet" }
 #wireValidator: "EdDSA"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version
 _keyinfo: "KEY"/_/"dct"/_
 
-// mbps1 uses a Publication validator that requires certs. 
+// Uses a Publication validator that requires certs. 
 // The wire prefix that the key distributor will use to synchronize these certs
 // is #wirePrefix/"cert". Normal publications use #wirePrefix/"pubs"
