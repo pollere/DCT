@@ -40,6 +40,8 @@ Some concepts here may be better understood by referencing earlier Pollere work:
 
 [Lessons Learned Building a Secure Network Measurement Framework using Basic NDN ](http://www.pollere.net/Pdfdocs/icn19-p20.pdf), K. Nichols, Proceedings of ACM ICN '19, September 24-16, Macao, China (available at http://www.pollere.net/publications.html)
 
+Trust schemas and ICN: key to secure home IoT, K. Nichols, Proceedings of ACM ICN '21, September 2021 (available at https://dl.acm.org/doi/10.1145/3460417.3482972)
+
 Related talks at http://www.pollere.net/talks.html
 
 See also GitHub.com/pollere/DNMP-v2 for Pollere's first bespoke transport.
