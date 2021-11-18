@@ -24,6 +24,7 @@
  *  More information on DCT is available from info@pollere.net
  */
 
+#include <bit>
 #include <iostream>
 #include <map>
 #include <type_traits>
