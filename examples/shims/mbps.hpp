@@ -3,7 +3,7 @@
 /*
  * mbps.hpp: message-based pub/sub API for DCT (NDN network layer)
  *
- * Copyright (C) 2020 Pollere, Inc
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -75,8 +75,6 @@ using confHndlr = std::function<void(const bool, const uint32_t)>;
 using error = std::runtime_error;
 using MsgID = uint32_t;
 using SegCnt = uint16_t;
-using Timer = ndn::scheduler::ScopedEventId;
-using TimerCb = std::function<void()>;
 using MsgInfo = std::unordered_map<MsgID,std::bitset<64>>;
 using MsgSegs = std::vector<uint8_t>;
 using MsgCache = std::unordered_map<MsgID,MsgSegs>;
@@ -92,19 +90,25 @@ struct mbps
     MsgInfo m_pending{};    // unconfirmed published messages
     MsgInfo m_received{};   //received publications of a message
     MsgCache m_reassemble{}; //reassembly of received message segments
-    Timer m_timer;
+    Timer* m_timer;
+    int m_keyMaker{1};      // priority to be elected key maker (0 -> not key maker)
 
     mbps(std::string_view bootstrap) : m_pb(bootstrap), m_pubpre{m_pb.pubPrefix()}  { }
 
     void run() { m_pb.run(); }
     const auto& pubPrefix() const noexcept { return m_pubpre; } //calling can convert to Name
 
-    // relies on trust schema using mbps conventions of collecting all the signing chain
-    // identity information (_role, _roleId, _room, etc.) in pseudo-pub "#chainInfo" so
-    // the app can extract what it needs to operate.
+    /* relies on trust schema using mbps conventions of collecting all the signing chain
+     * identity information (_role, _roleId, _room, etc.) in pseudo-pub "#chainInfo" so
+     * the app can extract what it needs to operate.
+     */
     auto attribute(std::string_view v) const { return m_pb.pubVal("#chainInfo", v); }
 
-    bool alwaysOn() { return true;} //should set to false for device types that sleep
+    /* true by default so app must set to false if the app has any reason it or its device
+     * can't or shouldn't serve as a potential group key manager. For example, for IoT, a
+     * device that sleeps or leaves the network (like a phone) would be a bad choice.
+     */
+    void keyMaker(int km) { m_keyMaker = km; }
 
     /*
      * Kicks off the set up necessary for an application to publish or receive
@@ -131,9 +135,8 @@ struct mbps
         m_uniqId = m_pb.pubVal("#chainInfo").toUri();
 
         // call start() with lambda to confirm success/failure
-        // A second, optional argument can pass a function that returns a boolean
-        // indicator of whether this entity can be used to make group keys. (Here, using
-        // an indicator of whether the device is "always on.") Defaults to true.
+        // Second argument is priority for this entity to make group keys (0 == won't
+        // make keys; defaults to 1).
         m_pb.start([this](bool success) {
                 if(!success) {
                     _LOG_ERROR("mbps failed to initialize connection");
@@ -142,8 +145,7 @@ struct mbps
                     _LOG_INFO("mbps connect successfully initialized connection");
                     m_connectCb();
                 }
-            }, [this](){ return alwaysOn();}
-            );
+            }, m_keyMaker);
     }
 
     /*
@@ -293,7 +295,7 @@ struct mbps
      * Return message id if successful, 0 otherwise.
      */
 
-    MsgID publish(msgParms&& mp, std::span<uint8_t> msg = {}, const confHndlr&& ch = nullptr)
+    MsgID publish(msgParms&& mp, std::span<const uint8_t> msg = {}, const confHndlr&& ch = nullptr)
     {
         /*
          * Set up and publish Publication(s)
@@ -350,10 +352,13 @@ struct mbps
         return mId;
     }
 
-    // Can be used by application to schedule
-    Timer schedule(std::chrono::nanoseconds d, const TimerCb& cb) {
-        return m_pb.schedule(d, cb);
-    }
+    // Can be used by application to schedule a cancelable timer. Note that
+    // this is expensive compared to a oneTime timer and should be used
+    // only for timers that need to be canceled before they fire.
+    pTimer schedule(std::chrono::microseconds d, TimerCb&& cb) { return m_pb.schedule(d, std::move(cb)); }
+
+    // schedule a call to 'cb' in 'd' microseconds (cannot be canceled)
+    void oneTime(std::chrono::microseconds d, TimerCb&& cb) { m_pb.oneTime(d, std::move(cb)); }
 };
 
 #endif

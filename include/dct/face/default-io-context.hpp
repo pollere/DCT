@@ -1,9 +1,14 @@
-#ifndef DCT_UTILITY_HPP
-#define DCT_UTILITY_HPP
+#ifndef GET_DEFAULT_IO_CONTEXT_HPP
+#define GET_DEFAULT_IO_CONTEXT_HPP
 /*
- * misc utility routines used by DCT modules
+ * getDefaultIoContext - get current DCT application's default io_context
  *
- * Copyright (C) 2020-2 Pollere LLC
+ * DCT is not multi-threaded and expects all I/O and timer events to use the
+ * same boost::asio:io_context (aka "io_service" in older boost implementations).
+ * It's expected that any routine that needs an io_context call this routine
+ * to get it..
+ *
+ * Copyright (C) 2021-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -23,25 +28,18 @@
  *  More information on DCT is available from info@pollere.net
  */
 
-extern "C" {
-    //int gethostname(const char*, size_t); //Posix
-    int gethostname(char*, size_t); //MacOS
-    pid_t getpid(void);
-}
-#ifndef HOST_NAME_MAX
-static constexpr size_t HOST_NAME_MAX = 64;  //Linux limit
-#endif
+#include <boost/asio.hpp>
 
-inline static const std::string& sysID() noexcept {
-    static std::string sysid{};
-    if (sysid.size() == 0) {
-        char h[HOST_NAME_MAX+1];
-        if (gethostname(&h[0], sizeof(h)-1) != 0) {
-            h[0] = h[1] = '?'; h[2] = 0;
-        }
-        sysid = format("p{}@{}", getpid(), h);
+static inline auto& getDefaultIoContext()
+{
+    static boost::asio::io_context* ioc{};
+    using work_guard = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
+    [[maybe_unused]] static work_guard* work;
+    if (ioc == nullptr) {
+        ioc = new boost::asio::io_context;
+        work = new work_guard(ioc->get_executor());
     }
-    return sysid;
+    return *ioc;
 }
 
-#endif // DCT_UTILITY_HPP
+#endif // GET_DEFAULT_IO_CONTEXT_HPP

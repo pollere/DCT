@@ -3,7 +3,7 @@
 /*
  * SHA256 Signature Manager
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -67,24 +67,21 @@ struct SigMgrSHA256 final : SigMgr {
         dataWF = data.wireEncode();
         return true;
     }
-    /*
-     * ndn::validator has a complex pattern of handing off to ValidatorState, etc
-     * Here just return true if success, false if failure
-     * (Should log the reason)
-     */
-    bool validate(const ndn::Data& data) override final {
-        //get the Signed Portion of Data from wire format
-        auto dataWF = data.wireEncode();
-        //get its SHA256 hash
+    bool validate(rData d) override final {
         std::array<uint8_t, crypto_hash_sha256_BYTES> dataHash;
-        crypto_hash_sha256(dataHash.data(), dataWF.signedBuf(), dataWF.signedSize());
-        //location of Signature size in bytes (followed by Signature Value)
-        const uint8_t* sigVal = dataWF.buf()+dataWF.getSignedPortionEndOffset()+1;
-        if(*sigVal++ != dataHash.size()) return false;
 
-        return std::memcmp(sigVal, dataHash.data(), dataHash.size()) == 0;
+        // the hash of the signed portion of the Data must match the packet's signature.
+        auto sig = d.signature();
+        if (sig.size() - sig.off() != dataHash.size()) { return false; }
+        auto strt = d.name().data();
+        auto sz = sig.data() - strt;
+        crypto_hash_sha256(dataHash.data(), strt, sz);
+
+        if (std::memcmp(sig.data() + sig.off(), dataHash.data(), dataHash.size()) != 0) return false;
+        return true;
     }
-    bool validate(const ndn::Data& data, const dct_Cert&) override final { return validate(data); }
+    bool validate(const ndn::Data& d) override final { return validate(rData(d)); }
+    bool validate(const ndn::Data& d, const dct_Cert&) override final { return validate(rData(d)); }
 
     bool needsKey() const noexcept override final { return 0; };
 };

@@ -3,7 +3,7 @@
 /*
  * AEAD Signature Manager
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -57,6 +57,7 @@
  */
 
 #include <array>
+#include <cstring>  // for memcpy
 #include "sigmgr.hpp"
 
 using keyVal = std::vector<uint8_t>;
@@ -137,34 +138,40 @@ struct SigMgrAEAD final : SigMgr {
         return true;
     }
     /*
-     * returns true if success, false if failure
+     * returns true if success, false if failure. On success, the content
+     * of rData 'd' will have been decrypted.
      */
-    bool validateDecrypt(ndn::Data& data) override final {
+    bool validateDecrypt(rData d) override final {
         //can't decrypt without a key
         if(!keyListSize()) return false;
+ 
+        // signature holds computed MAC followed by nonce used
+        auto sig = d.signature();
+        if (sig.size() - sig.off() != nonceSize + crypto_aead_chacha20poly1305_IETF_ABYTES) {
+            //print("aead bad sig size\n");
+            return false;
+        }
+        auto strt = d.name().data();
 
-        auto mlen = data.getContent().size();
-        std::vector<uint8_t> msg (data.getContent()->data(), data.getContent()->data() + mlen);
-        //sigValue holds nonce append mac
-        auto sigValue = data.getSignature()->getSignature();
-        if(sigValue.size() != nonceSize + crypto_aead_chacha20poly1305_IETF_ABYTES) return false;
+        auto con = d.content().rest();
+        auto mlen = con.size();
 
-        //get the Associated Data: front bytes plus Signature Info
-        auto dataWF = data.wireEncode();
-        auto adlen = dataWF.signedSize() - (mlen + m_sigInfo.size());
-        std::vector<uint8_t> ad (dataWF.signedBuf(), dataWF.signedBuf() + adlen);
-        ad.insert(ad.end(), dataWF.signedBuf()+adlen+mlen, dataWF.signedBuf()+dataWF.signedSize());
+        // get the Associated Data: start of d to start of content plus
+        // end of content to start of signature.
+        std::vector<uint8_t> ad(strt, con.data());
+        ad.insert(ad.end(), con.data() + mlen, sig.data());
 
+        auto s = sig.data() + sig.off();
         unsigned char decrypted[mlen];
         auto i = m_decryptIndex;    //start with last successful key
         do {
             unsigned char* curKey = m_keyList[i].key.data();
             if(crypto_aead_chacha20poly1305_ietf_decrypt_detached(decrypted,
-                             NULL, msg.data(), mlen, sigValue.buf()+nonceSize,
-                             ad.data(), ad.size(), sigValue.buf(), curKey) == 0)
-            {
+                             NULL, con.data(), mlen, s + nonceSize,
+                             ad.data(), ad.size(), s, curKey) == 0) {
                 m_decryptIndex = i; //successful key index
-                data.setContent(decrypted, mlen);
+                // copy decrypted content back into packet
+                std::memcpy((char*)con.data(), decrypted, mlen);
                 return true;
              }
              i = (i + 1) % keyListSize();
@@ -175,16 +182,11 @@ struct SigMgrAEAD final : SigMgr {
     inline size_t keyListSize() const { return m_keyList.size(); }
 
     //get the newest key and initial vector
-    void getEncryptKey(uint8_t*& kptr, uint8_t*& ivptr)
-    {
+    void getEncryptKey(uint8_t*& kptr, uint8_t*& ivptr) {
         try {
             kptr  = m_keyList.front().key.data();
             ivptr = m_keyList.front().iv.data();
-            return;
-        } catch (std::runtime_error& ex) {
-            std::cerr << ex.what();
-        }
-
+        } catch (std::runtime_error& ex) { std::cerr << ex.what(); }
     }
 };
 

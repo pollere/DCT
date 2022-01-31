@@ -19,7 +19,7 @@
  * A room controller waits for a command, prints it (simulated action),
  * then publishes this new status
  *
- * Copyright (C) 2021 Pollere, Inc
+ * Copyright (C) 2021-2 Pollere, Inc
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -85,6 +85,7 @@ int main(int argc, char* argv[])
 {
     INIT_LOGGERS();
     mbps cm(argv[argc-1]);     //Create the mbps client
+    cm.m_pb.pubLifetime(500ms); // want fresh status information
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");
     room = cm.attribute("_roomId");

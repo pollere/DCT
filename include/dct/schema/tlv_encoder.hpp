@@ -3,7 +3,7 @@
 /*
  * Data Centric Transport TLV encoder
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
  *  More information on DCT is available from info@pollere.net
  */
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <stdexcept>
@@ -67,26 +68,37 @@ struct tlvEncoder {
     }
 
     template <typename T1, typename T2>
-    void appendItem(const std::pair<T1,T2>& p) {
-        m_blk.insert(m_blk.end(), p.first.begin(), p.first.end());
-        m_blk.insert(m_blk.end(), p.second.begin(), p.second.end());
-    }
+    void appendItem(const std::pair<T1,T2>& p) { m_blk.insert(m_blk.end(), p.first.begin(), p.second.end()); }
 
-    template <typename T>
-    void addArray(uint8_t typ, const std::vector<T>& v) {
-        // add the TLV header
+    void addArrayTlvHeader(uint8_t typ, size_t len) {
         m_blk.emplace_back(typ);
-        auto len = v.size() * sizeof(T);
         if (len >= extra_bytes_code) {
+            if (len > 0xffff) throw runtime_error("array too large to tlv encode");
             m_blk.emplace_back(extra_bytes_code);
             m_blk.emplace_back(len >> 8);
         }
         m_blk.emplace_back(len);
-
-        // add the items
-        for (const auto& i : v) appendItem(i);
-
+    }
+    template <typename T>
+    void addArray(uint8_t typ, const std::vector<T>& v) {
+        auto len = v.size() * sizeof(T);
+        addArrayTlvHeader(typ, len);
+        for (auto& i : v) appendItem(i);
         m_off = m_blk.size();
+    }
+
+    template <typename In> requires std::indirectly_readable<In>
+    auto addArray(uint8_t typ, In in, size_t n) {
+        auto len = n * sizeof(*in);
+        addArrayTlvHeader(typ, len);
+
+        // make space then add the items
+        len += m_blk.size();
+        m_off = len;
+        m_blk.reserve(len);
+        //return std::ranges::copy_n(t, n, m_blk.end()).in; // doesn't work on mac as of clang-13
+        while (n-- > 0) appendItem(*in++);
+        return in;
     }
 };
 

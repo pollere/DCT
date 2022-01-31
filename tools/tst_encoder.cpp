@@ -1,7 +1,7 @@
 /*
  * test tlv_encoder
  *
- * Copyright (C) 2021 Pollere, Inc.
+ * Copyright (C) 2021-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
  */
+#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <string_view>
@@ -63,7 +64,8 @@ int main(int argc, const char* argv[]) {
         tlvEncoder enc{};
         auto now = std::chrono::system_clock::now();
         enc.addTimestamp(now);
-        enc.addArray(130, kv);
+        //enc.addArray(130, kv);
+        enc.addArray(130, kv.cbegin(), kv.size());
 
         // make an NDN data packet, set its content to be the encoded test data
         // then wire-encode the result and write it to the output file (so it
@@ -80,7 +82,7 @@ int main(int argc, const char* argv[]) {
         // validate that it's the same as the original. This tlvParser constructer
         // wraps a parser around a 'const vector<uint8_t>&' and ndn::Data::getContent
         // returns a pointer to such a vector.
-        tlvParser decode(*data.getContent());
+        tlvParser decode(*data.getContent(), 0);
 
         // the first tlv should be type 36 and it should decode to a uint64_t
         auto ts = decode.nextBlk(36).toNumber();
@@ -90,9 +92,10 @@ int main(int argc, const char* argv[]) {
         if (ts != orig) print("timestamps don't match, orig {:x}, decoded {:x}\n", orig, ts);
 
         // the second tlv should be type 130 and it should be a vector of 'keyItem's
-        auto dkv = decode.nextBlk(130).toVector<keyItem>();
+        auto dkv = decode.nextBlk(130).toSpan<keyItem>();
 
-        if (dkv != kv) print(fmt::runtime("vectors don't match, orig:\n{:x}\ndecoded:\n{:x}\n"), kv, dkv);
+        if (!std::equal(dkv.begin(), dkv.end(), kv.begin()))
+            print(fmt::runtime("vectors don't match, orig:\n{:x}\ndecoded:\n{:x}\n"), kv, dkv);
 
     } catch (const std::runtime_error& se) { print("runtime error: {}\n", se.what()); }
 

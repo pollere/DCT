@@ -3,7 +3,7 @@
 /*
  * validate and load the DCT bootstrap identity information
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -37,17 +37,13 @@
 // the copy in scert's content block.
 static inline const bSchema& loadSchema(const dctCert& scert) {
     // map containing schemas loaded so far
-    static std::unordered_map<std::string,bSchema> schemas{};
-
-    // schema name is 5th from end of cert name
-    auto v = scert.getName()[-5].getValue();
-    std::string schema((const char*)v.buf(), v.size());
+    static std::unordered_map<thumbPrint,const bSchema> schemas{};
 
     // if the schema has been loaded just return it
-    if (auto s = schemas.find(schema); s != schemas.end()) return s->second;
+    auto tp = scert.computeThumbPrint();
+    if (auto s = schemas.find(tp); s != schemas.end()) return s->second;
 
-    schemas.emplace(schema, certToSchema(scert));
-    return schemas[schema];
+    return schemas.try_emplace(tp, certToSchema(scert, tp)).first->second;
 }
 
 
@@ -103,7 +99,7 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
         const auto& prev = cb[l].first;
         if (cert.getSigType() != sigType) throw schema_error("bundle certs don't all have same signing type");
         if (cert.getKeyLoc() != prev.computeThumbPrint())
-            throw schema_error(format("cert{} signing chain invalid",cert.getName().toUri()));
+            throw schema_error(format("cert {} signing chain invalid",cert.getName().toUri()));
         if (! sm.validate(cert, prev)) throw schema_error(format("cert {} doesn't validate", c));
         if (matchesAny(bs, cert.getName()) < 0) throw schema_error(format("cert {} doesn't match a schema cert", cert.getName().toUri()));
         cs.add(cert, key);

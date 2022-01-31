@@ -3,7 +3,7 @@
 /*
  * Return a sigmgr given its signer type or name
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -61,12 +61,26 @@ struct SigMgrAny : Variants {
     // return a reference to whichever sigmgr is in the variant
     SigMgr& ref() const noexcept { return (SigMgr&)*this; }
 
-    // validate 'd' using whichever sigmgr is set in the variant
-    bool validate(const ndn::Data& d) { return ref().validate(d); }
-    bool validateDecrypt(ndn::Data& d) { return ref().validateDecrypt(d); }
-    bool validate(const ndn::Data& d, const dct_Cert& c) { return ref().validate(d, c); };
+    // invoke methods of whichever sigmgr is set in the variant
+    bool sign(rData d) { return ref().sign(d); }
+    bool sign(rData d, const SigInfo& s) { return ref().sign(d, s); }
+    bool sign(rData d, const SigInfo& s, const keyVal& k) { return ref().sign(d, s, k); }
+    bool validate(rData d) { return ref().validate(d); }
+    bool validate(rData d, const dct_Cert& c) { return ref().validate(d, c); }
+    bool validateDecrypt(rData d) { return ref().validateDecrypt(d); }
 
-    bool needsKey() const noexcept { return ref().needsKey(); };
+    bool sign(ndn::Data& d) { return ref().sign(d); }
+    bool sign(ndn::Data& d, const SigInfo& s) { return ref().sign(d, s); }
+    bool sign(ndn::Data& d, const SigInfo& s, const keyVal& k) { return ref().sign(d, s, k); }
+    bool validate(const ndn::Data& d) { return ref().validate(d); }
+    bool validate(const ndn::Data& d, const dct_Cert& c) { return ref().validate(d, c); }
+    bool validateDecrypt(ndn::Data& d) { return ref().validateDecrypt(d); }
+
+    void addKey(const keyVal& k, uint64_t ktm = 0) { ref().addKey(k, ktm); }
+    void updateSigningKey(const keyVal& k, const dct_Cert& c) { ref().updateSigningKey(k, c); }
+    void setKeyCb(KeyCb&& kcb) { ref().setKeyCb(std::move(kcb)); }
+
+    bool needsKey() const noexcept { return ref().needsKey(); }
 };
 
 static inline const std::unordered_map<std::string,uint8_t> sigmgr_name_to_type {

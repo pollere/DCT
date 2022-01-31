@@ -3,7 +3,7 @@
 /*
  * Use a schema to build and sign publication objects
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -37,6 +37,7 @@
 #include "dct/format.hpp"
 #include "dct/utility.hpp"
 #include "rdschema.hpp"
+#include "rpacket.hpp"
 
 using namespace std::string_literals;
 
@@ -57,13 +58,6 @@ struct fmt::formatter<paramVal>: fmt::dynamic_formatter<> {
             [&](const timeVal& val) { return fmt::format_to(ctx.out(), "{:%H:%M:%S}", val); },
             [&](const auto& val) { return fmt::dynamic_formatter<>::format(val, ctx); },
         }, v);
-    }
-};
-
-template <>
-struct fmt::formatter<ndn::Name::Component>: fmt::dynamic_formatter<> {
-    auto format(const ndn::Name::Component& v, format_context& ctx) -> decltype(ctx.out()) const {
-        return fmt::format_to(ctx.out(), "{}", v.getValue().toRawStr());
     }
 };
 
@@ -154,8 +148,12 @@ struct pubBldr {
             bm &=~ (1u << c);
             if (!matches(cs_.signingChain(), bs_.chain_[c])) cbm &=~ (1u << c);
         }
-        if (cbm == 0) throw schema_error("no valid signing cert found");
-        dprint("chain: {}, signing cert: /{}\n", std::countr_zero(cbm), fmt::join(cs_.signingChain()[0], "/"));
+        if constexpr (pbdebug) {
+            if (cbm != 0) {
+                auto n = *cs_.signingChain()[0].wireEncode();
+                dprint("chain: {}, signer: {}\n", std::countr_zero(cbm), rName(n));
+            }
+        }
         return cbm;
     }
 
@@ -256,8 +254,25 @@ struct pubBldr {
                 dprint(" }}\n");
             }
             for (const auto& pt : pt_) {
-                dprint(" {:12}({:d}): {:10x} {}\n", pt.dpar_ < maxTok? bs_.tok_[tag_[pt.dpar_]] : "*",
-                        pt.dpar_, pt.vs_.to_ulong(), formatName(pt.tmplt_));
+                dprint(" {}\t", formatName(pt.tmplt_));
+                if (pt.dpar_ >= bs_.tok_.size()) {
+                    // template accepts all parameters
+                    dprint("*");
+                } else if (pt.vs_ == 1u) {
+                    // parameter pt.dpar_ must match its value in the template
+                    dprint("T");
+                } else {
+                    dprint("{}({})=", bs_.tok_[tag_[pt.dpar_]], pt.dpar_);
+                    auto c = '{';
+                    for (size_t t = 0; t < pt.vs_.size(); t++) {
+                        if (pt.vs_[t]) {
+                            dprint("{}{}", c, bs_.tok_[t]);
+                            c = '|';
+                        }
+                    }
+                    dprint("}}");
+                }
+                dprint("\n");
             }
         }
     }

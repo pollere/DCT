@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
- * Pollere, Inc added (6/14/2020) checks for validity to file
+ * Pollere LLC added (6/14/2020) checks for validity to file
  *
  * Copyright (c) 2014-2018,  The University of Memphis
  *
@@ -53,6 +53,7 @@
 #ifndef SYNCPS_IBLT_HPP
 #define SYNCPS_IBLT_HPP
 
+#include <array>
 #include <cmath>
 #include <inttypes.h>
 #include <iomanip>
@@ -60,18 +61,13 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
-#include <boost/iostreams/copy.hpp>
-#include <boost/iostreams/device/array.hpp>
-#include <boost/iostreams/filter/zlib.hpp>
-#include <boost/iostreams/filtering_stream.hpp>
 #include <ndn-ind/name.hpp>
 #include <ndn-ind/lite/util/crypto-lite.hpp>
 
 namespace syncps {
-
-namespace bio = boost::iostreams;
 
 /*
  * Optimal number of hashes is 3 or 4. 3 results in less computation and
@@ -80,112 +76,128 @@ namespace bio = boost::iostreams;
  * hashes to be changed.
  */
 static constexpr size_t N_HASH{3};
-static constexpr size_t N_HASHCHECK{11};
+static constexpr size_t N_HASHCHECK{0x53a1df9a}; // random bit string with half the bits set
 
-class HashTableEntry
-{
-   public:
+struct HashTableEntry {
     int32_t count;
     uint32_t keySum;
     uint32_t keyCheck;
 
-    bool isPure() const
-    {
+    bool isPure() const {
         if (count == 1 || count == -1) {
             uint32_t check = ndn::CryptoLite::murmurHash3(N_HASHCHECK, keySum);
             return keyCheck == check;
         }
         return false;
     }
-    bool isEmpty() const
-    {
+    bool isEmpty() const {
         return count == 0 && keySum == 0 && keyCheck == 0;
     }
 };
 
-class IBLT;
+struct IBLT;
 static inline std::ostream& operator<<(std::ostream& out, const IBLT& iblt);
 static inline std::ostream& operator<<(std::ostream& out, const HashTableEntry& hte);
 
 /**
  * @brief Invertible Bloom Lookup Table (Invertible Bloom Filter)
- *
- * Used by Partial Sync (PartialProducer) and Full Sync (Full Producer)
  */
-class IBLT
-{
-  private:
+struct IBLT {
+    static constexpr size_t nEntries = 126; // must be <128 and a multiple of 3 (N_HASH)
+    static constexpr size_t stsize = nEntries / N_HASH; // sub-table size
+    static constexpr uint8_t MAXCNT = 0x80; // max run length & run start marker, must be > nEntries
+    using HashTable = std::array<HashTableEntry,nEntries>;
+    HashTable hashTable_{};
+
     static constexpr int INSERT = 1;
     static constexpr int ERASE = -1;
-
-  public:
-    class Error : public std::runtime_error
-    {
-       public:
-        using std::runtime_error::runtime_error;
-    };
 
     /**
      * @brief constructor
      *
      * @param expectedNumEntries the expected number of entries in the IBLT
      */
-    explicit IBLT(size_t expectedNumEntries)
-    {
-        // 1.5x expectedNumEntries gives very low probability of decoding failure
-        size_t nEntries = expectedNumEntries + expectedNumEntries / 2;
-        // make nEntries exactly divisible by N_HASH
-        size_t remainder = nEntries % N_HASH;
-        if (remainder != 0) {
-            nEntries += (N_HASH - remainder);
-        }
-        m_hashTable.resize(nEntries);
-    }
+    explicit IBLT(size_t) { }
 
-    IBLT(const std::vector<HashTableEntry>& hashTable) : m_hashTable(hashTable) {}
+    IBLT(const HashTable& hashTable) : hashTable_(hashTable) {}
+    IBLT(HashTable&& hashTable) : hashTable_(std::move(hashTable)) {}
 
     /**
-     * @brief Populate the hash table using the vector representation of IBLT
+     * @brief Appends self to name
+     *
+     * Run-lenth encode hashtable into a byte vector. 'count' is encoded
+     * as a byte (assumes iblt max length < 128) then keySum and keyCheck
+     * in little-endian order. Runs of zero entries are encoded as a 'count'
+     * with the high bit set and the run length in the LSBs.
+     *
+     * @param name
+     */
+    void appendToName(ndn::Name& name) const {
+        std::vector<uint8_t> rle{};
+        uint8_t cnt{};
+        for (const auto& e : hashTable_) {
+            if (e.isEmpty()) {
+                if (++cnt >= MAXCNT) { rle.emplace_back(cnt | MAXCNT); cnt = 0; }
+                continue;
+            }
+            if (cnt != 0) { rle.emplace_back(cnt | MAXCNT); cnt = 0; }
+
+            rle.emplace_back(e.count);
+
+            rle.emplace_back(e.keySum);
+            rle.emplace_back(e.keySum >> 8);
+            rle.emplace_back(e.keySum >> 16);
+            rle.emplace_back(e.keySum >> 24);
+
+            rle.emplace_back(e.keyCheck);
+            rle.emplace_back(e.keyCheck >> 8);
+            rle.emplace_back(e.keyCheck >> 16);
+            rle.emplace_back(e.keyCheck >> 24);
+        }
+        // trailing empty entry count is omitted except for
+        // empty iblt (to avoid empty name component).
+        if (rle.empty() && cnt != 0) rle.emplace_back(cnt | MAXCNT);
+        name.append(rle);
+    }
+
+    /**
+     * @brief Populate the hash table using RLE compressed IBLT
      *
      * @param ibltName the Component representation of IBLT
      * @throws Error if size of values is not compatible with this IBF
      */
-    void initialize(const ndn::Name::Component& ibltName)
-    {
-        const auto& values = extractValueFromName(ibltName);
-
-        if (3 * m_hashTable.size() != values.size()) {
-            BOOST_THROW_EXCEPTION(Error("Received IBF cannot be decoded!"));
-        }
-        for (size_t i = 0; i < m_hashTable.size(); i++) {
-            HashTableEntry& entry = m_hashTable.at(i);
-            if (values[i * 3] != 0) {
-                entry.count = values[i * 3];
-                entry.keySum = values[(i * 3) + 1];
-                entry.keyCheck = values[(i * 3) + 2];
+    void initialize(const std::span<const uint8_t>& rle) {
+        size_t i{};
+        for (auto r = rle.begin(); r < rle.end(); ) {
+            auto b = *r;
+            if (b >= MAXCNT) {
+                if (b > MAXCNT) b &= MAXCNT-1;
+                i += b; // advance over zero entries
+                if (i > nEntries) throw std::runtime_error("compressed IBLT too large");;
+                ++r;
+                continue;
             }
+            // extract entry
+            hashTable_[i].count = b;
+            hashTable_[i].keySum   = r[1] | (r[2] << 8) | (r[3] << 16) | (r[4] << 24);
+            hashTable_[i].keyCheck = r[5] | (r[6] << 8) | (r[7] << 16) | (r[8] << 24);
+            if (++i > nEntries) throw std::runtime_error("compressed IBLT too large");;
+            r += 9;
         }
     }
 
     /**
      * Entry Hash functions. The hash table is split into N_HASH
-     * equal-sized sub-tables with a different hash function for each.
+     * interleaved sub-tables with a different hash function for each.
      * Each entry is added/deleted from all subtables.
      */
-    auto hash0(size_t key) const noexcept
+    auto hash(size_t key) const noexcept
     {
-        auto stsize = m_hashTable.size() / N_HASH;
-        return ndn::CryptoLite::murmurHash3(0, key) % stsize;
-    }
-    auto hash1(size_t key) const noexcept
-    {
-        auto stsize = m_hashTable.size() / N_HASH;
-        return ndn::CryptoLite::murmurHash3(1, key) % stsize + stsize;
-    }
-    auto hash2(size_t key) const noexcept
-    {
-        auto stsize = m_hashTable.size() / N_HASH;
-        return ndn::CryptoLite::murmurHash3(2, key) % stsize + stsize * 2;
+        auto h = ndn::CryptoLite::murmurHash3(104729, key);
+        auto h0 = (h % stsize) * N_HASH;
+        auto h1 = ((h >> 8) % stsize) * N_HASH + 1;
+        auto h2 = ((h >> 16) % stsize) * N_HASH + 2;
+        return std::tuple{h0, h1, h2};
     }
 
     /** validity checking for 'key' on peel or delete
@@ -197,25 +209,21 @@ class IBLT
      *  - one or more of the key's 3 hash entries is 'pure' but doesn't
      *    contain 'key'
      */
-    bool chkPeer(size_t key, size_t idx) const noexcept
-    {
+    bool chkPeer(size_t key, size_t idx) const noexcept {
         auto hte = getHashTable().at(idx);
         return hte.isEmpty() || (hte.isPure() && hte.keySum != key);
     }
 
-    bool badPeers(size_t key) const noexcept
-    {
-        return chkPeer(key, hash0(key)) || chkPeer(key, hash1(key)) ||
-               chkPeer(key, hash2(key));
+    bool badPeers(size_t key) const noexcept {
+        const auto [hash0, hash1, hash2] = hash(key);
+        return chkPeer(key, hash0) || chkPeer(key, hash1) || chkPeer(key, hash2);
     }
 
     void insert(uint32_t key) { update(INSERT, key); }
 
-    void erase(uint32_t key)
-    {
+    void erase(uint32_t key) {
         if (badPeers(key)) {
-            std::cerr << "error - invalid iblt erase: badPeers for key "
-                      << std::hex << key << "\n";
+            std::cerr << "error - invalid iblt erase: badPeers for key " << std::hex << key << "\n";
             return;
         }
         update(ERASE, key);
@@ -232,15 +240,13 @@ class IBLT
      * @param negative
      * @return true if decoding is complete successfully
      */
-    bool listEntries(std::set<uint32_t>& positive,
-                     std::set<uint32_t>& negative) const
-    {
+    bool listEntries(std::set<uint32_t>& positive, std::set<uint32_t>& negative) const {
         IBLT peeled = *this;
 
         bool peeledSomething;
         do {
             peeledSomething = false;
-            for (const auto& entry : peeled.m_hashTable) {
+            for (const auto& entry : peeled.hashTable_) {
                 if (entry.isPure()) {
                     if (peeled.badPeers(entry.keySum)) {
                         std::cerr << "error - invalid iblt: badPeers for entry:"
@@ -261,14 +267,11 @@ class IBLT
         return true;
     }
 
-    IBLT operator-(const IBLT& other) const
-    {
-        BOOST_ASSERT(m_hashTable.size() == other.m_hashTable.size());
-
+    IBLT operator-(const IBLT& other) const {
         IBLT result(*this);
-        for (size_t i = 0; i < m_hashTable.size(); i++) {
-            HashTableEntry& e1 = result.m_hashTable.at(i);
-            const HashTableEntry& e2 = other.m_hashTable.at(i);
+        for (size_t i = 0; i < nEntries; i++) {
+            HashTableEntry& e1 = result.hashTable_.at(i);
+            const HashTableEntry& e2 = other.hashTable_.at(i);
             e1.count -= e2.count;
             e1.keySum ^= e2.keySum;
             e1.keyCheck ^= e2.keyCheck;
@@ -276,142 +279,29 @@ class IBLT
         return result;
     }
 
-    std::vector<HashTableEntry> getHashTable() const { return m_hashTable; }
-
-    /**
-     * @brief Appends self to name
-     *
-     * Encodes our hash table from uint32_t vector to uint8_t vector
-     * We create a uin8_t vector 12 times the size of uint32_t vector
-     * We put the first count in first 4 cells, keySum in next 4, and keyCheck
-     * in next 4. Repeat for all the other cells of the hash table. Then we
-     * append this uint8_t vector to the name.
-     *
-     * @param name
-     */
-    void appendToName(ndn::Name& name) const
-    {
-        size_t n = m_hashTable.size();
-        size_t unitSize = (32 * 3) / 8;  // hard coding
-        size_t tableSize = unitSize * n;
-
-        std::vector<char> table(tableSize);
-
-        for (size_t i = 0; i < n; i++) {
-            // table[i*12],   table[i*12+1], table[i*12+2], table[i*12+3] -->
-            // hashTable[i].count
-
-            table[(i * unitSize)] = 0xFF & m_hashTable[i].count;
-            table[(i * unitSize) + 1] = 0xFF & (m_hashTable[i].count >> 8);
-            table[(i * unitSize) + 2] = 0xFF & (m_hashTable[i].count >> 16);
-            table[(i * unitSize) + 3] = 0xFF & (m_hashTable[i].count >> 24);
-
-            // table[i*12+4], table[i*12+5], table[i*12+6], table[i*12+7] -->
-            // hashTable[i].keySum
-
-            table[(i * unitSize) + 4] = 0xFF & m_hashTable[i].keySum;
-            table[(i * unitSize) + 5] = 0xFF & (m_hashTable[i].keySum >> 8);
-            table[(i * unitSize) + 6] = 0xFF & (m_hashTable[i].keySum >> 16);
-            table[(i * unitSize) + 7] = 0xFF & (m_hashTable[i].keySum >> 24);
-
-            // table[i*12+8], table[i*12+9], table[i*12+10], table[i*12+11] -->
-            // hashTable[i].keyCheck
-
-            table[(i * unitSize) + 8] = 0xFF & m_hashTable[i].keyCheck;
-            table[(i * unitSize) + 9] = 0xFF & (m_hashTable[i].keyCheck >> 8);
-            table[(i * unitSize) + 10] = 0xFF & (m_hashTable[i].keyCheck >> 16);
-            table[(i * unitSize) + 11] = 0xFF & (m_hashTable[i].keyCheck >> 24);
-        }
-        bio::filtering_streambuf<bio::input> in;
-        in.push(bio::zlib_compressor());
-        in.push(bio::array_source(table.data(), table.size()));
-
-        std::stringstream sstream;
-        bio::copy(in, sstream);
-
-        std::string compressedIBF = sstream.str();
-        name.append((const uint8_t *)compressedIBF.data(), compressedIBF.size());
-    }
-
-    /**
-     * @brief Extracts IBLT from name component
-     *
-     * Converts the name into a uint8_t vector which is then decoded to a
-     * a uint32_t vector.
-     *
-     * @param ibltName IBLT represented as a Name Component
-     * @return a uint32_t vector representing the hash table of the IBLT
-     */
-    std::vector<uint32_t> extractValueFromName(
-        const ndn::Name::Component& ibltName) const
-    {
-        std::string compressed
-          (ibltName.getValue().buf(),
-           ibltName.getValue().buf() + ibltName.getValue().size());
-
-        bio::filtering_streambuf<bio::input> in;
-        in.push(bio::zlib_decompressor());
-        in.push(bio::array_source(compressed.data(), compressed.size()));
-
-        std::stringstream sstream;
-        bio::copy(in, sstream);
-        std::string ibltStr = sstream.str();
-
-        std::vector<uint8_t> ibltValues(ibltStr.begin(), ibltStr.end());
-        size_t n = ibltValues.size() / 4;
-
-        std::vector<uint32_t> values(n, 0);
-
-        for (size_t i = 0; i < 4 * n; i += 4) {
-            uint32_t t = (ibltValues[i + 3] << 24) + (ibltValues[i + 2] << 16) +
-                         (ibltValues[i + 1] << 8) + ibltValues[i];
-            values[i / 4] = t;
-        }
-        return values;
-    }
+    const HashTable& getHashTable() const noexcept { return hashTable_; }
 
    private:
-    void update(int plusOrMinus, uint32_t key)
-    {
-        size_t bucketsPerHash = m_hashTable.size() / N_HASH;
-
-        for (size_t i = 0; i < N_HASH; i++) {
-            size_t startEntry = i * bucketsPerHash;
-            uint32_t h = ndn::CryptoLite::murmurHash3(i, key);
-            HashTableEntry& entry =
-                m_hashTable.at(startEntry + (h % bucketsPerHash));
-            entry.count += plusOrMinus;
-            entry.keySum ^= key;
-            entry.keyCheck ^= ndn::CryptoLite::murmurHash3(N_HASHCHECK, key);
-        }
+    void update1(int plusOrMinus, uint32_t key, size_t idx) {
+        HashTableEntry& entry = hashTable_.at(idx);
+        entry.count += plusOrMinus;
+        entry.keySum ^= key;
+        entry.keyCheck ^= ndn::CryptoLite::murmurHash3(N_HASHCHECK, key);
     }
-
-    std::vector<HashTableEntry> m_hashTable;
+    void update(int plusOrMinus, uint32_t key) {
+        const auto [hash0, hash1, hash2] = hash(key);
+        update1(plusOrMinus, key, hash0);
+        update1(plusOrMinus, key, hash1);
+        update1(plusOrMinus, key, hash2);
+    }
 };
 
 static inline bool operator==(const IBLT& iblt1, const IBLT& iblt2)
 {
-    auto iblt1HashTable = iblt1.getHashTable();
-    auto iblt2HashTable = iblt2.getHashTable();
-    if (iblt1HashTable.size() != iblt2HashTable.size()) {
-        return false;
-    }
-
-    size_t N = iblt1HashTable.size();
-
-    for (size_t i = 0; i < N; i++) {
-        if (iblt1HashTable[i].count != iblt2HashTable[i].count ||
-            iblt1HashTable[i].keySum != iblt2HashTable[i].keySum ||
-            iblt1HashTable[i].keyCheck != iblt2HashTable[i].keyCheck)
-            return false;
-    }
-    return true;
+    return memcmp(iblt1.hashTable_.data(), iblt2.hashTable_.data(), iblt1.hashTable_.size()) == 0;
 }
 
-static inline bool operator!=(const IBLT& iblt1, const IBLT& iblt2)
-{
-    return !(iblt1 == iblt2);
-}
+static inline bool operator!=(const IBLT& iblt1, const IBLT& iblt2) { return !(iblt1 == iblt2); }
 
 static inline std::ostream& operator<<(std::ostream& out, const HashTableEntry& hte)
 {
@@ -420,8 +310,7 @@ static inline std::ostream& operator<<(std::ostream& out, const HashTableEntry& 
     return out;
 }
 
-static inline std::string prtPeer(const IBLT& iblt, size_t idx, size_t rep)
-{
+static inline std::string prtPeer(const IBLT& iblt, size_t idx, size_t rep) {
     if (idx == rep) {
         return "";
     }
@@ -436,20 +325,17 @@ static inline std::string prtPeer(const IBLT& iblt, size_t idx, size_t rep)
     return rslt.str();
 }
 
-static inline std::string prtPeers(const IBLT& iblt, size_t idx)
-{
+static inline std::string prtPeers(const IBLT& iblt, size_t idx) {
     auto hte = iblt.getHashTable().at(idx);
     if (! hte.isPure()) {
         // can only get the peers of 'pure' entries
         return "";
     }
-    return prtPeer(iblt, idx, iblt.hash0(hte.keySum)) +
-           prtPeer(iblt, idx, iblt.hash1(hte.keySum)) +
-           prtPeer(iblt, idx, iblt.hash2(hte.keySum));
+    const auto [hash0, hash1, hash2] = iblt.hash(hte.keySum);
+    return prtPeer(iblt, idx, hash0) + prtPeer(iblt, idx, hash1) + prtPeer(iblt, idx, hash2);
 }
 
-static inline std::ostream& operator<<(std::ostream& out, const IBLT& iblt)
-{
+static inline std::ostream& operator<<(std::ostream& out, const IBLT& iblt) {
     out << "idx count keySum keyCheck\n";
     auto idx = 0;
     for (const auto& hte : iblt.getHashTable()) {

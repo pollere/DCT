@@ -12,7 +12,7 @@
  *
  * app3 is not intended as production code.
  *
- * Copyright (C) 2020 Pollere, Inc
+ * Copyright (C) 2020-22 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -64,10 +64,9 @@ static void help(const char* cname)
 
 /* Globals */
 static std::string myPID, myId, role;
-static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
+static std::chrono::microseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static bool Pending = false;
-static Timer timer;
 static std::string capability{"lock"};
 static std::string location{"all"};
 
@@ -145,7 +144,7 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
      */
     if(!Pending) {
         Pending = true;
-        timer = cm.schedule(pubWait, [&cm](){
+        cm.oneTime(pubWait, [&cm](){
             std::string s = "Message number " + std::to_string(++Cnt) + " from " + role + ":" + myId + "-" + myPID;
             std::vector<uint8_t> m(s.begin(), s.end());
             msgPubr(cm, m);

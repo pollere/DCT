@@ -3,7 +3,7 @@
 /*
  * Data Centric Transport schema certificate  abstraction
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -62,7 +62,7 @@ extern "C" {
 #include <string_view>
 
 #include "dct/sigmgrs/sigmgr.hpp"
-#include "tlv_parser.hpp"
+#include "rpacket.hpp"
 
 constexpr size_t thumbPrint_s{crypto_hash_sha256_BYTES};
 using thumbPrint = std::array<uint8_t,thumbPrint_s>;
@@ -140,22 +140,15 @@ struct dctCert : ndn::Data {
         return std::all_of(t.begin(), t.end(), [](uint8_t b){ return b == 0; });
     }
 
-    // the thumbprint is always a 32 byte hash so its KeyLocator block has a fixed format preamble
-    static constexpr std::array<uint8_t,4> kloc_preamble{ 28, 34, 29, 32 };
-
     static inline thumbPrint computeThumbPrint(const ndn::Data& cert) {
         thumbPrint tp;
         auto certWF = cert.wireEncode();
         crypto_hash_sha256(tp.data(), certWF.buf(), certWF.size());
         return tp;
     }
-    static inline const thumbPrint& getKeyLoc(const ndn::Data& data) {
-        // find the SigInfo (tlv 22) block of 'data' then get its key locator (tlv 28)
-        auto si = tlvParser(data).findBlk(22).findBlk(28);
-        if (! si.starts_with(kloc_preamble, 0)) throw runtime_error("KeyLocator isn't a DCT thumbprint");
+    static inline const thumbPrint& getKeyLoc(rData data) { return (const thumbPrint&)*data.thumbprint(); }
 
-        return (const thumbPrint&)*(si.data() + sizeof(kloc_preamble));
-    }
+    static inline const thumbPrint& getKeyLoc(const ndn::Data& data) { return getKeyLoc(rData(data)); }
 
     const thumbPrint& getKeyLoc() const { return getKeyLoc(*this); }
 
@@ -164,12 +157,8 @@ struct dctCert : ndn::Data {
     thumbPrint computeThumbPrint() const { return computeThumbPrint(*this); }
 
     // return the 'signature type' (tlv 27) byte of 'data'
-    static inline auto getSigType(const ndn::Data& data) {
-        // find the SigInfo (tlv 22) block of 'data' then its sigType (tlv 27) block
-        auto st = tlvParser(data).findBlk(22).findBlk(27);
-        if (st.size() != 3) throw runtime_error("malformed Data: multi-byte signature type");
-        return st[2];
-    }
+    static inline auto getSigType(rData data) { return data.sigType(); }
+    static inline auto getSigType(const ndn::Data& data) { return getSigType(rData(data)); }
     auto getSigType() const { return getSigType(*this); }
 };
 

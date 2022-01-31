@@ -15,7 +15,7 @@
  * (Note that an app can try to publish messages that are not permitted by the
  * trust schema and it will not be permitted to create the publication)
  *
- * Copyright (C) 2021 Pollere, Inc
+ * Copyright (C) 2021-2 Pollere, Inc
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -56,8 +56,7 @@ static struct option opts[] = {
 static void usage(const char* cname) { print("- {} usage: id [-w ms] [loc] function args\n", cname); }
 
 /* Globals */
-static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
-static Timer timer;
+static std::chrono::microseconds pubWait = std::chrono::seconds(1);
 
 // instance attributes from signing chain
 static std::string role{};
@@ -74,7 +73,7 @@ static std::string args{};
  */
 static void cmdPubr(mbps &cm) {
     // publish command to func at loc then wait a bit to collect replies
-    timer = cm.schedule(pubWait, [](){ exit(0); });
+    cm.oneTime(pubWait, [](){ exit(0); });
     cm.publish(msgParms{ {"topic","command"s}, {"loc",  loc}, {"func", func}, {"args", args} });
 }
 
@@ -130,21 +129,20 @@ int main(int argc, char* argv[])
     func = argv[optind++];
     args = argv[optind++];
 
+    // subscribe to status messages from all functions, any room
+    for (const auto& f : std::array{"light"s, "door"s, "temp"s, "screen"s}) {
+        cm.subscribe(f + "/status", statusRecv);
+    }
+
+    cm.keyMaker(0); // phones are transient & shouldn't be key maker
+
     // Connect and pass in the handler
+    print("{} {}'s phone sending to {}\n", role, id, loc);
     try {
-        cm.connect(    /* main task for this entity */
-            [&cm]() {
-                print("{} {}'s phone sending to {}\n", role, id, loc);
-                // subscribe to status messages from all functions, any room
-                for (const auto& f : std::array{"light"s, "door"s, "temp"s, "screen"s}) {
-                    cm.subscribe(f + "/status", statusRecv);
-                }
-                cmdPubr(cm);
-            }
-        );
+        cm.connect([&cm]{ cmdPubr(cm); });
         cm.run();
     } catch (const std::exception& e) {
-        std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
+        std::cerr << "{} got exception: " << e.what() << std::endl;
         exit(1);
     } catch (int conn_code) {
         std::cerr << "main mbps client failed to connect with code " << conn_code << std::endl;

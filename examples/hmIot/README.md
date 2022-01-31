@@ -8,7 +8,7 @@ Messages for a target may be further specified with subtopics and subscriptions 
 
 ## Build notes
 
-These examples work on Macs and Linux and uses IPv6 multicast. They use the Data-Centric Toolkit (https://github.com/pollere/DCT)  which currently uses the ndn-ind library ([https://github.com/operantnetworks](https://github.com/operantnetworks)) and, for broadcast performance, NFD version with the the *no-nacks-on-multicast-faces* and s*hip-pending-interests-on-register* NFD patches as well as ndn-cxx patch (for keys) available at: https://github.com/pollere/NDNpatches. [Also must fix the bug that causes rejection of registrations within the same millisecond before can use key distributors.]  After cloning the DCT repo, the example programs can be used. Do a 'make' in your examples/mbps directory. 
+These examples work on Macs and Linux and uses IPv6 multicast. They use the Data-Centric Toolkit (https://github.com/pollere/DCT)  which currently uses the ndn-ind library ([https://github.com/operantnetworks](https://github.com/operantnetworks)). No NDN forwarder is used; examples of Data movement governed by trust schema will be released in the future. After cloning the DCT repo, the example programs can be used. Do a 'make' in your examples/hmIoT directory. 
 
 ## Using the examples
 
@@ -44,11 +44,9 @@ The "+" on the role cert indicates that its signing (private) key should be incl
 
 #### Running the examples
 
-The host must be running an NDN Forwarding Daemon (with Pollere's patches) and must have a localnet route to the IPv6 multicast Face. At least two application entities should be started or nothing will happen.  (For now, do a "nfdc cs erase /localnet" before starting a new session.) app1 publishes the given number of messages, sending a short message each time. If the -p option is set, the application will persist waiting for more messages. 
+At least two application entities should be started or nothing will happen.  app1 publishes the given number of messages, sending a short message each time. If the -p option is set, the application will persist waiting for more messages. 
 
 *Example usage:*
-
-`nfdc cs erase /localnet`
 
 `app1 -c 10 <identity>.bundle `  *or* `app1 -c 10 -p <identity>.bundle `
 
@@ -76,7 +74,7 @@ Tags can be accessed in a received message from the mbpsMsg structure and the ap
 
 This discussion contains more information about how the mbps shim uses the DCT library than is necessary in order to simply write applications and trust schemas. 
 
-mbps's shim  serves as an API and passes an identity bundle to modules from Pollere's Data-Centric Toolkit (DCT) which implement the corresponding trust zone. (DCT currently uses a version of the NDN Forwarding Daemon NFD to provide network layer primitives over an IPv6 multicast network.) This section provides an overview of the module interaction. This is an area of active work, that is, we are still refining how the "pieces" go together; this is the current snapshot. The modules that uniquely define a particular transport are the shim (here DCT/examples/shims/mbps.hpp) and the trust schema (e.g., iot0.trust) while the rest are DCT library modules. The transport translates application messages into secured Publications (and Publications to messages) that are used by its *syncps* Sync protocol that manages the set synchronization of a particular Collection of Publications using NDN primitives (syncInterests and syncData). Publications are NDN Data which have distinct name components (trust schema tags) and a data portion that holds the message or a segment of a large message. (Publications are encapsulated in NDN Sync Data, which are exchanged with NDN forwarders, through syncps. Since the focus is on broadcast communications, those go to the **localnet** Face.) 
+mbps's shim  serves as an API and passes an identity bundle to modules from Pollere's Data-Centric Toolkit (DCT) which implement the corresponding trust zone. (DCT currently uses a version of the NDN Forwarding Daemon NFD to provide network layer primitives over an IPv6 multicast network.) This section provides an overview of the module interaction. This is an area of active work, that is, we are still refining how the "pieces" go together; this is the current snapshot. The modules that uniquely define a particular transport are the shim (here DCT/examples/shims/mbps.hpp) and the trust schema (e.g., iot0.trust) while the rest are DCT library modules. The transport translates application messages into secured Publications (and Publications to messages) that are used by its *syncps* Sync protocol that manages the set synchronization of a particular Collection of Publications using NDN primitives (syncInterests and syncData). Publications are NDN Data which have distinct name components (trust schema tags) and a data portion that holds the message or a segment of a large message. (Publications are encapsulated in NDN Sync Data, which are passed to Direct Face through syncps.
 
 DCT's library is currently separated into four directories that cover different functionalities: syncps (the syncPubSub object and its helpers), sigmgrs (sign and validate Data using different algorithms), distributors (maintain distributed cert or key collections), and schema (holds the schemaLib modules). The figure shows how the various modules of DCT are used by a custom shim (like mbps.hpp) to make a bespoke transport that presents an application-specific interface and uses NFD and its IPv6 multicast interface to send and receive packets on a local network. In addition to the cryptographic signing and validation of Data packets (e.g., RFC7693, EdDSA, SHA256, AEAD), the schemaLib is employed to do construction and structural validation of Publications, ensuring that all of the schema's naming constraints hold for the publication and its signing chain.  DCT does not permit trust schemas to specify integrity signing (RFC7693 or SHA256) for publications as this is at odds with DCT's security model, but these are used within distributors to sign syncData during initialization.
 
@@ -86,17 +84,17 @@ DCT's library is currently separated into four directories that cover different 
 
 Each syncps handles the synchronization of Publications within its collection, which may encompass an entire application domain or may be further specified by a longer prefix. The transport used in these examples uses a collection for the publications that carry application messages (wirePrefix/trustSchemaTP/pubs), a collection for the signing cert chains (wirePrefix/trustSchemaTP/cert), and, if AEAD is specified for wire validation, a collection for the symmetric group keys (wirePrefix/trustSchemaTP/keys). The latter two are transparent to the application. For application messages, publication names are constructed according to the following table, where the component structure can be used for hierarchical topic and subtopic handling and the individual components are specified in, and can be secured through, the domain's trust schema. The last three components are required by mbps and will be filled in by the shim. The rest depend on the particular trust schema, both in the number of components (tags from the trust schema definition) and whether they must be supplied by the application through the mbps API. Any component (tag) in the publication definition(s) in the trust schema that does not have a leading "__" and is not one of the final three components must be supplied.
 
-| component | description                                                  |
-| --------- | ------------------------------------------------------------ |
+| component | description                                                                                                                                  |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | networkID | This is a single component in our examples, denoting the domain of **iot**{1,2,3}. Multiple components might be needed for some deployments. |
-| target    | a capability, attribute, property                            |
-| topic     | gives the type of message (command, report)                  |
-| trgtLoc   | target location id or alias, e.g. device(s), room, local, component (smartthings) |
-| topicArgs | more specific information for this topic                     |
-| origin    | identifies the publisher: role-specific ID and deviceID      |
-| msgID     | unsigned 32 bit number to uniquely identify each message     |
-| sCnt      | unsigned 16 bit integer; indicates if single publication message or multiples (see below) |
-| mts       | time mbps client receives message from application process in UTC microsecs |
+| target    | a capability, attribute, property                                                                                                            |
+| topic     | gives the type of message (command, report)                                                                                                  |
+| trgtLoc   | target location id or alias, e.g. device(s), room, local, component (smartthings)                                                            |
+| topicArgs | more specific information for this topic                                                                                                     |
+| origin    | identifies the publisher: role-specific ID and deviceID                                                                                      |
+| msgID     | unsigned 32 bit number to uniquely identify each message                                                                                     |
+| sCnt      | unsigned 16 bit integer; indicates if single publication message or multiples (see below)                                                    |
+| mts       | time mbps client receives message from application process in UTC microsecs                                                                  |
 
 A target is the "audience" for the Publication. This can be used in many ways, but one (IoT-centric) way to think of it is as a *capability* e.g., lock, alarm, colorControl, motionSensor. In general, topic can be used in many ways; in these examples it indicates the type of message carried, e.g. an event, a command, or a status. The target location can be a particular device, class of device, component of a device, a room, a vicinity. The arguments can supply any additional information associated with that topic. The origin component can be used to identify the publisher (only used for debugging), msgID is  set to a hash in mbps.hpp. sCnt is packaged in an unsigned 16 bit integer which, if not 0 to indicate a single publication message, uses the upper 8 bits for the sequence of this piece within the total message and the lower 8 bits for the total number of pieces in the message. This means that any message must fit into 255 publication segments (so byte-limited to maximum content size times 255) but the current shims limit the number of segments to 64 for an efficient implementation and for the iblt implementation, the limit should be kept under 80.
 
@@ -124,4 +122,4 @@ This schema differs from iot1.trust only in that the wireValidator ensures priva
 
 ---
 
-Copyright (C) 2021 Pollere, Inc
+Copyright (C) 2021-2022 Pollere LLC

@@ -3,7 +3,7 @@
 /*
  * unpack a bundle of wire-format certs into a vector of cert objects
  *
- * Copyright (C) 2021 Pollere, Inc.
+ * Copyright (C) 2021-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by

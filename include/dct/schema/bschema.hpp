@@ -4,7 +4,7 @@
 /*
  * Definitions for reading and writing binary schemas.
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -150,6 +150,7 @@ struct bSchema {
     std::vector<tDiscrim> discrim_{};
     std::vector<tPub> pub_{};
     std::unordered_map<bTok,bComp> tm_{};
+    std::vector<uint8_t> schemaTP_{};
 
     // return the name of the pub at index 'i'
     bTok pubName(pubidx i) const {
@@ -210,6 +211,7 @@ struct bSchema {
         vlist_ = other.vlist_;
         discrim_ = other.discrim_;
         pub_ = other.pub_;
+        schemaTP_ = other.schemaTP_;;
         tm_.clear();
         auto off = stab_.data() - other.stab_.data();
         for (size_t i = 0, n = tok_.size(); i < n; i++) {
@@ -219,6 +221,8 @@ struct bSchema {
         }
     }
     bSchema() = default;
+
+    bSchema(bSchema&& other) = default;
 
     bSchema(const bSchema& other) { _fixup_tok(other); }
 

@@ -31,10 +31,12 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 #define FMT_HEADER_ONLY
-#include "fmt/compile.h"
 #include "fmt/format.h"
+#include "fmt/compile.h"
+#include "fmt/ostream.h"
 #include "fmt/ranges.h"
 #include "fmt/chrono.h"
+#include "fmt/color.h"
 
 #pragma GCC diagnostic pop
 

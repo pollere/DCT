@@ -3,7 +3,7 @@
 /*
  * Data Centric Transport schema policy model abstraction
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -62,11 +62,8 @@ struct DCTmodel {
     auto pubPrefix() const { return bs_.pubVal("#pubPrefix"); }
 
     // the wirePrefix is a Name whose first component(s) are the #wirePrefix string from the schema and
-    // last component is the first 8 bytes of the trust anchor thumbprint to make it trust-zone specific.
-    auto wirePrefix() const {
-        const auto& tp = cs_.trustAnchorTP(0);
-        return Name(bs_.pubVal("#wirePrefix")).append(tp.data(), 8);
-    }
+    // last component is the first 8 bytes of the schema cert thumbprint to make it trust-zone specific.
+    auto wirePrefix() const { return Name(bs_.pubVal("#wirePrefix")).append(bs_.schemaTP_.data(), 8); }
 
     const auto& certs() const { return cs_; }
 
@@ -165,16 +162,19 @@ struct DCTmodel {
 
 
     // create a new DCTmodel instance using the certs in the bootstrap bundle file 'bootstrap'
-    DCTmodel(std::string_view bootstrap) :
+    // optional string for face name
+    DCTmodel(std::string_view bootstrap, syncps::FaceType& face = syncps::SyncPubsub::defaultFace()) :
             bs_{validateBootstrap(bootstrap, cs_)},
             bld_{pubBldr(bs_, cs_, bs_.pubName(0))},
             psm_{getSigMgr(bs_)},
             wsm_{getWireSigMgr(bs_)},
             syncSm_{psm_.ref(), bs_, pv_},
-            m_sync{syncps::SyncPubsub(wirePrefix().append("pubs"), wireSigMgr(), syncSm_)},
+            m_sync{syncps::SyncPubsub(face, wirePrefix().append("pubs"), wireSigMgr(), syncSm_)},
             m_ckd{ pubPrefix(), wirePrefix().append("cert"),
                    [this](auto cert){ addCert(cert);},  [](auto /*p*/){return false;} }
     {
+        // pub sync session is started after distributor(s) have completed their setup
+        m_sync.autoStart(false);
         if(wsm_.ref().type() == SigMgr::stAEAD) {
             m_gkd = new DistGKey(pubPrefix(), wirePrefix().append("keys"),
                              [this](auto& gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
@@ -199,8 +199,8 @@ struct DCTmodel {
         const auto& tp = cs_.Chains()[0]; // thumbprint of signing cert
         pubSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
         wireSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
-        pubSigMgr().setKeyCb([&cs=cs_](const ndn::Data& d) -> const keyVal& { return *(cs[d].getContent()); });
-        wireSigMgr().setKeyCb([&cs=cs_](const ndn::Data& d) -> const keyVal& { return *(cs[d].getContent()); });
+        pubSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
+        wireSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
 
 
         // SPub need access to builder's 'index' function to translate component names to indices
@@ -225,22 +225,25 @@ struct DCTmodel {
         return m_sync.publish(std::move(pub), std::move(cb));
     }
 
-    auto& setSyncInterestLifetime(std::chrono::milliseconds t) {
-        m_sync.syncInterestLifetime(t);
+    auto& pubLifetime(std::chrono::milliseconds t) {
+        m_sync.pubLifetime(t);
         return *this;
     }
-    auto schedule(std::chrono::nanoseconds after, const std::function<void()>& cb) {
-        return m_sync.schedule(after, cb);
-    }
+
+    // Can be used by application to schedule a cancelable timer. Note that
+    // this is expensive compared to a oneTime timer and should be used
+    // only for timers that need to be canceled before they fire.
+    auto schedule(std::chrono::microseconds delay, TimerCb&& cb) { return m_sync.schedule(delay, std::move(cb)); }
+
+    // schedule a call to 'cb' in 'd' microseconds (cannot be canceled)
+    auto oneTime(std::chrono::microseconds delay, TimerCb&& cb) { m_sync.oneTime(delay, std::move(cb)); }
 
     // construct a pub name from pairs of tag, value parameters
-    template<typename... Rest>
-        requires ((sizeof...(Rest) & 1) == 0)
+    template<typename... Rest> requires ((sizeof...(Rest) & 1) == 0)
     auto name(Rest&&... rest) { return bld_.name(std::forward<Rest>(rest)...); }
 
     // construct a publication with the given content using rest of args to construct its name
-    template<typename... Rest>
-        requires ((sizeof...(Rest) & 1) == 0)
+    template<typename... Rest> requires ((sizeof...(Rest) & 1) == 0)
     auto pub(std::span<const uint8_t> content, Rest&&... rest) {
         Publication pub(name(std::forward<Rest>(rest)...));
         pubSigMgr().sign(pub.setContent(content.data(), content.size()));
@@ -260,18 +263,17 @@ struct DCTmodel {
     auto defaults(Rest&&... rest) { return bld_.defaults(std::forward<Rest>(rest)...); }
 
     // set start callback for shims that have a separate connect/start like mbps
-    void start(connectedCb&& cb, const std::function<bool()>&& kmcb =[](){return true;}) {
+    void start(connectedCb&& cb, bool km = true) {
         if(! m_gkd) {
-            // hook app start callback to cert distributor is 'connected' event
-            m_ckd.setup(std::move(cb));
-        } else {
-            // 2nd argument to gkd.setup is whether this instance can be a keymaker.
-            // (note: this will be settable via trust schema in future)
-            m_ckd.setup(
-                [&gkd=*m_gkd, cb=std::move(cb), km=kmcb()](bool connected) {
-                    if (!connected) cb(false); else gkd.setup(cb, km);
-                });
+            m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+            return;
         }
+        // 2nd argument to gkd.setup is whether this instance can be a keymaker.
+        // (note: this will be settable via trust schema in future)
+        m_ckd.setup([this, cb=std::move(cb), km](bool c) mutable {
+                        if (!c) { cb(false); return; }
+                        m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); }, km);
+                    });
     }
 
     // inspection API to extract information from the schema.

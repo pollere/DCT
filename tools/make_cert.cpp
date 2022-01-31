@@ -1,7 +1,7 @@
 /*
  * mkcert <name> - create a self-signed DCT cert with NDN name <name>
  *
- * Copyright (C) 2021 Pollere, Inc.
+ * Copyright (C) 2021-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by

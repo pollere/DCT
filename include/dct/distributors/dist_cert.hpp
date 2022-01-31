@@ -8,7 +8,8 @@
  * It subscribes to the Collection at initialization and publishes
  * its signing chain as dctCert Publications.  On receiving a new
  * Publication, callback to addCertCb.
- * Copyright (C) 2020 Pollere, Inc.
+ *
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -55,9 +56,10 @@ struct DistCert
     SigMgrAny m_syncSigMgr{sigMgrByType("RFC7693")}; // to sign/validate SyncData packets
     SigMgrAny m_certSigMgr{sigMgrByType("NULL")};   // to sign/validate Publications
     syncps::SyncPubsub m_sync;
-    addCertCb m_addCertCb{[](auto ){}};             // called when cert rcvd from peer
-    connectedCb m_connCb{[this](bool) { m_havePeer = true; }};
+    addCertCb m_addCertCb{[](auto ){}}; // called when cert rcvd from peer
+    connectedCb m_connCb{[](bool){}};   // called when initial cert exchange done
     bool m_havePeer{false};
+    bool m_initDone{false};
     std::unordered_set<size_t> m_initialPubs{};
     log4cxx::LoggerPtr staticModuleLogger{log4cxx::Logger::getLogger("certDist")};
 
@@ -66,7 +68,7 @@ struct DistCert
         m_sync(wPre, m_syncSigMgr.ref(), m_certSigMgr.ref()),
         m_addCertCb{std::move(addCb)}
     {
-        m_sync.syncInterestLifetime(std::chrono::milliseconds(359));   // (quick refresh until have peer)
+        m_sync.syncInterestLifetime(std::chrono::milliseconds(4789));
         m_sync.syncDataLifetime(std::chrono::milliseconds(877));       // (data caching not useful)
         m_sync.pubLifetime(std::chrono::milliseconds(0)); // pubs don't auto expire
         m_sync.isExpiredCb(std::move(eCb));
@@ -98,36 +100,59 @@ struct DistCert
     }
 
     /*
-     * certstore got a new cert - publish it to peers
-     *
-     * Initial (bootstrap) publications done with a confirmation callback
-     * to avoid sending data until the keys to validate it have been received.
-     * Once something has been confirmed, the app is called back and
-     * future pubs are done without confirmation.
+     * Called when an initial cert exchange has completed (some peer(s) have our cert
+     * chain and we have theirs).
      */
-    void publishCert(certPub&& c) { m_sync.publish(std::move(c)); }
-    void publishCert(const certPub& c) { publishCert(certPub(c)); }
+    void initDone() {
+        _LOG_INFO("initDone");
+        m_initDone = true;
+        m_connCb(true);
+    }
 
+    /*
+     * Certstore has validated and accepted a peer's cert.
+     */
+    void publishCert(const certPub& c) {
+        if (! m_initDone) {
+            m_havePeer = true;
+            if (m_initialPubs.empty()) initDone();
+        }
+        //will ensure publication for relayed (or new local) certs
+        m_sync.publish(dctCert(c));
+    }
+
+    /*
+     * publish bootstrap / local identity certs to the collection
+     * 
+     * The bootstrap (app identity) cert chain is published via calls to this
+     * routine. These are the only certs this app publishes to the collection.
+     *
+     * Bootstrap publications are done with a confirmation callback and, when
+     * all of them have been confirmed as received by peer(s), the outbound
+     * half of initialization is done (indicated by 'm_initialPubs.empty()').
+     * The inbound half of initialization finishes when the certstore has
+     * received and validated the entire signing chain of at least one peer
+     * (indicated by 'm_havePeer = true'). When both halves are done, future
+     * pubs are done without confirmation, interest timeout is much less
+     * aggressive, and the 'connect' callback is called to move to the next
+     * phase of operation.
+     */
     void initialPub(certPub&& c) {
         _LOG_INFO("initialPub " << c.getName());
-        if (! m_havePeer) {
+        if (! m_initDone) {
             m_initialPubs.emplace(std::hash<ndn::Data>{}(c));
             m_sync.publish(std::move(c),
                     [this](const ndn::Data& d, bool acked) {
-                        _LOG_INFO("wasDelivered: " << acked << " " << d.getName().toUri());
-                        auto item = std::hash<ndn::Data>{}(d);
-                        if (m_initialPubs.contains(item)) m_initialPubs.erase(item);
-                        if (! m_havePeer && (!acked || m_initialPubs.empty())) {
-                            if (acked) {
-                                m_havePeer = true; 
-                                m_sync.syncInterestLifetime(std::chrono::milliseconds(13537)); // (long prime interval)
-                            }
-                            m_connCb(acked);
-                        }
+                        // since cert pub lifetime is infinite 'acked' should always be true
+                        // when this routine is called. If all the initial pubs have been acked
+                        // and we have at least one peer's signing chain, initialization is done.
+                        _LOG_INFO("wasDelivered: " << acked << " " << d.getName());
+                        m_initialPubs.erase(std::hash<ndn::Data>{}(d));
+                        if (m_havePeer && m_initialPubs.empty()) initDone();
                     });
-        } else {
-            m_sync.publish(std::move(c));
+            return;
         }
+        m_sync.publish(std::move(c));
     }
 };
 

@@ -3,7 +3,7 @@
 /*
  * Certificate store abstraction used by schemas
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -64,11 +64,25 @@ struct certStore {
     auto contains(const thumbPrint& tp) const noexcept { return certs_.contains(tp); }
 
     // lookup the signing cert of 'data'
-    const dctCert& signingCert(const ndn::Data& data) const {
+    const auto& operator[](rData data) const {
         const auto& tp = dctCert::getKeyLoc(data);
-        return dctCert::selfSigned(tp)? reinterpret_cast<const dctCert&>(data) : get(tp);
+        if (dctCert::selfSigned(tp)) {
+            throw schema_error(format("looking up self-signed {}", data.name())); //XXX
+            //return data;
+        }
+        return get(tp);
     }
-    const auto& operator[](const ndn::Data& data) const { return signingCert(data); }
+    const auto& operator[](const ndn::Data& data) const {
+         const auto& tp = dctCert::getKeyLoc(data);
+         return dctCert::selfSigned(tp)? reinterpret_cast<const dctCert&>(data) : get(tp);
+    }
+
+    // lookup the (public) signing key of 'data'
+    auto signingKey(rData data) const {
+        const auto& tp = dctCert::getKeyLoc(data);
+        if (! dctCert::selfSigned(tp)) data = rData(get(tp)); //XXX fix when get returns rData
+        return data.content().rest();
+    }
 
     const auto& key(const thumbPrint& tp) const { return key_.at(tp); }
     auto canSign(const thumbPrint& tp) const { return key_.contains(tp); }

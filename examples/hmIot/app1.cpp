@@ -7,7 +7,7 @@
  * included along with an optional callback if message qos is
  * desired (here, confirmation that the message has been published).
  *
- * Copyright (C) 2020 Pollere, Inc
+ * Copyright (C) 2020-22 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -61,11 +61,10 @@ static void help(const char* cname)
 
 /* Globals */
 static std::string myPID, myId, role;
-static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
+static std::chrono::microseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static int Done = 10;
 static bool Persist = false;
-static Timer timer;
 static std::string capability{"lock"};
 static std::string location{"all"};
 
@@ -97,17 +96,16 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
         });
 
     if(++Cnt < Done) {  // wait then publish another message
-        timer = cm.schedule(pubWait, [&cm](){
+        cm.oneTime(pubWait, [&cm](){
             std::string s = "Message number " + std::to_string(Cnt)
                             + " from " + role + ":" + myId + "-" + myPID;
             std::vector<uint8_t> m(s.begin(), s.end());
             msgPubr(cm, m);
         });
     } else {
-        std::string s = myPID + " is done publishing messages.";
         if(!Persist) {
-            timer = cm.schedule(2*pubWait, [s](){
-                    std::cout << s << std::endl;
+            cm.oneTime(2*pubWait, [](){
+                    std::cout << myPID << " is done publishing messages." << std::endl;
                     exit(0);
             });
         }

@@ -5,13 +5,15 @@ app?
 *.o
 *.srctrl*
 *.user
+*.graffle
 *.dSYM/
+id/
+id[0-5]/
 .DS_Store
 .cache
 compile_commands.json*
 compile_flags.txt
-examples/mbps/certs/
-examples/mbps/id?/
+tools/bld_dump
 tools/ls_bundle
 tools/make_bundle
 tools/make_cert
@@ -21,3 +23,5 @@ tools/schema_dump
 tools/schema_info
 tools/schema_install
 tools/tst_encoder
+tools/tst_rpacket
+tools/tst_validate

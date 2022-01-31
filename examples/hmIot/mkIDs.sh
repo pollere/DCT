@@ -3,7 +3,7 @@
 #  'schema' is the filename of the schema's .trust file
 PATH=../../../tools:$PATH
 
-device=(frontdoor backdoor gate)
+device=(frontdoor backdoor gate patio)
 operator=(alice bob)
 
 if [ -z "$1" ]; then echo "-$0: must supply a .trust schema filename"; exit 1; fi;

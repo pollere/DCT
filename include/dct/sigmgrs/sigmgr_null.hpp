@@ -3,7 +3,7 @@
 /*
  * Null Signature Manager
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -44,6 +44,9 @@ struct SigMgrNULL final : SigMgr {
     /*
      * Here just return true
      */
+    bool validate(rData ) override final { return true; }
+    bool validate(rData , const dct_Cert&) override final { return true; }
+
     bool validate(const ndn::Data&) override final { return true; }
     bool validate(const ndn::Data&, const dct_Cert&) override final { return true; }
 

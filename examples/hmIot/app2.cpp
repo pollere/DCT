@@ -16,7 +16,7 @@
  * If the app is given a 'device' role, it waits for a message then sets its
  * simulated state based on the message an announces its current state.
  *
- * Copyright (C) 2020 Pollere, Inc
+ * Copyright (C) 2020-22 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -77,10 +77,9 @@ static void help(const char* cname)
 
 /* Globals */
 static std::string myPID, myId, role;
-static std::chrono::nanoseconds pubWait = std::chrono::seconds(1);
+static std::chrono::microseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static int nMsgs = 10;
-static Timer timer;
 static std::string capability{"lock"};
 static std::string location{"all"}; // target's location (for operators)
 static std::string myState{"unlocked"};       // simulated state (for devices)
@@ -116,16 +115,15 @@ static void msgPubr(mbps &cm) {
     }
 
     if(Cnt >= nMsgs && nMsgs) {
-        timer = cm.schedule(2*pubWait, [](){
+        cm.oneTime(2*pubWait, [](){
                     print("{}:{}-{} published {} messages and exits\n", role, myId, myPID, Cnt);
                     exit(0);
                 });
-        return;
     }
 
     // operators send periodic messages, devices respond to incoming msgs
     if (role == "operator") {
-        timer = cm.schedule(pubWait + std::chrono::milliseconds(rand() & 0x1ff), [&cm](){ msgPubr(cm); });
+        cm.oneTime(pubWait + std::chrono::milliseconds(rand() & 0x1ff), [&cm](){ msgPubr(cm); });
     }
 }
 
@@ -162,8 +160,7 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 /*
  * Main() for the application to use.
  * First complete set up: parse input line, set up message to publish,
- * set up entity identifier. Then make the mbps client, connect,
- * and run the context.
+ * set up entity identifier. Then make the mbps client, connect, and run the context.
  */
 
 static int debug = 0;
@@ -205,19 +202,19 @@ int main(int argc, char* argv[])
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
 
+    if (role == "operator") {
+        cm.subscribe(msgRecv);  // single callback for all messages
+        cm.keyMaker(0);         // operators may be transient so shouldn't be key makers
+    } else {
+        //here devices just subscribe to command topic
+        cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
+        cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
+    }
+
     // Connect and pass in the handler
     try {
-        cm.connect(    /* main task for this entity */
-            [&cm]() {
-                if (role == "operator") {
-                    cm.subscribe(msgRecv);  // single callback for all messages
-                    msgPubr(cm);            // send initial message to kick things off
-                } else {
-                    //here devices just subscribe to command topic
-                    cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
-                    cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
-                }
-            });
+        /* main task for this entity */
+        cm.connect([&cm]{ if (role == "operator") msgPubr(cm); });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);

@@ -49,4 +49,4 @@ Using the DCT run-time library, programs could be written to add updated trust s
 
 ---
 
-Copyright (C) 2021 Pollere, Inc
+Copyright (C) 2021-2022 Pollere LLC

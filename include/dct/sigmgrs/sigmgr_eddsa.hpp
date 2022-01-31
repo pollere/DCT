@@ -3,7 +3,7 @@
 /*
  * EdDSA Signature Manager
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -136,8 +136,33 @@ struct SigMgrEdDSA final : SigMgr {
         return true;
     }
 
-    // common validate logic for both API calls
-    bool validate(const ndn::Data& data, const keyVal& pk) const {
+    // common validate logic
+    bool validate(rData d, keyRef pk) const {
+        auto sig = d.signature();
+        if (sig.size() - sig.off() != crypto_sign_BYTES) {
+            print("eddsa size wrong: {}\n", sig.size() - sig.off());
+            return false;
+        }
+        auto strt = d.name().data();
+        auto sz = sig.data() - strt; 
+        if (crypto_sign_verify_detached(sig.data() + sig.off(), strt, sz, pk.data()) != 0) {
+            print("eddsa verify failed\n");
+            return false;
+        }
+        return true;
+    }
+    bool validate(rData d, const dct_Cert& scert) override final {
+        return validate(d, *(scert.getContent()));
+    }
+    bool validate(rData d) override final {
+        if (m_keyCb == 0) throw std::runtime_error("SigMgrEdDSA validate needs signing key callback");
+        try {
+            return validate(d, m_keyCb(d));
+        } catch (...) {}
+        return false;
+    }
+
+    bool validate(const ndn::Data& data, keyRef pk) const {
         auto sig = data.getSignature()->getSignature();
         if((sig.size()) != crypto_sign_BYTES) return false;
         const auto& wf = data.wireEncode();

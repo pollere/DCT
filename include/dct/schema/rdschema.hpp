@@ -3,7 +3,7 @@
 /*
  * Read and validate a binary (compiled) schema
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -100,7 +100,7 @@ struct rdSchema {
     }
     void checkTLV(sTLV typ) {
         auto x = getByte();
-        if (sTLV(x) != typ) throw schema_error(format("wrong tlv {} not {}", x, typ));
+        if (x != uint8_t(typ)) throw schema_error(format("wrong tlv {} not {}", x, uint8_t(typ)));
     }
     int checkHDR(sTLV typ) {
         checkTLV(typ);

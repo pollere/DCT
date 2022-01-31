@@ -13,45 +13,6 @@
 FMT_BEGIN_NAMESPACE
 namespace detail {
 
-// An output iterator that counts the number of objects written to it and
-// discards them.
-class counting_iterator {
- private:
-  size_t count_;
-
- public:
-  using iterator_category = std::output_iterator_tag;
-  using difference_type = std::ptrdiff_t;
-  using pointer = void;
-  using reference = void;
-  using _Unchecked_type = counting_iterator;  // Mark iterator as checked.
-
-  struct value_type {
-    template <typename T> void operator=(const T&) {}
-  };
-
-  counting_iterator() : count_(0) {}
-
-  size_t count() const { return count_; }
-
-  counting_iterator& operator++() {
-    ++count_;
-    return *this;
-  }
-  counting_iterator operator++(int) {
-    auto it = *this;
-    ++*this;
-    return it;
-  }
-
-  friend counting_iterator operator+(counting_iterator it, difference_type n) {
-    it.count_ += static_cast<size_t>(n);
-    return it;
-  }
-
-  value_type operator*() const { return {}; }
-};
-
 template <typename Char, typename InputIt>
 inline counting_iterator copy_str(InputIt begin, InputIt end,
                                   counting_iterator it) {
@@ -156,7 +117,7 @@ struct is_compiled_string : std::is_base_of<compiled_string, S> {};
     std::string s = fmt::format(FMT_COMPILE("{}"), 42);
   \endrst
  */
-#ifdef __cpp_if_constexpr
+#if defined(__cpp_if_constexpr) && defined(__cpp_return_type_deduction)
 #  define FMT_COMPILE(s) \
     FMT_STRING_IMPL(s, fmt::detail::compiled_string, explicit)
 #else
@@ -179,7 +140,7 @@ const T& first(const T& value, const Tail&...) {
   return value;
 }
 
-#ifdef __cpp_if_constexpr
+#if defined(__cpp_if_constexpr) && defined(__cpp_return_type_deduction)
 template <typename... Args> struct type_list {};
 
 // Returns a reference to the argument at index N from [first, rest...].
@@ -190,7 +151,7 @@ constexpr const auto& get([[maybe_unused]] const T& first,
   if constexpr (N == 0)
     return first;
   else
-    return get<N - 1>(rest...);
+    return detail::get<N - 1>(rest...);
 }
 
 template <typename Char, typename... Args>
@@ -202,7 +163,8 @@ constexpr int get_arg_index_by_name(basic_string_view<Char> name,
 template <int N, typename> struct get_type_impl;
 
 template <int N, typename... Args> struct get_type_impl<N, type_list<Args...>> {
-  using type = remove_cvref_t<decltype(get<N>(std::declval<Args>()...))>;
+  using type =
+      remove_cvref_t<decltype(detail::get<N>(std::declval<Args>()...))>;
 };
 
 template <int N, typename T>
@@ -242,7 +204,7 @@ template <typename Char> struct code_unit {
 // This ensures that the argument type is convertible to `const T&`.
 template <typename T, int N, typename... Args>
 constexpr const T& get_arg_checked(const Args&... args) {
-  const auto& arg = get<N>(args...);
+  const auto& arg = detail::get<N>(args...);
   if constexpr (detail::is_named_arg<remove_cvref_t<decltype(arg)>>()) {
     return arg.value;
   } else {
@@ -399,7 +361,9 @@ template <typename Char> struct arg_id_handler {
     return 0;
   }
 
-  constexpr void on_error(const char* message) { FMT_THROW(format_error(message)); }
+  constexpr void on_error(const char* message) {
+    FMT_THROW(format_error(message));
+  }
 };
 
 template <typename Char> struct parse_arg_id_result {
@@ -527,12 +491,12 @@ constexpr auto compile(S format_str) {
     return result;
   }
 }
-#endif  // __cpp_if_constexpr
+#endif  // defined(__cpp_if_constexpr) && defined(__cpp_return_type_deduction)
 }  // namespace detail
 
 FMT_MODULE_EXPORT_BEGIN
 
-#ifdef __cpp_if_constexpr
+#if defined(__cpp_if_constexpr) && defined(__cpp_return_type_deduction)
 
 template <typename CompiledFormat, typename... Args,
           typename Char = typename CompiledFormat::char_type,

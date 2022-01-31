@@ -3,7 +3,7 @@
 /*
  * RFC7693 Signature Manager
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -65,32 +65,23 @@ struct SigMgrRFC7693 final : SigMgr {
         dataWF = data.wireEncode();
         return true;
     }
-    /*
-     * ndn::validator has a complex pattern of handing off to ValidatorState, etc
-     * Here just return true if success, false if failure (maybe should log the reason)
-     */
-     bool validate(const ndn::Data& data) override final {
-        //get the Signed Portion of Data from wire format
-        auto dataWF = data.wireEncode();
-        //get its RFC7693 hash
-        uint8_t dataHash[crypto_generichash_BYTES];
-        crypto_generichash(dataHash, crypto_generichash_BYTES,
-                           dataWF.signedBuf(), dataWF.signedSize(), NULL, 0);
-        //location of Signature size in bytes (followed by Signature Value)
-        const uint8_t* sigVal = dataWF.buf()+dataWF.getSignedPortionEndOffset()+1;
-        if((*sigVal) != crypto_generichash_BYTES) {
-            //failureCB(data, "SigMgrRFC7693: wrong size Signature Value");
+    bool validate(rData d) override final {
+        //get the Signed Portion of the Data
+        auto sig = d.signature();
+        if (sig.size() - sig.off() != crypto_generichash_BYTES) {
+            //print("rfc7693 size wrong: {}\n", sig.size() - sig.off());
             return false;
         }
-        for(auto i=0u; i<crypto_generichash_BYTES; ++i) {
-            if(dataHash[i] != *(++sigVal)) {
-                //failureCB(data, "Signature Value does not match hash");
-                return false;
-            }
-        }
+        auto strt = d.name().data();
+        auto sz = sig.data() - strt;
+        //get its RFC7693 hash
+        std::array<uint8_t, crypto_generichash_BYTES> dataHash;
+        crypto_generichash(dataHash.data(), dataHash.size(), strt, sz, NULL, 0);
+        if (std::memcmp(sig.data() + sig.off(), dataHash.data(), dataHash.size()) != 0) return false;
         return true;
     }
-    bool validate(const ndn::Data& data, const dct_Cert&) override final { return validate(data); }
+    bool validate(const ndn::Data& d) override final { return validate(rData(d)); }
+    bool validate(const ndn::Data& d, const dct_Cert&) override final { return validate(rData(d)); }
 
     bool needsKey() const noexcept override final { return 0; };
 };

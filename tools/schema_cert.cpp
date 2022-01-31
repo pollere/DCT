@@ -1,7 +1,7 @@
 /*
  * schema_cert <file> - embed a binary schema in a signed cert
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2021-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by

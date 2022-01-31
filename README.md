@@ -1,6 +1,10 @@
-# Data-Centric Toolkit
+# Data-centric Communications Toolkit (DCT)
 
-This repository contains Pollere's **evolving** work on tools to enable data-centric applications (with a focus on "edge" applications). DCT is an effort to make data/information-centric applications easier to write and secure. DCT reflects Pollere's needs and will update with our needs but the intention is a toolkit for general use. The toolkit currently uses a version of the Named-Data Networking Forwarder (NFD) with Pollere's patches, with a future goal of something less fragile and more broadcast media friendly.
+This repository contains Pollere's **evolving** work on tools, a library and proof-of-concept applications for defined-trust data-centric communications. DCT grew out of our own work so reflects Pollere's needs but we believe the toolkit may prove useful to others. The architecture is derived from Named-Data Networking (NDN) but is being developed for Operational Technologies, like IoT and DER, to run over IPv6 networks. This results in architectural differences from the NDN project ([named-data.net]()) that has concentrated on a Future Internet Architecture, but uses the same packet structure and Interest-Data semantics. DCT does **not** use an NDN Forwarder; Data movement is according to trust rules, expressed in verifiable trust schemas. DCT applications use a broadcast media-friendly Direct Face that implements the required NDN semantics and communicates using self-configuring UDP/IPv6 multicast. A forthcoming release will contain examples of connecting different network segments. DCT aims to reduce the amount of installed code needed to write applications and to enable and enforce defined-trust applications.
+
+DCT's target use is creating secure data-centric communication domains. Each communication domain is characterized by a structured set of trust rules and an API for a DCT-based transport to send and receive data for that domain of applications. A specific deployment of a communication domain creates a run-time trust zone and requires generating a trust anchor and all the certificates specified by the trust rules, including signing identities for use by each entity that will become part of the trust zone. All certificates, including a compact binary representation of the trust rules, are (ultimately) signed by the same trust anchor. An entity's signing certificate(s) with private keys are bundled with the public certificates of each cert's entire signing chain, including the trust anchor, and given to each enrolled entity, the private signing key(s) being securely configured. In operation, this ensures a trust zone for all the communications between the enrolled entities. More information is contained in subdirectory Readmes and the references included below.
+
+### Directories
 
 This repository is organized into directories:
 
@@ -11,28 +15,29 @@ This repository is organized into directories:
 - include: bespoke transport modules developed and used by Pollere to handle secure data-centric communications:
   
   - syncps: the pub-sub sync protocol that interfaces with the packet forwarder
-  
   - schema: the run-time library that makes use of the binary trust schema
-  
   - sigmgrs: supplies a range of signing and validation methods
-  
   - distributors: distribute certs and group keys and manage the associated collections
-
+  - face: the DirectFace implementation
+  
 - examples:
   
-  - mbps: bespoke transport that provides message-based publish/subscribe. The README in this directory may be useful in understanding how DCT's modules can be used.
+  - shims: contains example(s) of DCT "shims" that provide an API for applications of a usage domain.  This includes mbps.hpp which provides message-based publish/subscribe.
+  - hmIot, office:  The README in this directory may be useful in understanding how DCT's modules can be used.
 
-This version (version 3) adds signature managers employing libsodium and removes the EcDSA sigmgr that had been used with legacy NDN code. It also includes distributors for certificate chains and group keys, certificate and publication validation, and tools for creating identity bundles of certificates. This has led to some changes in how modules interface to one another. Bug reports are welcome.
+Note that this version (version 5) removes the use of NFD and the need for our previously required patches. It adds a new Direct Face and updates the group key distributor. Copyright notices have changed as Pollere, Inc. has converted to Pollere LLC.
+
+Bug reports are welcome.
 
 ### Installing and building the pieces
 
-All the modules are header-only C++ 'libraries' so the `DCT/include` tree has to be made available to programs using it via a `-I` c++ compiler flag or installed in a standard include path like `/usr/local/include`. The code requires c++20 and compiles with the current xcode compiler or clang-11 on MacOS and Linux and gcc-9 on Linux. It uses the new c++20 formatted output model which, unfortunately, is not yet in either compiler's standard library. To fill that gap we suggest using the excellent implementation available at https://fmt.dev/latest/index.html. This should be installed somewhere on your system and its `include/fmt` directory symlinked from `DCT/include`. (This distribution has a copy of the current 8.0.1 `fmt` dist in DCT/include/fmt; that should be removed and replaced with the symlink.) Patches available at https://github.com/pollere/NDNpatches will be needed.
+All the modules are header-only C++ 'libraries' so the `DCT/include` tree has to be made available to programs using it via a `-I` c++ compiler flag or installed in a standard include path like `/usr/local/include`. The code requires c++20 and compiles with the current xcode compiler or clang-11 on MacOS and Linux and gcc-9 on Linux. It uses the new c++20 formatted output model which, unfortunately, is not yet in either compiler's standard library. To fill that gap we suggest using the excellent implementation available at https://fmt.dev/latest/index.html. This should be installed somewhere on your system and its `include/fmt` directory symlinked from `DCT/include`. (This distribution has a copy of the current 8.0.1 `fmt` dist in DCT/include/fmt; that should be removed and replaced with the symlink.) 
 
 The included versec compiler is required to compile new schemas but pre-compiled schemas for the examples are available as a \*.scm file in the example source directory. To compile and run an example using the pre-compiled schema, for example, mbps:
 
-- (one time) Install `ndn-ind` (from  https://github.com/operantnetworks/ndn-ind) version b72bbf7e. As of July, 2021, ndn-ind doesn't contain the async-face needed by these tools. To add it, apply the Pollere patch patch.ndn-ind  immediately after cloning the Operant Networks ndn-ind github repo.
+- (one time) Install `ndn-ind` (from  https://github.com/operantnetworks/ndn-ind) version ee36771.
 - (one time) `cd DCT/tools && make` to build all the tools needed.
-- `cd DCT/examples/mbps`  then `make` to build the example. If the make is successful, follow the readme to create 'identity bundles' and run it.
+- `cd DCT/examples/hmIoT`  then `make` to build the example. If the make is successful, follow the readme to create 'identity bundles' and run it.
 
 ### References and related work
 
@@ -48,4 +53,4 @@ See also GitHub.com/pollere/DNMP-v2 for Pollere's first bespoke transport.
 
 ---
 
-Copyright (C) 2021 Pollere, Inc 
+Copyright (C) 2021-2022 Pollere LLC 

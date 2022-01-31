@@ -3,7 +3,7 @@
 /*
  * Signature Manager abstraction
  *
- * Copyright (C) 2019 Pollere, Inc.
+ * Copyright (C) 2019-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -42,6 +42,7 @@
 
 #include <ndn-ind/data.hpp>
 #include <ndn-ind/generic-signature.hpp>
+#include <dct/schema/rpacket.hpp>
 
 // this file is included by syncps.hpp so libsodium calls can be available
 extern "C" {
@@ -53,17 +54,19 @@ using ValidDataCb = std::function<void(ndn::Data&)>;
 using FailedDataCb = std::function<void(ndn::Data&, const std::string&)>;
 
 using keyVal = std::vector<uint8_t>;
+using keyRef = std::span<const uint8_t>;
 using SigInfo = std::vector<uint8_t>;
 using SigType = uint8_t;
 using dct_Cert = ndn::Data;
 
-using KeyCb = std::function<const std::vector<uint8_t>&(const ndn::Data&)>;
+//using KeyCb = std::function<const std::vector<uint8_t>&(const ndn::Data&)>;
+using KeyCb = std::function<keyRef(rData)>;
 
 struct SigMgr {
-    const SigType m_type;
+    SigType m_type;
     SigInfo m_sigInfo;
-    keyVal m_signingKey;
-    KeyCb m_keyCb;
+    keyVal m_signingKey{};
+    KeyCb m_keyCb{};
  
     // Signature types (must match equivalent NDN TLV when there is one)
     static constexpr SigType stSHA256 = 0;
@@ -73,12 +76,21 @@ struct SigMgr {
     static constexpr SigType stNULL = 10;
 
     SigMgr(SigType typ, SigInfo&& si = {}) : m_type{typ}, m_sigInfo{std::move(si)} {}
+    SigMgr(SigType typ, const SigInfo& si) : m_type{typ}, m_sigInfo{si} {}
+
+    bool sign(rData d) { return sign(d, m_sigInfo, m_signingKey); };
+    bool sign(rData d, const SigInfo& si) { return sign(d, si, m_signingKey); }
+    virtual bool sign(rData, const SigInfo&, const keyVal&) { return false; };
+    virtual bool validate(rData ) { return false; };
+    virtual bool validate(rData, const dct_Cert&) { return false; };
+    virtual bool validateDecrypt(rData d) { return validate(d); };
+
     bool sign(ndn::Data& d) { return sign(d, m_sigInfo, m_signingKey); };
     bool sign(ndn::Data& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
     virtual bool sign(ndn::Data&, const SigInfo&, const keyVal&) { return false; };
     virtual bool validate(const ndn::Data&) { return false; };
     virtual bool validate(const ndn::Data&, const dct_Cert&) { return false; };
-    virtual bool validateDecrypt(ndn::Data& d) { return validate(d); };
+
     virtual void addKey(const keyVal&, uint64_t = 0) {};
     virtual void updateSigningKey(const keyVal&, const dct_Cert&) {};
     virtual bool needsKey() const noexcept { return 1; };

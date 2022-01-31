@@ -3,7 +3,7 @@
 /*
  * Convert the schema from a DCTcert to its bSchema representation
  *
- * Copyright (C) 2020 Pollere, Inc.
+ * Copyright (C) 2020-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -32,10 +32,12 @@
 // return the binary schema associated with certificate 'cert'
 // It's assumed that the cert signature has been validated and
 // the cert name checked for conformance to schema conventions.
-bSchema certToSchema(const dctCert& cert) {
+bSchema certToSchema(const dctCert& cert, thumbPrint& tp) {
     const auto& pk = *cert.getContent();
     std::istringstream is(std::string((char*)pk.data(), pk.size()), std::ios::binary);
-    return rdSchema(is).read();
+    auto bs = rdSchema(is).read();
+    bs.schemaTP_.insert(bs.schemaTP_.begin(), tp.begin(), tp.end());
+    return bs;
 }
 
 #endif // CERT_TO_SCHEMA_HPP
