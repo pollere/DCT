@@ -32,13 +32,18 @@ mgrCmd: ctrlr & { topic: "command", loc: "confRm"|"hall" } <= mgrCert
 grdCmd: #pub & { topic: "command", loc: "all" } & ({ func: "light", args: "on"|"off" } |
         { func: "door", args: "lock"|"unlock" } | { func: "temp", args: "ooo" }) <= grdCert
 
-roleCert: _net/_role/_roleId/_keyinfo <= roomCert
-empCert: roleCert & { _role: "employee" }
-mgrCert: roleCert & { _role: "manager" }
-cntrlrCert: roleCert & { _role: "controller" }
-grdCert: roleCert & { _role: "guard" }
+roleCert: _net/_role/_roleId/_keyinfo
+empCert: roleCert & { _role: "employee" } <= roomCert
+mgrCert: roleCert & { _role: "manager" } <= roomCert
+grdCert: roleCert & { _role: "guard" } <= roomCert
+cntrlrCert: roleCert & { _role: "controller" } <= kmCap | roomCert
 
 roomCert: _net/"room"/_roomId/_keyinfo <= configCert
+
+// capability certs format (for capabilities granted to roles)
+capCert: _net/"CAP"/_capId/_capArg/_keyinfo <= roomCert
+// AEAD privacy requires key maker(s)
+kmCap:   capCert & { _capId: "KM" }  // allowed to be a key maker (capArg is priority)
 
 configCert: _net/"config"/_configId/_keyinfo <= netCert
 netCert:    _net/_keyinfo

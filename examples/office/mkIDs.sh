@@ -1,5 +1,5 @@
 #! /bin/bash
-# mkIDs schema - script to create id bundles needed to run an app with some mbps schema
+# mkIDs schema - script to create id bundles needed to run an 'office' app
 #  'schema' is the filename of the schema's .trust file
 #  run the script from a subdirectory you set up to keep ids (ex: id under office)
 PATH=../../../tools:$PATH
@@ -22,6 +22,7 @@ Bschema=$Schema.scm
 RootCert=$Schema.root
 SchemaCert=$Schema.schema
 ConfigCert=$Schema.config
+KMCap=
 
 schemaCompile -o $Bschema $1
 
@@ -29,6 +30,17 @@ schemaCompile -o $Bschema $1
 Pub=$(schema_info $Bschema);
 PubPrefix=$(schema_info $Bschema "#pubPrefix");
 PubValidator=$(schema_info -t $Bschema "#pubValidator");
+
+if [ $(schema_info -t $Bschema "#wireValidator") == AEAD ]; then
+    if [ -z $(schema_info -c $Bschema "KM") ]; then
+	echo
+	echo "- error: AEAD encryption requires entity(s) with a KM (KeyMaker) Capability"
+	echo "         but schema $1 doesn't have any."
+	exit 1;
+    fi;
+    # make the 'key maker' capability cert
+    KMCap=kmcap
+fi;
 
 make_cert -s $PubValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
@@ -39,7 +51,12 @@ make_cert -s $PubValidator -o $ConfigCert $PubPrefix/config/ITwiz $RootCert
 for nm in ${rooms[@]}; do
         make_cert -s $PubValidator -o $nm.cert $PubPrefix/room/$nm $ConfigCert
     if [ $nm != "all" ]; then
-        make_cert -s $PubValidator -o ctlr.$nm.cert $PubPrefix/controller/$nm $nm.cert
+        if [ -n $KMCap ]; then
+            make_cert -s $PubValidator -o $KMCap.$nm.cert $PubPrefix/CAP/KM/1 $nm.cert
+            make_cert -s $PubValidator -o ctlr.$nm.cert $PubPrefix/controller/$nm $KMCap.$nm.cert
+        else
+            make_cert -s $PubValidator -o ctlr.$nm.cert $PubPrefix/controller/$nm $nm.cert
+        fi
     fi
 done
 
@@ -61,7 +78,11 @@ done
 # make the room controller ID bundles
 for nm in ${rooms[@]}; do
     if [ $nm != "all" ]; then
-        make_bundle -v -o $nm.bundle $RootCert $SchemaCert $ConfigCert $nm.cert +ctlr.$nm.cert
+        if [ -n $KMCap ]; then
+            make_bundle -v -o $nm.bundle $RootCert $SchemaCert $ConfigCert $nm.cert $KMCap.$nm.cert +ctlr.$nm.cert
+        else
+            make_bundle -v -o $nm.bundle $RootCert $SchemaCert $ConfigCert $nm.cert +ctlr.$nm.cert
+        fi
     fi
 done
 

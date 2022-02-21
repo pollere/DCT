@@ -17,12 +17,12 @@ ifeq ($(shell uname -s),Darwin)
 CXX=clang++
 # we can't fix boost warnings so suppress them
 CXXFLAGS += --system-header-prefix=boost/
-LIBS += -lboost_iostreams-mt -llog4cxx -lsodium -lcrypto
+LIBS += -llog4cxx -lsodium -lcrypto
 JUNK += $(addsuffix .dSYM,$(BINS))
 else
 # ubuntu packages are compiled with gcc and its sanitizer doesn't cooperate with clang's
 CXX=c++
-LIBS += -lboost_iostreams -llog4cxx -lpthread -lsodium -lcrypto
+LIBS += -llog4cxx -lpthread -lsodium -lcrypto
 endif
 
 #all: $(BINS)

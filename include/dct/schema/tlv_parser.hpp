@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -34,6 +34,7 @@ using runtime_error = std::runtime_error;
 
 // routines for parsing NDN tlv blocks
 struct tlvParser {
+    static constexpr uint8_t extra_bytes_code{253};
     using Blk = std::span<const uint8_t>;
     Blk m_blk{};
     size_t m_off{}; 
@@ -45,6 +46,15 @@ struct tlvParser {
     constexpr auto off() const noexcept { return m_off; }
 
     constexpr auto eof() const noexcept { return off() >= size(); }
+
+    constexpr auto len() const noexcept { return size() - off(); }
+
+    constexpr size_t typ() const {
+        auto b = data()[0];
+        if (b < extra_bytes_code) return b;
+        if (b > extra_bytes_code) throw runtime_error("block type too large");
+        return (data()[1] << 8) | data()[2];
+    }
 
     constexpr Blk subspan(size_t off, size_t cnt = std::dynamic_extent) const { return m_blk.subspan(off, cnt); }
 
@@ -97,7 +107,6 @@ struct tlvParser {
     // decode the variable length 'lenth' field of the TLV. 'off' will end up
     // at the octet following the length (start of the block's content).
     size_t blkLen() {
-        static constexpr uint8_t extra_bytes_code{253};
         auto c = nextByte();
         if (c < extra_bytes_code) return c;
         if (c > extra_bytes_code) throw runtime_error("tlv length >64k");
@@ -114,7 +123,8 @@ struct tlvParser {
     auto nextBlk() {
         if (eof()) return tlvParser{Blk{},0U};
 
-        auto strt = m_off++; // remember start & skip over type
+        auto strt = m_off;  // remember start
+        blkLen();           // skip over type
         auto len = blkLen();
         if (m_off + len > m_blk.size()) throw runtime_error("nested tlv block larger than parent");
         auto off = m_off - strt; // new block's tlv hdr size

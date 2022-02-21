@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -25,7 +25,6 @@
 
 #include <compare>
 #include <cstring>
-#include <map>
 
 #include "tlv_parser.hpp"
 
@@ -72,12 +71,13 @@ struct rName : tlvParser {
         }
 
         // 'true' if this prefix is a prefix of 'p'
-        bool isPrefix(const rPrefix& p) const {
+        constexpr bool isPrefix(const rPrefix& p) const {
             auto tsz = size();
             auto psz = p.size();
             if (psz < tsz) return false;
             return std::memcmp(data(), p.data(), tsz) == 0;
         }
+        bool isPrefix(const rName& n) const { return isPrefix(rPrefix{n}); }
     };
 
     auto operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
@@ -210,17 +210,46 @@ struct rData : tlvParser {
     }
 };
 
-template<> struct fmt::formatter<rName>: fmt::dynamic_formatter<> {
+struct crName : rName {
+    std::vector<uint8_t> v_;    // backing store for name
+    crName(const ndn::Name& n) : rName{*n.wireEncode()}, v_{*n.wireEncode()} { m_blk = Blk{v_.data(), v_.size()}; }
+};
+
+struct crPrefix : rPrefix {
+    std::vector<uint8_t> v_;    // backing store for name
+    crPrefix(const ndn::Name& n) : v_{*n.wireEncode()} {
+        // skip over the (variable length) type and value
+        m_blk = Blk{v_.data(), v_.size()};
+        m_off = 1; //skip over type
+        auto len = blkLen();
+        if (len + m_off != size()) throw runtime_error(format("crPrefix: len {} != size {}", len + m_off, size()));
+        // the prefix object shouldn't include the TLV hdr
+        m_blk = Blk{v_.data()+m_off, v_.size()-m_off};
+        m_off = 0;
+    }
+};
+
+template<> struct fmt::formatter<rPrefix>: fmt::dynamic_formatter<> {
     template <typename FormatContext>
-    auto format(rName& n, FormatContext& ctx) -> decltype(ctx.out()) const {
+    auto format(const rPrefix& p, FormatContext& ctx) const -> decltype(ctx.out()) {
         auto np = [](auto s) -> bool { for (auto c : s) if (c < 0x20 || c >= 0x7f) return true; return false; };
         auto out = ctx.out();
-        for (auto blk : n) {
+        for (auto blk : rPrefix{p}) {
             auto s = blk.rest();
             // if there are any non-printing characters, format as hex. Otherwise format as a string.
             if (np(s)) {
+                //XXX look for 'tagged' timestamps (should change to TLV and get rid of this)
                 if (s.size() > 10) {
                     out = fmt::format_to(out, "/^{:02x}..", fmt::join(s.begin(), s.begin()+8, ""));
+                } else if (s.size() == 9 && s[0] == 0xfc && s[1] == 0) {
+                    auto us = ((uint64_t)s[2] << 48) | ((uint64_t)s[3] << 40) | ((uint64_t)s[4] << 32) |
+                              ((uint64_t)s[5] << 24) | ((uint64_t)s[6] << 16) | ((uint64_t)s[7] << 8) | s[8];
+                    auto ts = std::chrono::system_clock::time_point(std::chrono::microseconds(us));
+                    if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
+                        out = fmt::format_to(out, "/@{:%H:%M:}{:%S}", ts, ts.time_since_epoch());
+                    } else {
+                        out = fmt::format_to(out, "/{:%g-%m-%d@%R}", ts);
+                    }
                 } else {
                     out = fmt::format_to(out, "/^{:02x}", fmt::join(s, ""));
                 }
@@ -229,6 +258,13 @@ template<> struct fmt::formatter<rName>: fmt::dynamic_formatter<> {
             }
         }
         return out;
+    }
+};
+
+template<> struct fmt::formatter<rName>: formatter<rPrefix> {
+    template <typename FormatContext>
+    auto format(const rName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
+        return format_to(ctx.out(), "{}", rPrefix(n));
     }
 };
 

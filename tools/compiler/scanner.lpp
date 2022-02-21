@@ -1,0 +1,115 @@
+/*
+ * scanner.lpp - flex scanner for DCT trust schema language
+ *
+ * Copyright (C) 2019-2022 Pollere LLC.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, see <https://www.gnu.org/licenses/>.
+ *  You may contact Pollere LLC at info@pollere.net.
+ *
+ *  This is not intended as production code.
+ */
+%{ /* -*- C++ -*- */
+#include "driver.hpp"
+#include "semantics.hpp"
+#include "output.hpp"
+
+%}
+
+%option batch noyywrap noinput nounput nodefault
+%option noc++
+
+ID      [a-zA-Z_#][a-zA-Z0-9_]*
+WS      [ \t]
+
+%{
+  // Code run each time a pattern is matched.
+  #define YY_USER_ACTION  loc.columns (yyleng);
+%}
+
+%s LT
+
+%%
+%{
+  // shortcut to the location held by the driver.
+  yy::location& loc = drv.location();
+  // Code run each time yylex is called.
+  loc.step ();
+%}
+
+<LT>\n     { BEGIN(0); loc.lines(1); loc.step(); return drv.tokFromChar(','); }
+\n         { BEGIN(0); loc.lines(1); loc.step(); }
+{WS}+      { loc.step(); }
+\/\/.*     { loc.step(); }
+{ID}       { BEGIN(LT); return yy::parser::make_STR(drv.symtab().str2comp(yytext), loc); }
+\"[^\"\n]*\" {
+             BEGIN(LT);
+             yytext[yyleng-1] = 0;
+             return yy::parser::make_LIT(drv.symtab().str2comp(yytext+1), loc);
+           }
+"<="       { BEGIN(0); return yy::parser::make_LARROW(loc); }
+[=/|&:{(,] { BEGIN(0); return drv.tokFromChar(*yytext); }
+[})]       { BEGIN(LT); return drv.tokFromChar(*yytext); }
+<<EOF>>    { return yy::parser::make_END(loc); }
+.          {
+             /* let parser deal with unrecognized character */
+             return drv.tokFromChar(*yytext);
+           }
+%%
+
+int main(int argc, const char *argv[])
+{
+    static const char* copyright = "VerSec Schema Compiler Copyright (C) 2020 Pollere Inc.";
+    static const char* version = COMPILER_VERSION;
+    std::string file{};
+    yy::parser parse(drv_);
+
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] == std::string ("-d")) {
+            drv_.verbose_ = V_DEBUG;
+        } else if (argv[i] == std::string ("-o")) {
+            drv_.output(argv[++i]);
+        } else if (argv[i] == std::string ("-p")) {
+            parse.set_debug_level(true);
+        } else if (argv[i] == std::string ("-q")) {
+            drv_.verbose_ = 0;
+        } else if (argv[i] == std::string ("-s")) {
+            yy_flex_debug = true;
+        } else if (argv[i] == std::string ("-v")) {
+            ++drv_.verbose_;
+        } else {
+            file = argv[i];
+        }
+    }
+    if (drv_.verbose_ > 0) print("{}, {}\n", copyright, version);
+    if (file.empty() || file == "-") {
+        yyin = stdin;
+    } else if (!(yyin = fopen(file.c_str(), "r"))) {
+        std::cerr << "cannot open " << file << ": " << strerror(errno) << '\n';
+        exit(EXIT_FAILURE);
+    }
+    drv_.input(file);
+    drv_.location().initialize(&file);
+    parse();
+    fclose(yyin);
+    // end of input
+    try {
+        drv_.finish();
+        semantics().analyze();
+        schemaOut().construct();
+    } catch (const yy::parser::syntax_error& se) {
+        std::cerr << "compiler error: " << se.what() << '\n';
+        exit(1);
+    }
+    exit(0);
+}

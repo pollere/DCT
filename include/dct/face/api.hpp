@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  This is not intended as production code.
  */

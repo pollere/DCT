@@ -28,9 +28,26 @@ lockCommand: #iotPub & { target: "lock", topic: "command" } &
     { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
     { topicArgs:  "lock"|"unlock"|"report" } <= opCert
 
-roleCert:    _network/_role/_roleId/_keyinfo <= netCert
-opCert:  roleCert & { _role: "operator" }
-devCert: roleCert & { _role: "device" }
+roleCert:    _network/_role/_roleId/_keyinfo
+// There are different signing chains for opCert & devCerts.
+// "key makers" (authorized by the KM capability, kmCap) are
+// responsible for creating and distributing the nonce
+// symmetric encryption keys used ensure publication privacy
+// and thus provide a service to the entire trust zone that
+// needs to be highly available.
+// opCerts are used to sign commands issued by (transient) CLI
+// programs and transient programs shouldn't be key makers.
+// devCerts are used by devices that run continuously
+// (unless they're battery powered) thus make better
+// keymaker candidates. (The zone configurer decides at
+// device enrollment whether any particular device is
+// a good key maker candidate.)
+opCert:  roleCert & { _role: "operator" } <= netCert
+devCert: roleCert & { _role: "device" } <= netCert|kmCap
+
+// capability certs (capabilities granted to roles)
+capCert: _network/"CAP"/_capId/_capArg/_keyinfo <= netCert
+kmCap:   capCert & { _capId: "KM" }  // allowed to be a key maker (capArg is priority)
 
 netCert: _network/_keyinfo
 

@@ -3,7 +3,7 @@
 /*
  * fileToVec - read the contents of a file into a vector
  *
- * Copyright (C) 2021 Pollere, Inc.
+ * Copyright (C) 2021 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -33,14 +33,15 @@ static auto fileToVec(std::string_view fname) {
     // XXX "error: 'basic_ifstream' is unavailable: introduced in macOS 10.15"
     std::string f{fname};
     std::ifstream is(f, std::ios::binary|std::ios::ate);
+    if (! is) throw std::runtime_error(format("can't open file {}", fname));
     auto sz = is.tellg();
     if (sz < 32 || sz > 4096) {
-        throw std::runtime_error(format("- error: {} file size unreasonable ({} bytes)\n", fname, sz));
+        throw std::runtime_error(format("{} file size unreasonable ({} bytes)\n", fname, sz));
     }
     is.seekg(0);
     std::vector<uint8_t> buf(sz);
     if (! is.read((char*)buf.data(), buf.size())) {
-        throw std::runtime_error(format("- error: couldn't read file {}\n", fname));
+        throw std::runtime_error(format("couldn't read file {}\n", fname));
     }
     is.close();
     return buf;

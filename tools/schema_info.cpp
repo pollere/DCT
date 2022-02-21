@@ -15,7 +15,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -33,18 +33,23 @@
 
 
 void usage(const char** argv) {
-    print("- usage: {} [-t] bschema [pubname]\n", argv[0]);
+    print("- usage: {} [-c] [-t] bschema [pubname]\n", argv[0]);
     exit(1);
 }
 
 int main(int argc, const char* argv[]) {
     bool trim = false;
-    std::string_view pub = "pub0";
+    bool chkcap = false;
+    const char* pub = "pub0";
 
     if (argc < 2) usage(argv);
 
     const char** ap = argv + 1;
     const char** ape = argv + argc;
+    if (ap < ape && std::string_view(*ap) == "-c") {
+        chkcap = true;
+        ap++;
+    }
     if (ap < ape && std::string_view(*ap) == "-t") {
         trim = true;
         ap++;
@@ -59,15 +64,23 @@ int main(int argc, const char* argv[]) {
         rdSchema rs(is);
         bSchema bs{rs.read()};
 
+        if (chkcap) {
+            auto i = bs.matchesAny(bs.pubVal("#pubPrefix") + "/CAP/" + pub + "/_/KEY/_/dct/_");
+            if (i >= 0) print("{}\n", i);
+            exit(0);
+        }
         std::string val{};
-        if (pub == "pub0") {
+        if (std::string_view(pub) == "pub0") {
             val = bs.pubName(0);
         } else {
             val = bs.pubVal(pub);
         }
         if (trim) val = val.substr(1);
         print("{}\n", val);
-    } catch (const schema_error& se) { print("schema error: {}\n", se.what()); }
+    } catch (const schema_error& se) {
+        print("schema error: {}\n", se.what());
+        exit(1);
+    }
 
     exit(0);
 }

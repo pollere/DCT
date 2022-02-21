@@ -30,7 +30,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -114,11 +114,12 @@ static void msgPubr(mbps &cm) {
         cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
     }
 
-    if(Cnt >= nMsgs && nMsgs) {
+    if (Cnt >= nMsgs && nMsgs) {
         cm.oneTime(2*pubWait, [](){
                     print("{}:{}-{} published {} messages and exits\n", role, myId, myPID, Cnt);
                     exit(0);
                 });
+        return;
     }
 
     // operators send periodic messages, devices respond to incoming msgs
@@ -204,7 +205,6 @@ int main(int argc, char* argv[])
 
     if (role == "operator") {
         cm.subscribe(msgRecv);  // single callback for all messages
-        cm.keyMaker(0);         // operators may be transient so shouldn't be key makers
     } else {
         //here devices just subscribe to command topic
         cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance

@@ -15,7 +15,7 @@
  * (Note that an app can try to publish messages that are not permitted by the
  * trust schema and it will not be permitted to create the publication)
  *
- * Copyright (C) 2021-2 Pollere, Inc
+ * Copyright (C) 2021-2 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -29,7 +29,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -133,8 +133,6 @@ int main(int argc, char* argv[])
     for (const auto& f : std::array{"light"s, "door"s, "temp"s, "screen"s}) {
         cm.subscribe(f + "/status", statusRecv);
     }
-
-    cm.keyMaker(0); // phones are transient & shouldn't be key maker
 
     // Connect and pass in the handler
     print("{} {}'s phone sending to {}\n", role, id, loc);

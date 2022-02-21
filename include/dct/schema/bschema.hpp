@@ -18,7 +18,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -230,25 +230,78 @@ struct bSchema {
         if (this != &other) { _fixup_tok(other); }
         return *this;
     }
+
+    // routines to match /-separated multi-component names against schema cert names
+ 
+    // split a string into a vector of components
+    struct nameVec : std::vector<std::string_view> {
+        nameVec(std::string_view sv) {
+            if (sv.front() == '/') sv = sv.substr(1); // remove leading '/'
+            if (sv.size() == 0) return;
+            for (size_t i = sv.find('/'); (i = sv.find('/')) != sv.npos; sv = sv.substr(i + 1)) {
+                emplace_back(sv.substr(0, i));
+            }
+            emplace_back(sv);
+        }
+    };
+
+    // common code of 'matches' and 'startsWith'. caller must check that prefix.size() <= cert.size().
+    bool matchesPrefix(const nameVec& nv, const bName& prefix) const noexcept {
+        const auto ntok = tok_.size();
+        for (auto n = prefix.size(), i=0ul; i < n; i++) {
+            if (prefix[i] < ntok && nv[i] != tok_[prefix[i]]) return false;
+        }
+        return true;
+    }
+
+    // check if 'cert' matchs schema name 'bcert'
+    bool matches(std::string_view cert, const bName& bcert) const noexcept {
+        nameVec nv{cert};
+        if (nv.size() != bcert.size()) return false;
+        return matchesPrefix(nv, bcert);
+    }
+
+    // check if 'cert' starts with 'prefix'
+    bool startsWith(std::string_view cert, const bName& prefix) const noexcept {
+        nameVec nv{cert};
+        if (nv.size() < prefix.size()) return false;
+        return matchesPrefix(nv, prefix);
+    }
+
+    // check if 'cert' matchs schema cert at index 'sc'
+    bool matches(std::string_view cert, size_t idx) const noexcept {
+        if (idx >= cert_.size()) return false;
+        return matches(cert,  cert_[idx]);
+    }
+
+    // check if 'cert' matchs any schema cert except the root cert
+    int matchesAny(std::string_view cert) const noexcept {
+        if (cert_.size() <= 1) return -1;
+        for (int n = cert_.size() - 1, i=0; i < n; i++) if (matches(cert,  i)) return i;
+        return -1;
+    }
 };
 
 } //namespace bschema
 
 template<>
 struct fmt::formatter<bschema::corItem>: fmt::dynamic_formatter<> {
-    auto format(const bschema::corItem& v, format_context& ctx) -> decltype(ctx.out()) const {
+    template <typename FormatContext>
+    auto format(const bschema::corItem& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return fmt::format_to(ctx.out(), "{}.{}={}.{}", v.ct1, v.co1, v.ct2, v.co2);
     }
 };
 template<>
 struct fmt::formatter<bschema::tDiscrim>: fmt::dynamic_formatter<> {
-    auto format(const bschema::tDiscrim& v, format_context& ctx) -> decltype(ctx.out()) const {
+    template <typename FormatContext>
+    auto format(const bschema::tDiscrim& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return fmt::format_to(ctx.out(), "(chns#{}, tmpl={}, comp={}, vals={}, cor={})", v.cbm, v.tmpl, v.disc, v.vl, v.cor);
     }
 };
 template<>
 struct fmt::formatter<bschema::tPub>: fmt::dynamic_formatter<> {
-    auto format(const bschema::tPub& v, format_context& ctx) -> decltype(ctx.out()) const {
+    template <typename FormatContext>
+    auto format(const bschema::tPub& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return fmt::format_to(ctx.out(), "(par#{:x}, disc#{:x}, tok={}, tags={})", v.par, v.d, v.pub, v.tag);
     }
 };

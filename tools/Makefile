@@ -6,12 +6,8 @@ ifeq ($(shell uname -s),Linux)
 #CXX = clang++
 CXX = c++
 #CXXFLAGS += -fno-omit-frame-pointer
-BISON = bison
-FLEX = flex
 else
 CXX = clang++
-BISON = /opt/local/bin/bison
-FLEX = /opt/local/bin/flex
 CXXFLAGS += -I/opt/local/include
 # we can't fix boost warnings so suppress them
 CXXFLAGS += --system-header-prefix=boost/
@@ -24,18 +20,13 @@ LIBS =  -lndn-ind -llog4cxx -lsodium -lcrypto
 
 .DEFAULT_GOAL = all
 
-TOOLS = schema_cert schema_info schema_dump make_cert make_bundle ls_bundle bld_dump
+TOOLS = schema_cert schema_info schema_dump make_cert make_bundle ls_bundle bld_dump schemaCompile
 TESTS = tst_encodeer tst_rpacket tst_validate
 
 all: $(TOOLS)
 
 test: $(TESTS)
 
-
-#obsolete: install schema into pib
-#schema_install: schema_install.cpp 
-#	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
-#	rm -rf $@.dSYM
 
 default_interface: default_interface.cpp 
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
@@ -85,6 +76,10 @@ bld_dump: bld_dump.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
 #	rm -rf $@.dSYM
 
+schemaCompile:
+	(cd compiler; make); mv compiler/schemaCompile .
+
 clean:
 	rm -rf *.dSYM
 	rm -f $(TOOLS) $(TESTS)
+	cd compiler; make clean

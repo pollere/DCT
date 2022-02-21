@@ -1,0 +1,117 @@
+/*
+ * parser.ypp - DCT trust schema parser (bison format)
+ *
+ * Copyright (C) 2019-2022 Pollere LLC.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, see <https://www.gnu.org/licenses/>.
+ *  You may contact Pollere LLC at info@pollere.net.
+ *
+ *  This is not intended as production code.
+ */
+%require "3.2"
+%language "c++"
+%locations
+%defines
+%define lr.type canonical-lr
+%define parse.trace
+%define parse.error verbose
+
+%define api.location.file "location.hpp"
+%define api.token.constructor
+%define api.value.type variant
+%define api.token.prefix {TOK_}
+
+%code requires {
+  #include <string>
+  #include <vector>
+  #include "names.hpp"
+  struct driver;
+}
+
+%param { driver& drv }
+
+%token <sComp> STR "string"
+%token <sComp> LIT "literal"
+%token END 0 "eof"
+%token LARROW "<="
+%token ':'
+%token ','
+%type <sName> call certs def expr field fields lit ref signingChain struct
+%type <sComp> tag
+
+%left '&'
+%left '|'
+%left '/'
+
+%code {
+  #include "driver.hpp"
+}
+
+%%
+
+input:   %empty
+       | input item ','
+       ;
+item:    def
+       | signingChain                   { drv.finishChain($1); }
+       | error                          { yyerrok; }
+       ;
+def:     STR ':' expr                   { $$ = drv.handleDef($1, $3); }
+       | STR ':' expr "<=" certs        { $$ = drv.handleDef($1, $3); drv.handleSigner($1, $5); }
+       | STR ':' expr '&' struct        { $$ = drv.handleDef($1, $3, $5); }
+       | STR ':' expr '&' struct "<=" certs { $$ = drv.handleDef($1, $3, $5); drv.handleSigner($1, $7); }
+       ;
+expr:    lit
+       | '/' lit                        { $$ = $2; }
+       | ref
+       | '/' ref                        { $$ = $2; }
+       | call
+       | expr '/' expr                  { $$ = drv.handleSlash($1, $3); }
+       | expr '|' expr                  { $$ = drv.handleOr($1, $3); }
+       | '(' expr ')'                   { $$ = $2; }
+       ;
+lit:     LIT                            { $$ = drv.handleLit($1); }
+       ;
+ref:     STR                            { $$ = drv.handleRef($1); }
+       ;
+call:   STR '(' ')'                     { $$ = drv.handleCall($1); }
+       ;
+struct: '{' fields '}'                  { $$ = $2; }
+struct: '{' fields ',' '}'              { $$ = $2; }
+       | struct '&' struct              { $$ = drv.handleUnify($1, $3); }
+       | struct '|' struct              { $$ = drv.handleResolve($1, $3); }
+       | '(' struct ')'                 { $$ = $2; }
+       ;
+fields:  field
+       | fields ',' field               { $$ = drv.handleStruct($1, $3); }
+       ;
+field:   tag ':' expr                   { $$ = drv.handleField($1, $3); }
+       ;
+tag:     STR
+       ;
+signingChain: STR                       { $$ = drv.handleCert($1); }
+       | signingChain "<=" STR          { $$ = drv.handleChain($1, $3); }
+       ;
+certs:   STR                            { $$ = drv.handleCert($1); }
+       | certs '|' STR                  { $$ = drv.handleChain($1, $3); }
+       ;
+
+%%
+
+void
+yy::parser::error (const location_type& l, const std::string& m)
+{
+    std::cerr << l << ": " << m << '\n';
+}
+

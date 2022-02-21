@@ -27,13 +27,6 @@
 #include <random>
 #include <unordered_map>
 
-#if __cplusplus >= 202002
-// XXX boost bug workaround: this should be defined for any c++17 or beyond compiler and is
-// *required* for c++20 or beyond since std::result_of is gone.
-// Broken in boost 1.77 and earlier
-#define BOOST_ASIO_HAS_STD_INVOKE_RESULT 1
-#endif
-
 #include <ndn-ind/util/logging.hpp>
 #include <ndn-ind/lite/util/crypto-lite.hpp>
 

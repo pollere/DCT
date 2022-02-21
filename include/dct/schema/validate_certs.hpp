@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -90,7 +90,7 @@ static inline int matchesChain(const bSchema& bs, const certStore& cs, const dct
 
 // check that schema 'bs' cert name component correspondences indexed by 'ci'
 // hold for vector of cert names 'cv'.
-static bool validateChainCors(const bSchema& bs, const certVec& cv, coridx ci) {
+static inline bool validateChainCors(const bSchema& bs, const certVec& cv, coridx ci) {
     for (const auto [n1, c1, n2, c2] : bs.cor_[ci]) {
         if (n1 > 0 && cv[n1-1][c1] != cv[n2-1][c2]) return false;
     }

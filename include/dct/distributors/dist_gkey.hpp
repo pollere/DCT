@@ -26,7 +26,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  dist_gkey is not intended as production code.
  */
@@ -35,7 +35,7 @@
 #include <functional>
 #include <utility>
 
-#include <dct/schema/dct_cert.hpp>
+#include <dct/schema/capability.hpp>
 #include <dct/schema/certstore.hpp>
 #include <dct/schema/tlv_encoder.hpp>
 #include <dct/schema/tlv_parser.hpp>
@@ -45,8 +45,8 @@
 
 using namespace std::literals::chrono_literals;
 
-struct DistGKey {    
-    using Publication = const syncps::Publication;
+struct DistGKey {
+    using Publication = syncps::Publication;
     using Name = syncps::Name;
     using connectedCb = std::function<void(bool)>;
 
@@ -73,6 +73,7 @@ struct DistGKey {
     const certStore& m_certs;
     addKeyCb m_newKeyCb;   // called when group key rcvd
     connectedCb m_connCb{[](auto) {}};
+    Cap::capChk m_kmCap;   // routine to check a signing chain for key maker capability
     log4cxx::LoggerPtr staticModuleLogger{log4cxx::Logger::getLogger("DistGKey")};
     thumbPrint m_tp{};
     keyVal m_pDecKey{};         // transformed pk used to encrypt group key
@@ -86,7 +87,6 @@ struct DistGKey {
     std::chrono::milliseconds m_electionDuration{100};
     uint32_t m_KMepoch{0};      // current election epoch
     int m_mayMakeKeys{0};       // >0 if this entity is a candidate key maker
-    bool m_keyMaker{false};     // true if this entity is current key maker
     bool m_init{true};          // key maker status unknown while in initialization
 
     DistGKey(const std::string& pPre, const Name& wPre, addKeyCb&& gkeyCb, const certStore& cs,
@@ -97,11 +97,12 @@ struct DistGKey {
              m_sync(wPre, m_syncSM.ref(), m_keySM.ref()),
              m_certs{cs},
              m_newKeyCb{std::move(gkeyCb)}, //called when a (new) group key arrives or is created
+             m_kmCap{Cap::checker("KM", pPre, cs)},
              m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
              m_keyLifetime(reKeyInterval + reKeyRandomize) {
         m_sync.syncInterestLifetime(70ms);
         m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
-        m_sync.getLifetimeCb([this](Publication& p) {
+        m_sync.getLifetimeCb([this](const Publication& p) {
             if (p.getName()[m_pubPrefix.size()].getValue()->front() == 'c') return m_electionDuration; // candidate
             return m_keyLifetime; // list pub and election result
         });
@@ -119,8 +120,11 @@ struct DistGKey {
                 return pOurs;
             });
         if (sodium_init() == -1) exit(EXIT_FAILURE);
-        // creates versions of signing keys for encrypt/decrypt and updates SigMgrs
+
+        // get our identity thumbprint, check if we're allowed to make keys,
+        // then set up our public and private signing keys.
         m_tp = m_certs.Chains()[0];
+        m_mayMakeKeys = m_kmCap(m_tp).first? 1 : 0;
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
     }
 
@@ -158,6 +162,12 @@ struct DistGKey {
      */
     void receiveGKeyList(syncps::Publication& p)
     {
+        if (m_mayMakeKeys > 0) return; // shouldn't happen: keyMaker unsubscribes to collection
+
+        if (! m_kmCap(dctCert::getKeyLoc(p)).first) {
+            _LOG_WARN("ignored keylist signed by unauthorized identity " << m_certs[p].getName());
+            return;
+        }
         const auto& n = p.getName();
         _LOG_INFO("receiveGKeyList receives publication " << n.toUri());
         if(n[-1].toTimestampMicroseconds() < m_curKeyCT) {
@@ -168,9 +178,6 @@ struct DistGKey {
         // epoch, wrongEpoch will cancel any in-progress election and update our epoch.
         auto epoch = n[-3].toNumber();
         if (wrongEpoch(epoch) && epoch != m_KMepoch) return;
-
-        // shouldn't happen: keyMaker unsubscribes to collection
-        if (m_keyMaker) return;
 
         // decode the Content
         uint64_t newCT{};
@@ -217,15 +224,15 @@ struct DistGKey {
     }
 
     /*
-     * setUp() is called from a connect() function in dct_model, typically
+     * setup() is called from a connect() function in dct_model, typically
      * after some initial signing certs have been exchanged so it's known
      * there are active peers. It is passed a callback, 'ccb', to be
      * invoked when a group key has been received (i.e., when this entity is
-     * able to encrypt/decrypt wirepacket content) and an indicator, 'keyMaker',
-     * controlling whether this entity is a candidate group key maker
-     * ('keyMaker <= 0' indicates it is not a candidate). Positive values influence
-     * the probability of this entity being elected with larger values giving
-     * higher priority.
+     * able to encrypt/decrypt wirepacket content). There may also be a
+     * kmCap capability cert in this entity's signing chain which allows
+     * it to participate in keyMaker elections.  The value of the
+     * capability influences the probability of this entity being elected
+     * with larger values giving higher priority.
      *
      * The keyMaker election happens via publications to topic m_kmPrefix. The
      * election is currently one-round & priority-based but will eventually follow
@@ -252,14 +259,13 @@ struct DistGKey {
      * are not the keyMaker.  To support (future) re-election on keyMaker failure,
      * the current epoch is remembered in m_kmEpoch.
      */
-    void setup(connectedCb&& ccb, int keyMaker = 0) {
-        _LOG_INFO("DistGKey setUp() mayMakeKeys = " << keyMaker);
+    void setup(connectedCb&& ccb) {
+        _LOG_INFO("DistGKey setUp() mayMakeKeys = " << m_mayMakeKeys);
         m_connCb = std::move(ccb);
-        m_mayMakeKeys = keyMaker;
         // subscribe to key collection and wait for a group key list
         m_sync.subscribeTo(m_pubPrefix, [this](auto p){ receiveGKeyList(p); });
         m_sync.subscribeTo(Name(m_kmPrefix).append("elec"), [this](auto p){ handleKMelec(p); });
-        if(keyMaker > 0 && m_mayMakeKeys > 0) joinKMelection();
+        if(m_mayMakeKeys > 0) joinKMelection();
     }
 
     /*** Following methods are used by candidate keymakers for the key maker election ***/
@@ -288,9 +294,8 @@ struct DistGKey {
         if (m_mayMakeKeys <= 0) return;
 
         ++m_KMepoch;
-        m_keyMaker = true;    //act as key generator
         m_sync.unsubscribe(m_pubPrefix);   //unless checking for conflicts
-        makeGKey();  //create a group key, publish it, callback parent with key
+        gkeyTimeout();  //create a group key, publish it, callback parent with key
         publishKM("elec");
         m_sync.syncInterestLifetime(std::chrono::milliseconds(6763));
         m_init = false;
@@ -302,12 +307,17 @@ struct DistGKey {
     // If peer has a larger priority or thumbprint we can't win the election which
     // we note by negating the value of m_mayMakeKeys.
     void handleKMcand(const syncps::Publication& p) {
-        if (m_mayMakeKeys < 0) return; // already know election is lost
+        if (m_mayMakeKeys <= 0) return; // already know election is lost
         const auto& n = p.getName();
         if (n.size() != m_kmPrefix.size() + 4) return; // bad name format
         if (wrongEpoch(n[-3].toNumber())) return;
 
-        auto pri = n[-2].toNumber();
+        auto [hasKM, capCert] = m_kmCap(dctCert::getKeyLoc(p));
+        if (! hasKM) {
+            _LOG_WARN("ignored candidate pub signed by unauthorized identity " << m_certs[p].getName());
+            return;
+        }
+        auto pri = 1; //XXX should extract from capCert
         if (std::cmp_greater(m_mayMakeKeys, pri)) return; // candidate loses
         if (std::cmp_greater(pri, m_mayMakeKeys) ||
                 dctCert::getKeyLoc(p) > m_tp) m_mayMakeKeys = -m_mayMakeKeys; // we lose
@@ -331,6 +341,10 @@ struct DistGKey {
         if (n.size() != m_kmPrefix.size() + 4) return; // bad name format
         auto epoch = n[-3].toNumber();
         if (m_KMepoch >= epoch) return; // ignore msg from earlier election
+        if (! m_kmCap(dctCert::getKeyLoc(p)).first) {
+            _LOG_WARN("ignored election pub signed by unauthorized identity " << m_certs[p].getName());
+            return;
+        }
         if (m_mayMakeKeys > 0) {
             _LOG_INFO("elected msg from peer while m_mayMakeKeys = " << m_mayMakeKeys);
             m_mayMakeKeys = -m_mayMakeKeys;
@@ -408,8 +422,14 @@ struct DistGKey {
         std::for_each(m_gkrList.begin(), m_gkrList.end(), [this](auto& gke) {
                 gke.second = encryptGKey(m_certs[gke.first].getContent()->data()); });
         publishKeyList();
-        m_sync.oneTime(m_reKeyInt, [this](){ makeGKey();});  //next re-keying event
         m_newKeyCb(m_curKey, m_curKeyCT);   // call back to parent with new key
+    }
+
+    // Periodically refresh the group key. This routine should only be called *once*
+    // since each call will result in an additional refresh cycle running.
+    void gkeyTimeout() {
+        makeGKey();
+        m_sync.oneTime(m_reKeyInt, [this](){ gkeyTimeout();});  //next re-keying event
     }
 
     /*
@@ -419,7 +439,7 @@ struct DistGKey {
      * this becomes the keyMaker, but don't try to publish.
      */
     void addGroupMem(const dctCert& c) {
-        if(!m_init && !m_keyMaker) return;
+        if (!m_init && m_mayMakeKeys <= 0) return;
 
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
         // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members. 
@@ -439,7 +459,11 @@ struct DistGKey {
     }
 
     // won't encrypt a group key for this thumbPrint in future
-    void removeGroupMem(thumbPrint& tp) { m_gkrList.erase(tp); }
+    // if reKey is set, change the group key now to exclude the removed member
+    void removeGroupMem(thumbPrint& tp, bool reKey = false) {
+        m_gkrList.erase(tp);
+        if (reKey) makeGKey();
+    }
 };
 
 #endif //DIST_GKEY_HPP

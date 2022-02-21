@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  This is not intended as production code.
  */
@@ -28,8 +28,10 @@
 // XXX boost bug workaround: this should be defined for any c++17 or beyond compiler and is
 // *required* for c++20 or beyond since std::result_of is gone.
 // Broken in boost 1.77 and earlier
+#if BOOST_ASIO_VERSION<102200
 #define BOOST_ASIO_HAS_STD_INVOKE_RESULT 1
 #include <boost/asio.hpp>
+#endif
 
 #include <dct/schema/rpacket.hpp>
 #include "default-if.hpp"
@@ -87,14 +89,14 @@ struct AsIO {
     void issueRead() {
         rsock_.async_receive_from(boost::asio::buffer(rcvbuf_), sender_,
                 [this](boost::system::error_code ec, std::size_t len) {
-                    if (ec) throw runtime_error(format("receive_from failed: ec {} len {}", ec, len));
+                    if (ec) throw runtime_error(format("receive_from failed: {} len {}", ec.message(), len));
                     rcb_(rcvbuf_.data(), len);
                     issueRead();
                 });
     }
 
     static void ehandler(const boost::system::error_code& ec, size_t len) {
-        if (ec.failed()) throw runtime_error(format("send_to failed: ec {} len {}", ec, len));
+        if (ec.failed()) throw runtime_error(format("send_to failed: {} len {}", ec.message(), len));
     }
 
     /*

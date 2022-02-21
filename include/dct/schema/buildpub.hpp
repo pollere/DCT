@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -50,13 +50,13 @@ using parItem = std::pair<std::string_view, paramVal>;
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
-template <>
+template<>
 struct fmt::formatter<paramVal>: fmt::dynamic_formatter<> {
-    auto format(const paramVal& v, format_context& ctx) -> decltype(ctx.out()) const {
+    template <typename FormatContext>
+    auto format(const paramVal& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return std::visit(overloaded {
             [&](const std::monostate&) { return fmt::format_to(ctx.out(), "(empty)"); },
-            [&](const timeVal& val) { return fmt::format_to(ctx.out(), "{:%H:%M:%S}", val); },
-            [&](const auto& val) { return fmt::dynamic_formatter<>::format(val, ctx); },
+            [&](const auto& val) { return fmt::format_to(ctx.out(), "{}", val); },
         }, v);
     }
 };
@@ -249,12 +249,13 @@ struct pubBldr {
     void printPubTemplates() {
         if constexpr (pbdebug) {
             if (parmbm_.any()) {
-                dprint("parameters: {:x} {{", parmbm_.to_ulong());
-                for (size_t t = 0; t < parmbm_.size(); t++) if (parmbm_[t]) print(" {}", bs_.tok_[tag_[t]]);
-                dprint(" }}\n");
+                dprint("parameters: ");
+                for (size_t t = 0; t < parmbm_.size(); t++) if (parmbm_[t]) print(" {}({})", bs_.tok_[tag_[t]], t);
+                dprint("\n");
             }
             for (const auto& pt : pt_) {
-                dprint(" {}\t", formatName(pt.tmplt_));
+                auto n = formatName(pt.tmplt_);
+                ((n.size()+1) & 7) > 4? dprint(" {}   \t", n) : dprint(" {}\t", n);
                 if (pt.dpar_ >= bs_.tok_.size()) {
                     // template accepts all parameters
                     dprint("*");

@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -42,11 +42,11 @@ using chainAddCb = std::function<void(const dctCert&)>;
 
 struct certStore {
     std::unordered_map<thumbPrint,dctCert> certs_{}; // validated certs
-    std::multimap<certName,thumbPrint> certnames_{}; // name-to-validated cert(s)
     std::unordered_map<thumbPrint,keyVal> key_{};    // cert-to-key (for signing certs)
     certChain chains_{}; // array of signing chain heads (thumbprints of signing certs)
     certAddCb addCb_{[](const dctCert&){}};          // called when a cert is added
     chainAddCb chainAddCb_{[](const dctCert&){}};    // called when a new signing chain is added
+    static constexpr thumbPrint ztp_{};              // self-signed cert's thumbprint
 
     void dumpcerts() const {
         print("Cert Dump\n");
@@ -90,7 +90,6 @@ struct certStore {
     auto finishAdd(auto it) {
         if (it.second) {
             const auto& [tp, cert] = *it.first;
-            certnames_.emplace(cert.getName(), tp);
             addCb_(cert);
         }
         return it;
@@ -114,15 +113,34 @@ struct certStore {
         return it;
     }
 
+    struct chainIter {
+        const thumbPrint* tp_;
+        const certStore& cs_;
+
+        chainIter(const thumbPrint& tp, const certStore& cs) : tp_{&tp}, cs_{cs} {}
+        constexpr bool operator!=(const thumbPrint& tp) const { return *tp_ != tp; }
+        constexpr void operator++() const { }
+        const auto& operator*() {
+            const auto& c = cs_[*tp_];
+            tp_ = &c.getKeyLoc();
+            return c;
+        }
+        constexpr auto& begin() const { return *this; }
+        constexpr auto& end() const { return ztp_; }
+    };
+
+    // for the signing chain starting with 'tp', return the first element that satisfies 'pred'
+    template<typename Pred>
+    auto chainMatch(const thumbPrint& tp, Pred&& pred) const {
+        for (const auto& cert: chainIter(tp, *this)) if (rData c{cert}; pred(c)) return std::pair{true, c};
+        return std::pair{false, rData{}};
+    }
+
     // construct a vector of the names of each cert in cert's signing chain.
     certVec chainNames(const dctCert& cert) const {
         certVec cv{};
-        const auto* c = &cert;
-        cv.emplace_back(c->getName());
-        for (const auto* tp = &c->getKeyLoc(); !dctCert::selfSigned(*tp); tp = &c->getKeyLoc()) {
-            c = &get(*tp);
-            cv.emplace_back(c->getName());
-        }
+        cv.emplace_back(cert.getName());
+        for (const auto& c: chainIter(cert.getKeyLoc(),*this)) cv.emplace_back(c.getName());
         return cv;
     }
 
@@ -130,10 +148,8 @@ struct certStore {
 
     // return the trust anchor thumbprint of signing chain 'idx'.
     const auto& trustAnchorTP(size_t idx) const {
-        static const thumbPrint ztp{};
-
         if (chains_.empty()) throw schema_error(format("trustAnchorTP: signing chain {} doesn't exist", idx));
-        const auto* ltp = &ztp;;
+        const auto* ltp = &ztp_;
         for (const auto* tp = &chains_[idx]; !dctCert::selfSigned(*tp); tp = &get(*tp).getKeyLoc()) { ltp = tp; }
         return *ltp;
     }
@@ -143,44 +159,6 @@ struct certStore {
         chainAddCb_(cert);
     }
     const auto& Chains() const { return chains_; }
-    //auto& Chains(const certChain& chain) { chains_ = chain; return *this; }
-    //auto& Chains(certChain&& chain) { chains_ = std::move(chain); return *this; }
-
-
-    // routines to return the *names* of validated certs matching some predicate
-    template<class Pred>
-    certVec copy_if(Pred pred) const {
-        certVec cv{};
-        for (const auto& [n, tp] : certnames_) if (pred(n)) cv.emplace_back(n);
-        return cv;
-    }
-    certVec ends_with(const certName& substr) const {
-        return copy_if([substr](auto c){ return c.getSubName(-substr.size()) == substr; });
-    }
-    certVec starts_with(const certName& substr) const {
-        return copy_if([substr](auto c){ return c.getPrefix(substr.size()) == substr; });
-    }
-    certVec match(const certName& substr) const {
-        return copy_if([substr](auto c){
-                for (int i = 0, n = c.size() - substr.size(); i < n; i++) {
-                    if (c.getSubName(i, substr.size()) == substr) return true; 
-                }
-                return false;
-            });
-    }
-
-    //default just calls the start callback with true (e.g., okay to start)
-    virtual void start(std::function<void(bool)>&& scb) { scb(true); }
 };
-
-static inline certVec match(const certVec& in, const certName& substr) {
-    certVec cv{};
-    for (const auto& c : in) {
-        for (int i = 0, n = c.size() - substr.size(); i < n; i++) {
-            if (c.getSubName(i, substr.size()) == substr) { cv.emplace_back(c); break; }
-        }
-    }
-    return cv;
-}
 
 #endif // CERTSTORE_HPP

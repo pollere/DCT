@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -98,18 +98,19 @@ struct DCTmodel {
     void checkPendingCerts(const dctCert& cert, const thumbPrint& tp) {
         auto [b, e] = pending_.equal_range(tp);
         if (b == e) return;
+        std::vector<dctCert> pv{};
         for (auto i = b; i != e; ++i) {
-            auto& p = i->second;
-            if (pubSigMgr().validate(p, cert)) addCert(p);
+            if (pubSigMgr().validate(i->second, cert)) pv.emplace_back(std::move(i->second));
         }
         pending_.erase(tp);
+        for (auto p : pv) addCert(p);
     }
 
     // Cryptographically and structurally validate a cert before adding it to the
     // cert store. Since certs can arrive in any order, a small number of certs
     // are held pending their signing cert's arrival.
     void addCert(const dctCert& cert) {
-        const auto tp = cert.computeThumbPrint();
+        const auto tp = dctCert::computeThumbPrint(cert);
         if (cs_.contains(tp)) return;
         // check if cert is consistent with the schema
         try {
@@ -176,6 +177,10 @@ struct DCTmodel {
         // pub sync session is started after distributor(s) have completed their setup
         m_sync.autoStart(false);
         if(wsm_.ref().type() == SigMgr::stAEAD) {
+            if (matchesAny(bs_, pubPrefix() + "/CAP/KM/_/KEY/_/dct/_") < 0) {
+                // schema doesn't contain a "KeyMaker" capability cert so AEAD won't work
+                throw schema_error("AEAD requires that some entity(s) have KeyMaker capability");
+            }
             m_gkd = new DistGKey(pubPrefix(), wirePrefix().append("keys"),
                              [this](auto& gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
         }
@@ -263,16 +268,14 @@ struct DCTmodel {
     auto defaults(Rest&&... rest) { return bld_.defaults(std::forward<Rest>(rest)...); }
 
     // set start callback for shims that have a separate connect/start like mbps
-    void start(connectedCb&& cb, bool km = true) {
+    void start(connectedCb&& cb) {
         if(! m_gkd) {
             m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
             return;
         }
-        // 2nd argument to gkd.setup is whether this instance can be a keymaker.
-        // (note: this will be settable via trust schema in future)
-        m_ckd.setup([this, cb=std::move(cb), km](bool c) mutable {
+        m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                         if (!c) { cb(false); return; }
-                        m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); }, km);
+                        m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                     });
     }
 

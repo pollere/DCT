@@ -8,9 +8,8 @@
 #ifndef FMT_CORE_H_
 #define FMT_CORE_H_
 
-#include <cstddef>  // std::byte
 #include <cstdio>   // std::FILE
-#include <cstring>
+#include <cstring>  // std::strlen
 #include <iterator>
 #include <limits>
 #include <string>
@@ -365,12 +364,6 @@ FMT_NORETURN FMT_API void assert_fail(const char* file, int line,
            ? (void)0                                                          \
            : ::fmt::detail::assert_fail(__FILE__, __LINE__, (message)))
 #  endif
-#endif
-
-#ifdef __cpp_lib_byte
-using byte = std::byte;
-#else
-enum class byte : unsigned char {};
 #endif
 
 #if defined(FMT_USE_STRING_VIEW)
@@ -1023,7 +1016,11 @@ struct fallback_formatter {
 // Specifies if T has an enabled fallback_formatter specialization.
 template <typename T, typename Char>
 using has_fallback_formatter =
+#ifdef FMT_DEPRECATED_OSTREAM
     std::is_constructible<fallback_formatter<T, Char>>;
+#else
+    std::false_type;
+#endif
 
 struct view {};
 
@@ -1344,20 +1341,19 @@ template <typename Context> struct arg_mapper {
   }
   template <typename T,
             FMT_ENABLE_IF(
-                std::is_constructible<basic_string_view<char_type>, T>::value &&
+                std::is_convertible<T, basic_string_view<char_type>>::value &&
                 !is_string<T>::value && !has_formatter<T, Context>::value &&
                 !has_fallback_formatter<T, char_type>::value)>
   FMT_CONSTEXPR FMT_INLINE auto map(const T& val)
       -> basic_string_view<char_type> {
     return basic_string_view<char_type>(val);
   }
-  template <
-      typename T,
-      FMT_ENABLE_IF(
-          std::is_constructible<std_string_view<char_type>, T>::value &&
-          !std::is_constructible<basic_string_view<char_type>, T>::value &&
-          !is_string<T>::value && !has_formatter<T, Context>::value &&
-          !has_fallback_formatter<T, char_type>::value)>
+  template <typename T,
+            FMT_ENABLE_IF(
+                std::is_convertible<T, std_string_view<char_type>>::value &&
+                !std::is_convertible<T, basic_string_view<char_type>>::value &&
+                !is_string<T>::value && !has_formatter<T, Context>::value &&
+                !has_fallback_formatter<T, char_type>::value)>
   FMT_CONSTEXPR FMT_INLINE auto map(const T& val)
       -> basic_string_view<char_type> {
     return std_string_view<char_type>(val);
@@ -1429,18 +1425,14 @@ template <typename Context> struct arg_mapper {
     return map(format_as(val));
   }
 
-  FMT_CONSTEXPR FMT_INLINE auto map(detail::byte val) -> unsigned {
-    return map(static_cast<unsigned char>(val));
-  }
-
   template <typename T, typename U = remove_cvref_t<T>>
   struct formattable
       : bool_constant<has_const_formatter<U, Context>() ||
                       !std::is_const<remove_reference_t<T>>::value ||
                       has_fallback_formatter<U, char_type>::value> {};
 
-#if FMT_MSC_VER != 0 && FMT_MSC_VER < 1910
-  // Workaround a bug in MSVC.
+#if (FMT_MSC_VER != 0 && FMT_MSC_VER < 1910) || FMT_ICC_VERSION != 0
+  // Workaround a bug in MSVC and Intel (Issue 2746).
   template <typename T> FMT_CONSTEXPR FMT_INLINE auto do_map(T&& val) -> T& {
     return val;
   }

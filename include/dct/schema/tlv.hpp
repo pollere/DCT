@@ -5,7 +5,7 @@
  * (from NDN Packet Format Specification 0.3
  *  https://named-data.net/doc/NDN-packet-spec/current/types.html)
  *
- * Copyright (C) 2022 Pollere, Inc.
+ * Copyright (C) 2022 Pollere LLC.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net

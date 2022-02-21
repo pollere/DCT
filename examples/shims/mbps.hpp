@@ -17,7 +17,7 @@
  *
  *  You should have received a copy of the GNU General Public License along
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
- *  You may contact Pollere, Inc at info@pollere.net.
+ *  You may contact Pollere LLC at info@pollere.net.
  *
  *  This proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
@@ -91,7 +91,6 @@ struct mbps
     MsgInfo m_received{};   //received publications of a message
     MsgCache m_reassemble{}; //reassembly of received message segments
     Timer* m_timer;
-    int m_keyMaker{1};      // priority to be elected key maker (0 -> not key maker)
 
     mbps(std::string_view bootstrap) : m_pb(bootstrap), m_pubpre{m_pb.pubPrefix()}  { }
 
@@ -103,12 +102,6 @@ struct mbps
      * the app can extract what it needs to operate.
      */
     auto attribute(std::string_view v) const { return m_pb.pubVal("#chainInfo", v); }
-
-    /* true by default so app must set to false if the app has any reason it or its device
-     * can't or shouldn't serve as a potential group key manager. For example, for IoT, a
-     * device that sleeps or leaves the network (like a phone) would be a bad choice.
-     */
-    void keyMaker(int km) { m_keyMaker = km; }
 
     /*
      * Kicks off the set up necessary for an application to publish or receive
@@ -145,7 +138,7 @@ struct mbps
                     _LOG_INFO("mbps connect successfully initialized connection");
                     m_connectCb();
                 }
-            }, m_keyMaker);
+            });
     }
 
     /*
