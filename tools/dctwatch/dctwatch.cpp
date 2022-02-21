@@ -1,7 +1,7 @@
 /*
- * ndnwatch - real-time printing of multicast NDN packets
+ * dctwatch - real-time printing of multicast NDN packets
  *
- * ndnwatch passively listens to the default DCT network interface and prints
+ * dctwatch passively listens to the default DCT network interface and prints
  * the contents of each NDN packet it sees. There are two output formats,
  * 'compact' (default) and 'full' ('-f' flag). The compact format prints one
  * line packet descriptions like:
@@ -49,9 +49,9 @@
  * A non-flag argument is interpreted as an ECMAScript (ECMA-262) regular expression
  * filter on the printed format of the packet Name. For example:
  *
- *   ndnwatch pubs                  only prints packets for the "pubs" sync collection
- *   ndnwatch 'cert|keys'           prints packets for the cert or keys collections
- *   ndnwatch '\^3346962dd3a36377'  prints packets associated with a particular trust schema
+ *   dctwatch pubs                  only prints packets for the "pubs" sync collection
+ *   dctwatch 'cert|keys'           prints packets for the cert or keys collections
+ *   dctwatch '\^3346962dd3a36377'  prints packets associated with a particular trust schema
  *
  * (In the last example, note that the characters ^ $ \ . * + ? ( ) [ ] { } | are
  * meta-characters in ECMAScript REs and need to be escaped with \ to be matched.)

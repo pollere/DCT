@@ -1,5 +1,5 @@
 /*
- * NDN TLV dumper
+ * DCT TLV dumper
  *
  * Copyright (C) 2021-2 Pollere LLC
  *
