@@ -8,13 +8,13 @@ Current work has focused on relaying between different networks in order to exte
 
 One motivating case is pictured. A homeowner wants to gain access to their smart home from work, an internet cafe or perhaps from a second home. There must be a relay on each network. In the home, the relay needs one DeftT that is on the home wifi, part of that trust domain and in the same sync collection. The other DefT of the relay is connected through the Internet to a relay in another physical network. This connection is a unicast TCP or UDP connection. The other relay can be an application on the homeowner's phone which may not connect to a trust domain on its wifi network (e.g., the case of a work or cafe network). The home relay's externally facing DeftT can be using a limited subset of the house's trust schema for extra security.
 
-![relay.trustdomain](/Users/nichols/ActiveProjects/DCT/examples/relay/relay.trustdomain.png)
+![relay.trustdomain](relay.trustdomain.png)
 
 Relays have a DeftT for each subnet, each with its own trust (or identity) bundle. The shim or API for relays is a "pass-through" *ptps.hpp*. Relay DeftTs *may* have identical bundles or bundles that are subsets or that overlap in some way. Bundles may specify different cAdd validation methods (through sigmgrs). In the Basic Relay, Publications received on each DeftT are published to all other DeftTs. If the trust schemas are **not** identical, publications are validated against the trust schema in the DeftT before publication is attempted; otherwise the (re)validation before publication *may* be skipped. Certificates from each DeftT are relayed to the other DeftT's cert stores which test them against their trust schemas for possible storage and publication.
 
 Another motivating case is a hierarchical organization that wishes to isolate certain communications to the local or regional offices. All identities within the entire organization must have the same root of trust, but the trust schemas used at each location can be quite different, only overlapping in the Publications that relays should move between trust subdomains.
 
-![relay.hierTD](/Users/nichols/ActiveProjects/DCT/examples/relay/relay.hierTD.png)
+![relay.hierTD](relay.hierTD.png)
 
 Additional features and filtering can be added to customize the Basic Relay. Publication confirmation can be used to determine if a something has gone wrong with a particular DeftT's communications (e.g., the physical link) and produce alerts and/or failover. The pass-through shim currently only uses lack of publication confirmation for this, but approaches tied directly to hardware feedback are possible. Relays can filter publications on any available fields, using them to discard Publications or to limit publication to particular DeftTs. A relay can also *subscribe*() to some subset of the Publications on a particular DeftT. For cAdd privacy signatures (AEAD), a different group key is used on each DeftT's collection.
 
@@ -28,7 +28,7 @@ A few examples use the hmIot directory's applications with basicRelays and the f
 
 - The relays run the iote.trust schema which only passes Publications with target location  *frontdoor* and implements AEAD encryption.
 
-![relay.hmIotex](./relay.hmIotex.png)
+![relay.hmIotex](relay.hmIotex.png)
 
 Note that the subscribe line in *basicRelay.cpp* **may** be changed to:
 
@@ -78,7 +78,7 @@ To better understand relaying, these variants can be tried while monitoring comm
 
 Relays can also be used to create meshes that require no specific configuration (other than the initial identity bundle). An example of how this can be used is shown below where bluetooth devices contain sensors and gateway (GW) devices are placed so that all BT devices can reach at least one. GWs also have longer-range WiFi network interfaces that mobile tablets can use and that can ensure that sensor and tablet communications reach GW5 which has a unicast link to remote controller with data storage.
 
-![relaymesh](./relaymesh.jpg)
+![relaymesh](relaymesh.jpg)
 
 This directory also contains a simplified example where sensors (sens.cpp), assumed to use a short-range wireless media, periodically publish reports of their measurements and subscribe to commands. Relays have one DeftT that uses the same media as the sensors and another that uses a longer-range broadcast media which a controller (cntrl.cpp) also uses. The directory contains a trust schema for the sensor media, sensor.trust, and a trust schema for the longer-range media where relays are meshed, mesh.trust.
 
