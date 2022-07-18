@@ -14,7 +14,7 @@ for i in ${ids[@]}; do
 done
 echo
 
-./basicRelay -l " hmIoT/away.l.bundle,kmnimac.local:34567 hmIoT/away.e.bundle" &
+./basicRelay -l " hmIoT/away.l.bundle,<awayhostname>:34567 hmIoT/away.e.bundle" &
 echo -n " starting away basicRelay"
 sleep 1
 echo
