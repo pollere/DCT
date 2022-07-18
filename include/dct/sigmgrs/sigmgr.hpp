@@ -24,20 +24,22 @@
  */
 
 /*
- * Base class for signature managers. Provides a 'null' signer (no
- * signature added to data) and an accept-all validator). Both of
+ * Base class for signature managers. Provides a 'null' signer (no signing,
+ * provided for certs, and an accept-all validator). Both of
  * these methods should be overridden in derived classes.
  */
 
 /*
- * Five signature-managers and using SIGNER_TYPE:
+ * List of available signature-managers and SIGNER_TYPE:
  *  0x00 SHA256
  *  0x07 AEAD
  *  0x08 EdDSA
  *  0x09 RFC7693
  *  0x0a NULL
+ *  0x0b PPAEAD
+ *  0x0c PPSIGN
  * Note that NULL is used to bypass signing for dctCerts which are already
- * signed and should not be used otherwise.
+ * signed, does not appear in "wire" packets and should not be otherwise used.
  */
 
 #include <ndn-ind/data.hpp>
@@ -74,6 +76,8 @@ struct SigMgr {
     static constexpr SigType stEdDSA = 8;
     static constexpr SigType stRFC7693 = 9;
     static constexpr SigType stNULL = 10;
+    static constexpr SigType stPPAEAD = 11;
+    static constexpr SigType stPPSIGN = 12;
 
     SigMgr(SigType typ, SigInfo&& si = {}) : m_type{typ}, m_sigInfo{std::move(si)} {}
     SigMgr(SigType typ, const SigInfo& si) : m_type{typ}, m_sigInfo{si} {}
@@ -84,6 +88,7 @@ struct SigMgr {
     virtual bool validate(rData ) { return false; };
     virtual bool validate(rData, const dct_Cert&) { return false; };
     virtual bool validateDecrypt(rData d) { return validate(d); };
+    virtual bool validateDecrypt(rData d, const dct_Cert&) { return validate(d); };
 
     bool sign(ndn::Data& d) { return sign(d, m_sigInfo, m_signingKey); };
     bool sign(ndn::Data& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
@@ -92,6 +97,7 @@ struct SigMgr {
     virtual bool validate(const ndn::Data&, const dct_Cert&) { return false; };
 
     virtual void addKey(const keyVal&, uint64_t = 0) {};
+    virtual void addKey(const keyVal& pk, const keyVal&, uint64_t = 0) { addKey(pk, 0); };
     virtual void updateSigningKey(const keyVal&, const dct_Cert&) {};
     virtual bool needsKey() const noexcept { return 1; };
 

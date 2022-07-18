@@ -1,9 +1,9 @@
 /*
  * app1.cpp: command-line application to exercise mbps.hpp
  *
- * This is an application using mbps client. Messages packaged
- * in int8_t vectors are passed between application and client. To
- * publish a message, an optional list of arguments can also be
+ * This is an application using the mbps shim. Messages packaged
+ * in int8_t vectors are passed between application and DeftT via mbps.
+ * To publish a message, an optional list of arguments can also be
  * included along with an optional callback if message qos is
  * desired (here, confirmation that the message has been published).
  *
@@ -23,8 +23,8 @@
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
  *  You may contact Pollere LLC at info@pollere.net.
  *
- *  This DCT proof-of-concept example is not intended as production code.
- *  More information on DCT is available from info@pollere.net
+ *  This DeftT proof-of-concept example is not intended as production code.
+ *  More information on DeftT and DCT is available from info@pollere.net
  */
 
 #include <getopt.h>
@@ -33,7 +33,7 @@
 #include <iostream>
 #include <chrono>
 
-#include "../shims/mbps.hpp"
+#include <dct/shims/mbps.hpp>
 
 // handles command line
 static struct option opts[] = {
@@ -69,7 +69,7 @@ static std::string capability{"lock"};
 static std::string location{"all"};
 
 /*
- * msgPubr passes messages to publish to the mbps client. A simple lambda
+ * msgPubr passes messages to publish to mbps. A simple lambda
  * is used if "qos" is desired. A more complex callback (messageConfirmation)
  * is included in this file.
  */
@@ -115,7 +115,7 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
 /*
  * msgRecv handles a message received in subscription.
  * Used as callback passed to subscribe()
- * The mbps client  uses an argument list to pass any necssary data
+ * mbps uses an argument list to pass any necssary data
  * not carried in the message body
  *
  * Prints the message content
@@ -146,25 +146,20 @@ void messageConfirmation(bool s, uint32_t m)
     try {
             mesgBoard.at(m);
         } catch(const std::exception& e) {
-            _LOG_ERROR("exception " << e.what() <<
-                        "\nNo message on mesgBoard with received ID");
+            print("exception {}\nNo message on mesgBoard with received ID", e.what());
         }
-        _LOG_INFO(role << ":" << myId << "-" << myPID << ": " << " called back for message " << m);
-        if(s) {
-            _LOG_INFO(" published to collection");
-        } else {
+        if(!s) {
             //could put another attempt here or other logic
-            _LOG_INFO(" failed to reach collection");
+            print("{}:{} msg {} failed to reach collection\n", myId, myPID, m);
         }
         outstandingMsgs--;
         mesgBoard.erase(m);
-        _LOG_INFO(role << ":" << myId << "-" << myPID << ": has " << outstandingMsgs << " unconfirmed messages");
 }
 
 /*
  * Main() for the application to use.
  * First complete set up: parse input line, set up message to publish,
- * set up entity identifier. Then make the mbps client, connect,
+ * set up entity identifier. Then make the mbps DeftT, connect,
  * and run the context.
  */
 
@@ -172,7 +167,6 @@ static int debug = 0;
 
 int main(int argc, char* argv[])
 {
-    INIT_LOGGERS();
     // parse input line
     if (argc <= 1) {
                 help(argv[0]);
@@ -206,7 +200,7 @@ int main(int argc, char* argv[])
         exit(1);
     }
     myPID = std::to_string(getpid());        //process id useful for debugging
-    mbps cm(argv[optind]);     //Create the mbps client
+    mbps cm(argv[optind]);     //Create mbps
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
 
@@ -231,7 +225,7 @@ int main(int argc, char* argv[])
                  << e.what() << std::endl;
         exit(1);
     } catch (int conn_code) {
-        std::cerr << "main mbps client failed to connect with code "
+        std::cerr << "main mbps failed to connect with code "
                  << conn_code << std::endl;
         exit(1);
     } catch (...) {

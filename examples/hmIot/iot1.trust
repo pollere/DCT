@@ -41,16 +41,9 @@ netCert: _network/_keyinfo
 #pubPrefix:    _network
 #pubValidator: "EdDSA"
 
-// Prefix used at the syncps (NDN Interest/Data) level to sync
-// this collection.
-
-#wirePrefix: _ndnprefix & { _ndnprefix: "localnet" }
+// for cAdds
 #wireValidator: "EdDSA"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version
 _keyinfo: "KEY"/_/"dct"/_
-
-// Uses a Publication validator that requires certs. 
-// The wire prefix that the key distributor will use to synchronize these certs
-// is #wirePrefix/"cert". Normal publications use #wirePrefix/"pubs"

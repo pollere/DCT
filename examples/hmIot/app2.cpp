@@ -1,8 +1,8 @@
 /*
  * app2.cpp: command-line application to exercise mbps.hpp
  *
- * This is an application using mbps client. Message body is packaged
- * in int8_t vectors are passed between application and client. Parameters
+ * This is an application using the mbps shim. Message body is packaged
+ * in int8_t vectors are passed between application and mbps. Parameters
  * are passed to mpbs in an vector of pairs (msgParms) along with an optional
  * callback if message qos is desired (confirmation that the message has been published).
  * Parameters are passed from mbps to the application in a mbpsMsg structure that
@@ -44,11 +44,11 @@
 #include <iostream>
 #include <random>
 
-#include "../shims/mbps.hpp"
+#include <dct/shims/mbps.hpp>
 
 using namespace std::literals;
 
-static constexpr bool deliveryConfirmation = true; // get per-message delivery confirmation
+static constexpr bool deliveryConfirmation = false; // get per-message delivery confirmation
 
 // handles command line
 static struct option opts[] = {
@@ -78,14 +78,18 @@ static void help(const char* cname)
 /* Globals */
 static std::string myPID, myId, role;
 static std::chrono::microseconds pubWait = std::chrono::seconds(1);
+static decltype(std::chrono::system_clock::now().time_since_epoch()) lastSend;
 static int Cnt = 0;
 static int nMsgs = 10;
 static std::string capability{"lock"};
 static std::string location{"all"}; // target's location (for operators)
 static std::string myState{"unlocked"};       // simulated state (for devices)
 
+using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
+
 /*
- * msgPubr passes messages to publish to the mbps client. A simple lambda
+ * msgPubr passes messages to publish to the mbps. A simple lambda
  * is used if "qos" is desired. A more complex callback (messageConfirmation)
  * is included in the app1.cpp file.
  */
@@ -96,6 +100,7 @@ static void msgPubr(mbps &cm) {
     msgParms mp;
 
     if(role == "operator") {
+        lastSend = std::chrono::system_clock::now().time_since_epoch();
         std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
         mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",location},{"topicArgs", a}};
     } else {
@@ -103,12 +108,10 @@ static void msgPubr(mbps &cm) {
     }
     if constexpr (deliveryConfirmation) {
         cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
-                    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
                     auto now = std::chrono::system_clock::now();
                     auto dt = ticks(now - ts).count() / 1000.;
-                    print("{:%M:%S} {}:{}-{} #{} published and {} +{:.3} mS\n",
-                            ticks(ts.time_since_epoch()), role, myId, myPID, Cnt,
-                            delivered? "confirmed":"timed out", dt);
+                    print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
+                            tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
                     });
     } else {
         cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
@@ -131,7 +134,7 @@ static void msgPubr(mbps &cm) {
 /*
  * msgRecv handles a message received in subscription.
  * Used as callback passed to subscribe()
- * The message is opaque to the mbps client which uses
+ * The message is opaque to mbps which uses
  * a msgMsg to pass tag data (tags from trust schema)
  *
  * Prints the message content
@@ -140,28 +143,30 @@ static void msgPubr(mbps &cm) {
 
 void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
-    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-    auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - mt.time("mts")).count() / 1000.;
+    auto now = tp2d(std::chrono::system_clock::now());
+    auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
 
-    print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
-            ticks(now.time_since_epoch()), role, myId, myPID, dt, mt["target"],
-                mt["topic"], mt["trgtLoc"], mt["topicArgs"],
-                std::string(msgPayload.begin(), msgPayload.end()));
+    // actions can be conditional upon msgArgs and msgPayload
 
-    // further action can be conditional upon msgArgs and msgPayload
-
-    // devices set their 'state' from the incoming 'arg' value then immediately reply
     if (role == "device") {
+        // devices set their 'state' from the incoming 'arg' value then immediately reply
+        print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
+                now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
+                std::string(msgPayload.begin(), msgPayload.end()));
         myState = mt["topicArgs"] == "lock"? "locked":"unlocked";
         msgPubr(cm);
+    } else {
+        auto rtt = (now - std::chrono::duration_cast<ticks>(lastSend)).count() / 1000.;
+        print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit, {:.3}ms rtt): {} {}: {} {} | {}\n",
+                now, role, myId, myPID, dt, rtt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
+                std::string(msgPayload.begin(), msgPayload.end()));
     }
 }
 
 /*
  * Main() for the application to use.
  * First complete set up: parse input line, set up message to publish,
- * set up entity identifier. Then make the mbps client, connect, and run the context.
+ * set up entity identifier. Then make the mbps DeftT, connect, and run the context.
  */
 
 static int debug = 0;
@@ -169,7 +174,6 @@ static int debug = 0;
 int main(int argc, char* argv[])
 {
     std::srand(std::time(0));
-    INIT_LOGGERS();
     // parse input line
     for (int c;
         (c = getopt_long(argc, argv, ":c:dhl:n:w:", opts, nullptr)) != -1;) {
@@ -199,7 +203,7 @@ int main(int argc, char* argv[])
         exit(1);
     }
     myPID = std::to_string(getpid());
-    mbps cm(argv[optind]);     //Create the mbps client
+    mbps cm(argv[optind]);
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
 
@@ -219,7 +223,7 @@ int main(int argc, char* argv[])
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);
     } catch (int conn_code) {
-        std::cerr << "main mbps client failed to connect with code " << conn_code << std::endl;
+        std::cerr << "main mbps failed to connect with code " << conn_code << std::endl;
         exit(1);
     } catch (...) {
         std::cerr << "default exception";

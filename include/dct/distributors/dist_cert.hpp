@@ -45,7 +45,7 @@ using connectedCb = std::function<void(bool)>;
  * probably include "cert") and sets the pubprefix used for subscription in start().
  * Also passes in a call back for each new received signing cert.
  *
- * DistCert's m_sync uses the RFC7693 signature manager for packets.
+ * DistCert's m_sync uses the RFC7693 signature manager for cAdds.
  * Its pubs use a SigMgrNull since the Certificates are fully signed Publications
  * and signature validation happens in the parent certstore.
  */
@@ -61,16 +61,16 @@ struct DistCert
     bool m_havePeer{false};
     bool m_initDone{false};
     std::unordered_set<size_t> m_initialPubs{};
-    log4cxx::LoggerPtr staticModuleLogger{log4cxx::Logger::getLogger("certDist")};
 
-    DistCert(const std::string& pPre, const ndn::Name& wPre, addCertCb&& addCb, syncps::IsExpiredCb&& eCb) :
+    DistCert(syncps::FaceType& face, const std::string& pPre, const ndn::Name& wPre,
+             addCertCb&& addCb, syncps::IsExpiredCb&& eCb) :
         m_pubPrefix{pPre},
-        m_sync(wPre, m_syncSigMgr.ref(), m_certSigMgr.ref()),
+        m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref()),
         m_addCertCb{std::move(addCb)}
     {
-        m_sync.syncInterestLifetime(std::chrono::milliseconds(4789));
-        m_sync.syncDataLifetime(std::chrono::milliseconds(877));       // (data caching not useful)
-        m_sync.pubLifetime(std::chrono::milliseconds(0)); // pubs don't auto expire
+        m_sync.cStateLifetime(4789ms);
+        m_sync.cAddLifetime(877ms);       // (data caching not useful)
+        m_sync.pubLifetime(0ms); // pubs don't auto expire
         m_sync.isExpiredCb(std::move(eCb));
         m_sync.filterPubsCb([](auto& pOurs, auto& pOthers) mutable {
                     // certs are small so send everything that will fit in a packet
@@ -93,18 +93,13 @@ struct DistCert
      * At this point the packet containing the Cert has been validated by
      * m_syncSigMgr but the cert has not been validated.
      */
-    void onReceiveCert(const certPub& p)
-    {
-        _LOG_INFO("onReceiveCert " << p.getName().toUri());
-        m_addCertCb(p); //callback - expected to handle validation
-    }
+    void onReceiveCert(const certPub& p) { m_addCertCb(p); }
 
     /*
      * Called when an initial cert exchange has completed (some peer(s) have our cert
      * chain and we have theirs).
      */
     void initDone() {
-        _LOG_INFO("initDone");
         m_initDone = true;
         m_connCb(true);
     }
@@ -138,16 +133,15 @@ struct DistCert
      * phase of operation.
      */
     void initialPub(certPub&& c) {
-        _LOG_INFO("initialPub " << c.getName());
         if (! m_initDone) {
-            m_initialPubs.emplace(std::hash<ndn::Data>{}(c));
+            auto h = std::hash<ndn::Data>{}(c);
+            m_initialPubs.emplace(h);
             m_sync.publish(std::move(c),
-                    [this](const ndn::Data& d, bool acked) {
+                    [this, h](const auto& /*d*/, bool /*acked*/) {
                         // since cert pub lifetime is infinite 'acked' should always be true
                         // when this routine is called. If all the initial pubs have been acked
                         // and we have at least one peer's signing chain, initialization is done.
-                        _LOG_INFO("wasDelivered: " << acked << " " << d.getName());
-                        m_initialPubs.erase(std::hash<ndn::Data>{}(d));
+                        m_initialPubs.erase(h);
                         if (m_havePeer && m_initialPubs.empty()) initDone();
                     });
             return;

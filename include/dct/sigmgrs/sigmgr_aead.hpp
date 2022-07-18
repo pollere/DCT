@@ -60,10 +60,6 @@
 #include <cstring>  // for memcpy
 #include "sigmgr.hpp"
 
-using keyVal = std::vector<uint8_t>;
-const uint32_t aeadkeySize = crypto_aead_chacha20poly1305_IETF_KEYBYTES;
-const uint32_t nonceSize = crypto_aead_chacha20poly1305_IETF_NPUBBYTES;
-
 struct keyRecord {
     keyRecord (keyVal k, uint64_t kts)
     {
@@ -79,6 +75,8 @@ struct keyRecord {
 };
 
 struct SigMgrAEAD final : SigMgr {
+    static constexpr uint32_t aeadkeySize = crypto_aead_chacha20poly1305_IETF_KEYBYTES;
+    static constexpr uint32_t nonceSize = crypto_aead_chacha20poly1305_IETF_NPUBBYTES;
     unsigned char m_nonceUnique[nonceSize];
     std::vector<keyRecord> m_keyList;
     size_t m_decryptIndex;
@@ -89,7 +87,7 @@ struct SigMgrAEAD final : SigMgr {
     }
 
     //update to signing keyList with these values (keyList keeps no more than two keys)
-    virtual void addKey(const keyVal& k,  uint64_t ktm) override final {
+    virtual void addKey(const keyVal& k, uint64_t ktm) override final {
         //add to front of key vector
         m_keyList.insert(m_keyList.begin(), keyRecord(k, ktm));
         if(m_keyList.size() > 2)   //keep no more than 2 keys
@@ -108,13 +106,12 @@ struct SigMgrAEAD final : SigMgr {
         std::vector<uint8_t> ad (dataWF.signedBuf(), dataWF.signedBuf() + adlen);
         ad.insert(ad.end(), std::begin(m_sigInfo), std::end(m_sigInfo));
 
-        uint8_t cipherCont[mlen];       //cipher content length same as original
-        unsigned char mac[crypto_aead_chacha20poly1305_IETF_ABYTES];
+        std::vector<uint8_t> cipherCont(mlen,0);       //cipher content length same as original
+        std::array<uint8_t,crypto_aead_chacha20poly1305_IETF_ABYTES> mac;
         unsigned long long maclen;      //expect crypto_aead_chacha20poly1305_IETF_ABYTES
-        unsigned char* curKey = nullptr;
-        unsigned char* curIV = nullptr;
-        getEncryptKey(curKey, curIV);
-        auto ivX = sizeof(curIV); //array of bytes so equals no. elements
+        keyVal curKey = m_keyList.front().key;
+        keyVal curIV = m_keyList.front().iv;
+        auto ivX = curIV.size(); //array of bytes so equals no. elements
         //set up nonce and place in sigValue (m_nonceUnique len >= curIV)
         std::vector<uint8_t> sigValue;
         for(size_t i=0; i<nonceSize; ++i)
@@ -124,15 +121,15 @@ struct SigMgrAEAD final : SigMgr {
             else
                 sigValue.push_back(m_nonceUnique[i]);
         }
-        crypto_aead_chacha20poly1305_ietf_encrypt_detached(cipherCont, mac, &maclen,
+        crypto_aead_chacha20poly1305_ietf_encrypt_detached(cipherCont.data(), mac.data(), &maclen,
                              msg.data(), mlen,         //to be encrypted
                              ad.data(), ad.size(),    //the associated data
-                             NULL, sigValue.data(), curKey);
+                             NULL, sigValue.data(), curKey.data());
         sodium_increment(&m_nonceUnique[0], nonceSize);
-        data.setContent(cipherCont, mlen);
+        data.setContent(cipherCont.data(), mlen);
 
         //set up Signature value as nonce append mac
-        sigValue.insert (sigValue.end(), mac, mac+maclen);
+        sigValue.insert (sigValue.end(), mac.begin(), mac.begin()+maclen);
         data.getSignature()->setSignature(sigValue);
         data.wireEncode(); //Encode again including the signature
         return true;
@@ -145,14 +142,13 @@ struct SigMgrAEAD final : SigMgr {
         //can't decrypt without a key
         if(!keyListSize()) return false;
  
-        // signature holds computed MAC followed by nonce used
+        // signature holds nonce followed by computed MAC for this Data
         auto sig = d.signature();
         if (sig.size() - sig.off() != nonceSize + crypto_aead_chacha20poly1305_IETF_ABYTES) {
             //print("aead bad sig size\n");
             return false;
         }
         auto strt = d.name().data();
-
         auto con = d.content().rest();
         auto mlen = con.size();
 
@@ -161,17 +157,16 @@ struct SigMgrAEAD final : SigMgr {
         std::vector<uint8_t> ad(strt, con.data());
         ad.insert(ad.end(), con.data() + mlen, sig.data());
 
-        auto s = sig.data() + sig.off();
-        unsigned char decrypted[mlen];
+        auto s = sig.data() + sig.off();    //start of signature
+        std::vector<uint8_t> decrypted(mlen,0);
         auto i = m_decryptIndex;    //start with last successful key
         do {
-            unsigned char* curKey = m_keyList[i].key.data();
-            if(crypto_aead_chacha20poly1305_ietf_decrypt_detached(decrypted,
+            if(crypto_aead_chacha20poly1305_ietf_decrypt_detached(decrypted.data(),
                              NULL, con.data(), mlen, s + nonceSize,
-                             ad.data(), ad.size(), s, curKey) == 0) {
+                             ad.data(), ad.size(), s, m_keyList[i].key.data()) == 0) {
                 m_decryptIndex = i; //successful key index
                 // copy decrypted content back into packet
-                std::memcpy((char*)con.data(), decrypted, mlen);
+                std::memcpy((uint8_t*)con.data(), decrypted.data(), mlen);
                 return true;
              }
              i = (i + 1) % keyListSize();
@@ -180,14 +175,6 @@ struct SigMgrAEAD final : SigMgr {
     }
 
     inline size_t keyListSize() const { return m_keyList.size(); }
-
-    //get the newest key and initial vector
-    void getEncryptKey(uint8_t*& kptr, uint8_t*& ivptr) {
-        try {
-            kptr  = m_keyList.front().key.data();
-            ivptr = m_keyList.front().iv.data();
-        } catch (std::runtime_error& ex) { std::cerr << ex.what(); }
-    }
 };
 
 #endif // SIGMGRAEAD_HPP

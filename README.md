@@ -1,39 +1,37 @@
 # Defined-trust Communications Toolkit (DCT)
 
-This repository contains Pollere's **evolving** work on tools, libraries, transport protocol, and proof-of-concept applications for defined-trust communications. DCT enables fine-grained non-perimeter-based trust domains and a collection-based transport efficient on broadcast media. DCT grew out of our own work so reflects Pollere's needs but we believe the toolkit may prove useful  Defined-trust Communications (DC) is influenced by a number of advances: LangSec, Information-Centric Networking, Set Reconciliation, Trust Schemas and the deployment of IPv6 with its multicast support. Focus applications are Operational Technologies, like IoT and DER.
+This repository contains Pollere's **evolving** work on tools, libraries, defined-trust transport protocol (DeftT), and proof-of-concept applications for the Defined-trust Communications (DC) framework. DC enables fine-grained non-perimeter-based trust domains and DeftT is a collection-based transport efficient on broadcast media. DCT grew out of our own work, so reflects the needs of Pollere and clients, but the toolkit may prove useful to others and the repo provides a reference implementation for the DeftT protocol. DCT aims to reduce the amount of installed code needed to write secure applications and to enable and enforce defined-trust applications.
 
-Why "defined-trust"? Langsec ([langsec.org]()) "posits that the only path to trustworthy software that takes untrusted inputs is treating all valid or expected inputs as a formal language, and the respective input-handling routines as a *recognizer* for that language." In a 2016 paper, the Langsec Project authors note that the "robustness principle" of "be liberal in what you accept" should be replaced with "be definite in what you accept" and DCT provides the means to implement such an approach in a trust schema, tools and a run-time library for the transport protocol.
+Defined-trust Communications is influenced by a number of relatively recent advances: LangSec,  Set Reconciliation, Trust Schemas, Information-Centric Networking and the deployment of IPv6 with its multicast support. Operational Technologies like IoT and DER are the focus of DC.  Why "defined-trust"? Langsec ([langsec.org]()) "posits that the only path to trustworthy software that takes untrusted inputs is treating all valid or expected inputs as a formal language, and the respective input-handling routines as a *recognizer* for that language." In a 2016 paper, the Langsec Project authors note that the "robustness principle" of "be liberal in what you accept" should be replaced with "be definite in what you accept" and DCT provides the means to implement such an approach in a trust schema, tools and a run-time library for the DeftT protocol. DC provides a new way to implement and enforce secure communications policies on networks.
 
-DCT shares some low-level protocol concepts with the NDN project ([named-data.net]()), as well as using a restricted version of NDN's packet format for its  transport PDUs, but does not implement the NDN architecture. In particular DCT does **not** use an NDN Forwarder. NDN libraries were used in initial prototypes of DCT but these are being removed (a work in progress) in favor of self-contained, efficient implementations.
+Information movement is according to trust rules, expressed in verifiable trust schemas. DeftT's default interface is broadcast media-friendly, using its own restricted subset of NDN's Interest-Data semantics and using self-configuring UDP/IPv6 multicast. The examples/relay subdirectory contains examples of connecting different subnets and use of a unicast interface. 
 
-Information security and movement is according to trust rules, expressed in verifiable trust schemas. DCT contains a broadcast media-friendly Face that implements its restricted Interest-Data semantics and communicates using self-configuring UDP/IPv6 multicast. A forthcoming release will contain examples of connecting different network segments and use of a unicast Face. DCT aims to reduce the amount of installed code needed to write applications and to enable and enforce defined-trust applications.
+Our current target use is creating secure mulitcast communication domains for OT for which we developed the DeftT protocol. A trust domain is characterized by a particular signed set of trust rules used by DeftT to communicate. This requires generating a trust anchor and all the certificates specified by the trust rules, including signing identities for use by each entity that will become part of the trust zone (tools for this and examples are provided). All certificates, including a compact binary representation of the trust rules, are signed by the same trust anchor. An entity's signing certificate(s) includes its private key(s) and the public certs of its entire chain-of-trust terminating at the trust anchor. This identity is bundled with the trust anchor and the signed trust schema, and configured in each enrolled entity, the private signing key(s) being securely configured. In operation, this ensures a trust domain for all the communications between the enrolled entities. More information is contained in subdirectory Readmes and the references included below.
 
-DCT's target use is creating secure multicast communications domains for OT. Each communication domain is characterized by a structured set of trust rules and an API for a DCT-based transport to send and receive data for that domain of applications. A specific deployment of a communication domain creates a run-time trust domain and requires generating a trust anchor and all the certificates specified by the trust rules, including signing identities for use by each entity that will become part of the trust domain. All certificates, including a compact binary representation of the trust rules, are (ultimately) signed by the same trust anchor. An entity's signing certificate(s) with private keys are bundled with the public certificates of each cert's entire signing chain, including the trust anchor, and given to each enrolled entity, the private signing key(s) being securely configured. In operation, this ensures a trust domain for all the communications between the enrolled entities. More information is contained in subdirectory Readmes and the references included below.
+DCT uses the basic Interest-Data semantics developed by the NDN project (named-data.net), as well as using a restricted version of NDN's packet format for its transport PDUs, but does **not** use an NDN Forwarder. NDN libraries were used in initial prototypes of DCT but these are [being] removed in favor of efficient DCT implementations.
+
+Defined-trust Communications comprises elements that may be used separately, e.g., the model of securing data could be separated from the syncps protocol and syncps could be used without a trust management engine.
 
 ### Directories
 
 This repository is organized into directories:
 
-- tools: contains tools for creating the schemas and certs needed by a DCT-enabled application (described in its README). Two subdirectories:
+- tools: contains tools for creating the schemas and certs needed by a DCT-enabled application (described in its README) and two subdirectories:
   
   - compiler: description of the VerSec Language for expressing trust rules and source code for schemaCompile that turns the language into a binary trust schema. 
   
   - dctwatch: a tool that passively listens to the default DCT network interface and prints the packets it sees (helpful in debugging)
 
-- include: bespoke transport modules developed and used by Pollere to handle secure data-centric communications:
+- include/dct: run-time transport modules developed and used by Pollere for DeftT:
   
-  - syncps: the pub-sub sync protocol that interfaces with the packet forwarder
+  - syncps: the pub-sub sync protocol that maintains collections 
+  - face: interface between syncps and the system-provided packet transport
   - schema: the run-time library that makes use of the binary trust schema
   - sigmgrs: supplies a range of signing and validation methods
   - distributors: distribute certs and group keys and manage the associated collections
-  - face: the DirectFace implementation
+  - shims: library APIs for DeftT - mbps (message-based pub/sub) and ptps (pass-through pub/sub for relays)
 
-- examples:
-  
-  - shims: contains example(s) of DCT "shims" that provide an API for applications of a usage domain.  This includes mbps.hpp which provides message-based publish/subscribe.
-  - hmIot, office:  The README in this directory may be useful in understanding how DCT's modules can be used.
-
-Vversion 5 removed the use of NFD and the need for our previously required patches. 
+- examples: this directory contains illustrative examples
 
 Bug reports are welcome.
 
@@ -43,17 +41,20 @@ All the modules are header-only C++ 'libraries' so the `DCT/include` tree has to
 
 The included versec compiler is required to compile new schemas but pre-compiled schemas for the examples are available as a \*.scm file in the example source directory. To compile and run an example using the pre-compiled schema, for example, mbps:
 
-- (one time) Install `ndn-ind` (from  https://github.com/operantnetworks/ndn-ind) version ee36771.
+- (one time) install libsodium from https://doc.libsodium.org/
+- (one time) Install `ndn-ind` (from  https://github.com/operantnetworks/ndn-ind) version ee36771. (this library is being phased out)
 - (one time) `cd DCT/tools && make` to build all the tools needed.
 - `cd DCT/examples/hmIoT`  then `make` to build the example. If the make is successful, follow the readme to create 'identity bundles' and run it.
 
 ### References and related work
 
+We have created an internet draft to describe DeftT (currently in version 00): https://www.ietf.org/archive/id/draft-nichols-tsv-defined-trust-transport-00.html
+
 Some concepts here may be better understood by referencing earlier Pollere work: 
 
 [Lessons Learned Building a Secure Network Measurement Framework using Basic NDN ](http://www.pollere.net/Pdfdocs/icn19-p20.pdf), K. Nichols, Proceedings of ACM ICN '19, September 24-16, Macao, China (available at http://www.pollere.net/publications.html)
 
-Trust schemas and ICN: key to secure home IoT, K. Nichols, Proceedings of ACM ICN '21, September 2021 (available at https://dl.acm.org/doi/10.1145/3460417.3482972)
+"Trust schemas and ICN: key to secure home IoT", K. Nichols, Proceedings of ACM ICN '21, September 2021 (available at https://dl.acm.org/doi/10.1145/3460417.3482972)
 
 Related talks at http://www.pollere.net/talks.html
 

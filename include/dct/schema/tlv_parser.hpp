@@ -203,6 +203,14 @@ struct tlvParser {
         return std::span<const T>((const T*)(m_blk.data()+m_off), len / sizeof(T));
     }
 
+    // return a copy of the contents of the tlv block as a vector of type T. An error
+    // is thrown if the block doesn't contain an integral number of items (0 or more).
+    template <typename T>
+    auto toVector() {
+        auto s = toSpan<T>();
+        return std::vector<T>(s.begin(), s.end());
+    }
+
     using ordering = std::strong_ordering;
     ordering operator<=>(const tlvParser& rhs) const noexcept {
         // order by size then content (not compatible with 'longest match'

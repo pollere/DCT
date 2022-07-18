@@ -33,11 +33,9 @@
 static inline auto& getDefaultIoContext()
 {
     static boost::asio::io_context* ioc{};
-    using work_guard = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
-    [[maybe_unused]] static work_guard* work;
     if (ioc == nullptr) {
         ioc = new boost::asio::io_context;
-        work = new work_guard(ioc->get_executor());
+        static auto work = boost::asio::require(ioc->get_executor(), boost::asio::execution::outstanding_work.tracked);
     }
     return *ioc;
 }

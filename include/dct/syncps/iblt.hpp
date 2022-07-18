@@ -103,8 +103,8 @@ static inline std::ostream& operator<<(std::ostream& out, const HashTableEntry& 
  * @brief Invertible Bloom Lookup Table (Invertible Bloom Filter)
  */
 struct IBLT {
-    static constexpr size_t nEntries = 126; // must be <128 and a multiple of 3 (N_HASH)
-    static constexpr size_t stsize = nEntries / N_HASH; // sub-table size
+    static constexpr size_t stsize = 19; // sub-table size (should be prime)
+    static constexpr size_t nEntries = stsize * N_HASH; // must be <128
     static constexpr uint8_t MAXCNT = 0x80; // max run length & run start marker, must be > nEntries
     using HashTable = std::array<HashTableEntry,nEntries>;
     HashTable hashTable_{};
@@ -113,26 +113,13 @@ struct IBLT {
     static constexpr int ERASE = -1;
 
     /**
-     * @brief constructor
+     * @brief run-length encode this iblt into a byte vector.
      *
-     * @param expectedNumEntries the expected number of entries in the IBLT
-     */
-    explicit IBLT(size_t) { }
-
-    IBLT(const HashTable& hashTable) : hashTable_(hashTable) {}
-    IBLT(HashTable&& hashTable) : hashTable_(std::move(hashTable)) {}
-
-    /**
-     * @brief Appends self to name
-     *
-     * Run-lenth encode hashtable into a byte vector. 'count' is encoded
-     * as a byte (assumes iblt max length < 128) then keySum and keyCheck
-     * in little-endian order. Runs of zero entries are encoded as a 'count'
+     * 'count' is encoded as a byte (assumes iblt max length < 128) then
+     * keySum and keyCheck in little-endian order. Runs of zero entries are encoded as a 'count'
      * with the high bit set and the run length in the LSBs.
-     *
-     * @param name
      */
-    void appendToName(ndn::Name& name) const {
+    auto rlEncode() const noexcept {
         std::vector<uint8_t> rle{};
         uint8_t cnt{};
         for (const auto& e : hashTable_) {
@@ -157,7 +144,7 @@ struct IBLT {
         // trailing empty entry count is omitted except for
         // empty iblt (to avoid empty name component).
         if (rle.empty() && cnt != 0) rle.emplace_back(cnt | MAXCNT);
-        name.append(rle);
+        return rle;
     }
 
     /**
@@ -166,7 +153,7 @@ struct IBLT {
      * @param ibltName the Component representation of IBLT
      * @throws Error if size of values is not compatible with this IBF
      */
-    void initialize(const std::span<const uint8_t>& rle) {
+    void rlDecode(const std::span<const uint8_t> rle) {
         size_t i{};
         for (auto r = rle.begin(); r < rle.end(); ) {
             auto b = *r;
@@ -230,41 +217,35 @@ struct IBLT {
     }
 
     /**
-     * @brief List all the entries in the IBLT
+     * @brief "peel" entries from an iblt
      *
-     * This is called on a difference of two IBLTs: ownIBLT - rcvdIBLT
-     * Entries listed in positive are in ownIBLT but not in rcvdIBLT
-     * Entries listed in negative are in rcvdIBLT but not in ownIBLT
-     *
-     * @param positive
-     * @param negative
-     * @return true if decoding is complete successfully
+     * Typically called on a difference of two IBLTs: ownIBLT - rcvdIBLT
+     * and returns a pair{have, need} where 'have' and 'need' are sets.
+     * Entries listed in "have" are in ownIBLT but not in rcvdIBLT
+     * Entries listed in "need"  are in rcvdIBLT but not in ownIBLT
      */
-    bool listEntries(std::set<uint32_t>& positive, std::set<uint32_t>& negative) const {
+    auto peel() const noexcept {
+        std::set<uint32_t> have{};
+        std::set<uint32_t> need{};
+        bool peeledSomething;
         IBLT peeled = *this;
 
-        bool peeledSomething;
         do {
             peeledSomething = false;
             for (const auto& entry : peeled.hashTable_) {
-                if (entry.isPure()) {
-                    if (peeled.badPeers(entry.keySum)) {
-                        std::cerr << "error - invalid iblt: badPeers for entry:"
-                            << entry << "\n";
-                        return false;
-                    }
-                    if (entry.count == 1) {
-                        positive.insert(entry.keySum);
-                    } else {
-                        negative.insert(entry.keySum);
-                    }
-                    peeled.update(-entry.count, entry.keySum);
-                    peeledSomething = true;
+                if (! entry.isPure()) continue;
+
+                if (peeled.badPeers(entry.keySum)) {
+                    std::cerr << "error - invalid iblt: badPeers for entry:" << entry << "\n";
+                    peeledSomething = false;
+                    break;
                 }
+                if (entry.count > 0) have.insert(entry.keySum); else need.insert(entry.keySum);
+                peeled.update(-entry.count, entry.keySum);
+                peeledSomething = true;
             }
         } while (peeledSomething);
-
-        return true;
+        return std::pair{have, need};
     }
 
     IBLT operator-(const IBLT& other) const {
@@ -311,9 +292,8 @@ static inline std::ostream& operator<<(std::ostream& out, const HashTableEntry& 
 }
 
 static inline std::string prtPeer(const IBLT& iblt, size_t idx, size_t rep) {
-    if (idx == rep) {
-        return "";
-    }
+    if (idx == rep) return "";
+
     std::ostringstream rslt{};
     rslt << " @" << std::hex << rep;
     auto hte = iblt.getHashTable().at(rep);
@@ -327,10 +307,8 @@ static inline std::string prtPeer(const IBLT& iblt, size_t idx, size_t rep) {
 
 static inline std::string prtPeers(const IBLT& iblt, size_t idx) {
     auto hte = iblt.getHashTable().at(idx);
-    if (! hte.isPure()) {
-        // can only get the peers of 'pure' entries
-        return "";
-    }
+    // can only get the peers of 'pure' entries
+    if (! hte.isPure()) return "";
     const auto [hash0, hash1, hash2] = iblt.hash(hte.keySum);
     return prtPeer(iblt, idx, hash0) + prtPeer(iblt, idx, hash1) + prtPeer(iblt, idx, hash2);
 }

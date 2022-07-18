@@ -17,13 +17,11 @@ Illustrated:
 
 ![office](./office.png)
 
-
-
 This example uses a generalized message-based pub/sub (mbps) shim that does not require a priori knowledge of the application or its trust schema, just requires that the final three components of the trust schema-defined publications are the tags required and set by mpbs  (mId/sCnt/mts). The rest can be whatever is convenient for the application.
 
-Keep in mind that the trust schema is concerned with the communications of the applications that will form this trust zone and it is not necessary to cover every action that applications can perform. A trust schema writer should make sure that messages that could cause harm are not permitted. It's not necessary to prevent messages that an application would just discard (e.g., a phone app might tell a lock to "turn blue", but that would be meaningless to the lock which should discard it so it doesn't need to be restricted. If you have devices that enter an undefined state instead of throwing away undefined commands, then you ought to prevent them, of course). On the other hand, some commands are critical to prevent e.g., lights should not be issuing commands, and the trust schema can be used to ensure this, both preventing lightbulbs from creating such messages and preventing other devices from accepting them should a lightbulb somehow be compromised.
+Keep in mind that the trust schema is concerned with the communications of the applications that will form this trust domain and it is not necessary to cover every action that applications can perform. A trust schema writer should make sure that messages that could cause harm are not permitted. It's not necessary to prevent messages that an application would just discard (e.g., a phone app might tell a lock to "turn blue", but that would be meaningless to the lock which should discard it so it doesn't need to be restricted. If you have devices that enter an undefined state instead of throwing away undefined commands, then you ought to prevent them, of course). On the other hand, some commands are critical to prevent e.g., lights should not be issuing commands, and the trust schema can be used to ensure this, both preventing lightbulbs from creating such messages and preventing other devices from accepting them should a lightbulb somehow be compromised.
 
-To experiment with this example, you need to have a DCT repo, fmt, c++20 and have installed ndn-ind (see *Installing and building the pieces* in the DCT/README.md file).
+To experiment with this example, see *Installing and building the pieces* in the DCT/README.md file.
 
 ## Testing trust schemas
 
@@ -49,4 +47,3 @@ You can use the mkIDs.sh script to generate identity bundles and then start room
 ---
 
 Copyright (C) 2021-2022 Pollere LLC 
-

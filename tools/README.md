@@ -1,6 +1,6 @@
 # Tools for setting up certs for DCT-enabled applications
 
-The domain trust schema and the signing certs it specifies are central to DCT-enabled applications. The DCT/versec directory covers the language for expressing the trust rules and a compiler to check those rules and, optionally, create a binary output file, readable by DCT library modules, that contains the rules. Since DCT trust schemas *require* signing keys for all communications, this directory provides the tools to simplify that process. DCT/tools contains utilities that can be used to go from that trust schema to identity *bundles* of certificates for each entity of the domain. These provide primitives that can be used as part of a secure configuration procedure. This document outlines how to make identity bundles and a basic configuration procedure that could be further enhanced. Note that DCT certificates are derived from NDN Data, not from NDN Certificates.
+The domain trust schema and the signing certs it specifies are central to DeftT deployments. The DCT/versec directory covers the language for expressing trust rules and a compiler that checks those rules and, optionally, creates a binary output file readable by DCT schema library modules. Since DeftT *requires* signing keys for all communications, this directory provides tools to simplify that process. DCT/tools contains utilities that can be used to go from that trust schema to identity *bundles* of certificates for each entity of the domain. These primitives that can be used as part of a secure configuration procedure. This document outlines how to make identity bundles and an example basic configuration procedure.
 
 ## From Trust Schema to Identity Bundle
 
@@ -37,15 +37,15 @@ An application can receive its bundle via the command line, a pipe or some other
   
     `make_bundle -o alice sample.root sample.schema +myHouse.alice`
    
-   The "+" on the role cert indicates that its signing (private) key should be included in the bundle. The other certs in the bundle don't (and shouldn't) have their signing keys. This bundle is given the identity name (alice). The *examples/mbps* directory contains a script to do these steps (mkIDs.sh) for those applications.
+   The "+" on the role cert indicates that its signing (private) key should be included in the bundle. The other certs in the bundle don't (and shouldn't) have their signing keys. This bundle is given the identity name (alice). The *examples/hmIot* directory contains a script to do these steps (mkIDs.sh) for those applications.
 
 ## Configuration
 
-A secure commissioning procedure can be employed to configure devices with a bootstrap identity bundle. DCT does not include such a procedure; we recommend using the best practice suitable for your particular installation. A simple example is to have the Configurer set up devices by being in physical contact with them and using a USB stick or a dedicated connection. The general steps in configuration are shown in the figure, where the process of making identity certs and identity bundles is repeated for all devices to be configured. Every time a device is added, the trust anchor signing key can be used by the Configurer to make a new identity and identity bundle and add it to the device.
+A secure commissioning procedure can be employed to configure devices with a bootstrap identity bundle. DCT does not include such a procedure; we recommend using the best practice suitable for your particular installation. A simple example is to have the configurer set up devices by being in physical contact with them and using a USB stick or a dedicated connection. The general steps in configuration are shown in the figure, where the process of making identity certs and identity bundles is repeated for all devices to be configured. Every time a device is added, the trust anchor signing key can be used by the configurer to make a new identity and identity bundle and add it to the device.
 
-![config](config.png)
+![tools.config](/Users/nichols/ActiveProjects/DCT/tools/tools.config.png)
 
-Using the DCT run-time library, programs could be written to add updated trust schemas to the domain's cert collection and methods added to update validated trust schema. Once devices are part of the domain, signing chains can be updated over the network by using the cert Collection and encrypting new signing keys with the previous public signing key. Examples and methods for this will likely be added to DCT in the future but, it's best to make your own if you need this functionality.
+Using the DCT library, programs could be written to add updated trust schemas to the domain's cert collection and methods added to update validated trust schema. Once devices are part of the domain, signing chains can be updated over the network by using the cert Collection and encrypting new signing keys with the previous public signing key. Examples and methods for this may be added to DCT in the future but it's best to make your own if you need this functionality.
 
 ---
 

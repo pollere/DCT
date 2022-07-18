@@ -1,0 +1,51 @@
+// Home IoT Message-Based Pub/Sub trust schema with relay role
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+
+// trust anchor name associated with this schema
+_network:    "iot"
+
+// MBPS Publication definition
+// target, topic, topicArgs are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
+// A particular application process can make its subscription more
+// specific by using a subscription list with specific subCollections (designated
+// by targets) and related callback functions.
+
+#iotPub: _network/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+    _origin:   sysId()
+}
+
+lockReport: #iotPub & { target: "lock", topic: "event"|"status"
+    trgtLoc: _roleId
+    topicArgs: "locked" | "unlocked" | "battery_low"
+} <= devCert 
+
+lockCommand: #iotPub & { target: "lock", topic: "command" } &
+    { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
+    { topicArgs:  "lock"|"unlock"|"report" } <= opCert
+
+roleCert:    _network/_role/_roleId/_keyinfo <= netCert
+opCert:  roleCert & { _role: "operator" }
+devCert: roleCert & { _role: "device" }
+rlyCert: roleCert & { _role: "relay" }
+
+netCert: _network/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= roleCert
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _network
+#pubValidator: "EdDSA"
+
+// validator for cAdds
+
+#wireValidator: "EdDSA"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_

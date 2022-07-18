@@ -48,14 +48,21 @@ int main(int argc, const char* argv[]) {
         // build some test data for the encoder/decoder
         using kVal = std::array<uint8_t,8>;
         using fpVal = std::array<uint8_t,24>;
+        using vecVal = std::vector<uint8_t>;
         kVal x = {0,1,2,3,4,5,6,7};
         fpVal y = {0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
                    0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,
                    0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f};
-        using keyItem = std::pair<kVal,fpVal>;
+        vecVal v = {0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
+                   0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,
+                   0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f};
+        using keyItem = std::pair<const kVal,const fpVal>;
+        using keyItem2 = std::pair<const kVal,const vecVal>;
         std::vector<keyItem> kv{};
+        std::vector<keyItem2> kv2{};
         for (auto i= 0u; i < 32*3; i += 32) {
             kv.emplace_back(x, y);
+            kv2.emplace_back(x, v);
             x[0] += 32;
             y[0] += 32;
         }
@@ -64,8 +71,9 @@ int main(int argc, const char* argv[]) {
         tlvEncoder enc{};
         auto now = std::chrono::system_clock::now();
         enc.addTimestamp(now);
-        //enc.addArray(130, kv);
-        enc.addArray(130, kv.cbegin(), kv.size());
+        enc.addArray(130, kv);
+        enc.addArray(150, kv.cbegin(), kv.size());
+        enc.addArray(151, kv2.cbegin(), kv2.size());
 
         // make an NDN data packet, set its content to be the encoded test data
         // then wire-encode the result and write it to the output file (so it
@@ -95,7 +103,13 @@ int main(int argc, const char* argv[]) {
         auto dkv = decode.nextBlk(130).toSpan<keyItem>();
 
         if (!std::equal(dkv.begin(), dkv.end(), kv.begin()))
-            print(fmt::runtime("vectors don't match, orig:\n{:x}\ndecoded:\n{:x}\n"), kv, dkv);
+            print(fmt::runtime("tlv 130 vectors don't match, orig:\n{:x}\ndecoded:\n{:x}\n"), kv, dkv);
+
+        // the third tlv should be type 150 and it should be a vector of 'keyItem's
+        auto tkv = decode.nextBlk(150).toVector<keyItem>();
+
+        if (!std::equal(tkv.begin(), tkv.end(), kv.begin()))
+            print(fmt::runtime("tlv 150 vectors don't match, orig:\n{:x}\ndecoded:\n{:x}\n"), kv, tkv);
 
     } catch (const std::runtime_error& se) { print("runtime error: {}\n", se.what()); }
 

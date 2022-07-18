@@ -1,8 +1,8 @@
 /*
  * room.cpp: room controller application for Office example for ICN2021 tutorial
  *
- * This application using mbps client. Message body (if any) is packaged
- * in int8_t vectors to pass between application and client. Parameters
+ * This application uses mbps shim. Message body (if any) is packaged
+ * in int8_t vectors to pass between application and mbps. Parameters
  * are passed to mpbs in an vector of pairs (msgParms) and passed from mbps
  * to the application in a mbpsMsg structure that contains an unordered_map
  * where values are indexed by the tags (components of Names) that are
@@ -47,7 +47,7 @@
 #include <iostream>
 #include <random>
 
-#include "../shims/mbps.hpp"
+#include <dct/shims/mbps.hpp>
 
 using namespace std::literals;
 
@@ -59,7 +59,7 @@ static std::string room{};          // this instance's roomId (same as id for a 
 
 /*
  * cmdRecv handles a command received in a subscription so is used as a callback
- * when subscribing through the mbps client, hence must be a
+ * when subscribing through the mbps, hence must be a
  * Does not use the message body
  */
 void cmdRecv(mbps &cm, const mbpsMsg& msg, std::vector<uint8_t>&)
@@ -72,19 +72,18 @@ void cmdRecv(mbps &cm, const mbpsMsg& msg, std::vector<uint8_t>&)
 
     print("{:%M:%S} {} in {} setting {} to {} ({:.3} mS transit)\n",
             ticks(now.time_since_epoch()), role, id, f, a, dt);
-    //passes message to mbps client to publish (message body is empty)
+    //passes message to mbps to publish (message body is empty)
     cm.publish(msgParms{{"func", f},{"topic", "status"s},{"loc",room},{"args", a}});
 }
 
 /*
  * Main() for room controller application
- * Make the mbps client, connect, and run the context.
+ * Make the mbps DeftT, connect, and run the context.
  */
 
 int main(int argc, char* argv[])
 {
-    INIT_LOGGERS();
-    mbps cm(argv[argc-1]);     //Create the mbps client
+    mbps cm(argv[argc-1]);     //Create mbps
     cm.m_pb.pubLifetime(500ms); // want fresh status information
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");
@@ -110,7 +109,7 @@ int main(int argc, char* argv[])
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);
     } catch (int conn_code) {
-        std::cerr << "main mbps client failed to connect with code " << conn_code << std::endl;
+        std::cerr << "main mbps failed to connect with code " << conn_code << std::endl;
         exit(1);
     } catch (...) {
         std::cerr << "default exception";

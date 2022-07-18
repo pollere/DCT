@@ -27,6 +27,7 @@
 #include <array>
 #include <chrono>
 #include <stdexcept>
+#include <span>
 #include <vector>
 #include <utility>
 
@@ -68,7 +69,10 @@ struct tlvEncoder {
     }
 
     template <typename T1, typename T2>
-    void appendItem(const std::pair<T1,T2>& p) { m_blk.insert(m_blk.end(), p.first.begin(), p.second.end()); }
+    void appendItem(const std::pair<T1,T2>& p) {
+        m_blk.insert(m_blk.end(), p.first.begin(), p.first.end());
+        m_blk.insert(m_blk.end(), p.second.begin(), p.second.end());
+    }
 
     void addArrayTlvHeader(uint8_t typ, size_t len) {
         m_blk.emplace_back(typ);
@@ -79,14 +83,20 @@ struct tlvEncoder {
         }
         m_blk.emplace_back(len);
     }
-    template <typename T>
-    void addArray(uint8_t typ, const std::vector<T>& v) {
-        auto len = v.size() * sizeof(T);
+
+    // Add the contents of container C. (For non-contiguous containers like maps or sets
+    // use the 3 argument call that adds item-by-item.)
+    template <typename C> requires std::is_trivially_copyable_v<typename C::value_type>
+                                    && std::contiguous_iterator<typename C::iterator>
+    void addArray(uint8_t typ, const C& c) {
+        auto len = c.size() * sizeof(c.front());
+        std::span s((const uint8_t*)c.data(), len);
         addArrayTlvHeader(typ, len);
-        for (auto& i : v) appendItem(i);
+        m_blk.insert(m_blk.end(), s.begin(), s.end());
         m_off = m_blk.size();
     }
 
+    // Add up to 'n' of the items yielded by iterator 'In'.
     template <typename In> requires std::indirectly_readable<In>
     auto addArray(uint8_t typ, In in, size_t n) {
         auto len = n * sizeof(*in);

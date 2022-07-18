@@ -1,0 +1,61 @@
+// trust schema for location reporter example to show publisher privacy sigmgrs
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+
+// Like the iot2 trust schema, this uses a symmetric key AEAD encryption for the
+// "wire" packets, but publisher privacy is enabled by designating a Subscription
+// Group for a collection whose members are the only entities that get the secret
+// key that lets them decrypt the packet.
+
+// trust anchor name associated with this schema
+_network:    "ppLoc"
+
+// MBPS Publication definition
+// target and rptr are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
+
+#Pub: _network/target/rptr/msgID/sCnt/mts
+
+locRprt: #Pub & { target: "loc" } <= locCert
+
+roleCert:    _network/_role/_roleId/_keyinfo
+
+// There are different signing chains for monCert & locCerts.
+// "key makers" (authorized by the KM capability, kmCap) are
+// responsible for creating and distributing the nonce
+// symmetric encryption keys used ensure publication privacy
+// and thus provide a service to the entire Collection that
+// needs to be highly available and monitors are expected to be always on.
+// locCerts are used to sign location reports from location apps
+// on mobile devices and shouldn't be key makers.
+// If publisher privacy is desired, a subscription group capability
+// is used by a PPAEAD wire signer/validator to ensure that only
+// members of the subscription group get the encryption key. Here,
+// monitors can be members of a sg;
+monCert:  roleCert & { _role: "monitor" } <= sgCap | kmCap
+locCert: roleCert & { _role: "locRptr" } <= netCert
+
+// capability certs (capabilities granted to roles)
+capCert: _network/"CAP"/_capId/_capArg/_keyinfo
+kmCap:   capCert & { _capId: "KM" } <= sgCap    // allowed to be a key maker (capArg is priority)
+sgCap:   capCert & { _capId: "SG" } <= netCert  // allowed to be a subscriber (member of subscriber group)
+
+netCert: _network/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= roleCert
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _network
+#pubValidator: "EdDSA"
+
+// used for cAdds
+#wireValidator: "PPAEAD"
+// #wireValidator: "PPSIGN"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_
