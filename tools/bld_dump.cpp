@@ -34,14 +34,18 @@
 
 int main(int argc, const char* argv[]) {
     if (argc < 2) {
-        print("- usage: {} file\n", argv[0]);
+        print("- usage: {} bundle [pubname]\n", argv[0]);
         exit(1);
     }
     try {
         certStore cs{};
         auto bs = validateBootstrap(argv[1], cs);
         
-        pubBldr<true> bld(bs, cs, bs.pubName(0));
+        if (argc < 3) {
+            pubBldr<true> bld(bs, cs, bs.pubName(0));
+        } else {
+            pubBldr<true> bld(bs, cs, argv[2]);
+        }
     } catch (const schema_error& se) { print("schema error: {}\n", se.what()); }
 
     exit(0);

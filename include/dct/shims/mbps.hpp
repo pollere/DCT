@@ -37,16 +37,14 @@
 static constexpr size_t MAX_CONTENT=768; //max content size in bytes, <= maxPubSize in syncps.hpp
 static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
 
-#include "dct/syncps/syncps.hpp"
-#include "dct/schema/dct_model.hpp"
+#include <dct/syncps/syncps.hpp>
+#include <dct/schema/dct_model.hpp>
 
 using namespace syncps;
 
 /* 
- * MBPS (message-based publish/subscribe) provides a pub/sub
- * data-centric transport inspired by the MQTT API.
- * MBPS uses the DCT run-time library, Operant's ndn-ind library, and Pollere's
- * patches to NFD.
+ * MBPS (message-based publish/subscribe) provides a pub/sub shim
+ * (inspired by the MQTT API) for DefTT
  *
  * Messages passed from the application may exceed the size of
  * the Publications passed between the shim and syncps. Larger messages
@@ -82,7 +80,7 @@ using MsgCache = std::unordered_map<MsgID,MsgSegs>;
 struct mbps
 {   
     connectCb m_connectCb;
-    connectCb m_connFailCb;
+    FaceType m_face;
     DCTmodel m_pb;
     Name m_pubpre{};        // full prefix for Publications
     std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids
@@ -93,6 +91,9 @@ struct mbps
     Timer* m_timer;
 
     mbps(std::string_view bootstrap) : m_pb(bootstrap), m_pubpre{m_pb.pubPrefix()}  { }
+
+    mbps(std::string_view bootstrap, std::string_view addr)
+        : m_face{FaceType(addr)}, m_pb(bootstrap, m_face), m_pubpre{m_pb.pubPrefix()}  { }
 
     void run() { m_pb.run(); }
     const auto& pubPrefix() const noexcept { return m_pubpre; } //calling can convert to Name
@@ -105,25 +106,23 @@ struct mbps
 
     /*
      * Kicks off the set up necessary for an application to publish or receive
-     * publications.  A client is considered "connected" once communications are
+     * publications. DefTT is considered "connected" once communications are
      * initialized which may include key distribution and/or acquisition. The callback
      * should be how the application starts its work that involves communication.
      * If m_pb.start results in a callback indicating success, m_connectCb is
-     * invoked. If failure is indicated, m_connFailCb, which defaults to a
-     * simple exit, is invoked.
+     * invoked. If failure, throws error to catch
      *
      * This is loosely analogous to MQTT's connect() which connects to a server,
-     * but MBPS is serverless; this simply makes a client "ready" to communicate.
+     * but MBPS is serverless; this simply makes DefTT "ready" to communicate.
      *
      * connect does not timeout; if there is a wait time limit meaningful to an
      * application it should set its own timeout.
      */
 
-    void connect(connectCb&& scb, connectCb&& fcb = [](){exit(1);})
+    void connect(connectCb&& scb)
     {
         //libsodium set up
         if (sodium_init() == -1) throw error("Connect unable to set up libsodium");
-        m_connFailCb = std::move(fcb);
         m_connectCb = std::move(scb);
         m_uniqId = m_pb.pubVal("#chainInfo").toUri();
 
@@ -132,30 +131,26 @@ struct mbps
         // make keys; defaults to 1).
         m_pb.start([this](bool success) {
                 if(!success) {
-                    _LOG_ERROR("mbps failed to initialize connection");
-                    m_connFailCb();
+                    throw runtime_error("mbps failed to initialize connection");
                 } else {
-                    _LOG_INFO("mbps connect successfully initialized connection");
                     m_connectCb();
                 }
             });
     }
 
     /*
-     * Subscribe to all topics in the sync Collection with a single callback.
+     * Subscribe to all Publications in the sync Collection with a single callback.
      *
      * An incoming Publication will cause cause the lambda to invoke
      * receivePub() with the Publication and the application's msgHndlr callback
     */
     mbps& subscribe(const msgHndlr& mh)    {
-        _LOG_INFO("mbps:subscribe: single callback for client topic " << m_pubpre);
         m_pb.subscribeTo(pubPrefix(), [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
     // distinguish subscriptions further by topic or topic/location
     mbps& subscribe(const std::string& suffix, const msgHndlr& mh)    {
         auto target = pubPrefix().toUri() + "/" + suffix;
-        _LOG_INFO("mbps:subscribe set up subscription to target: " << target);
         m_pb.subscribeTo(target, [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
@@ -192,7 +187,7 @@ struct mbps
             n = 255 & k;    //bottom byte
             k >>= 8;
             if (k > n || k == 0 || n > MAX_SEGS) {
-                _LOG_WARN("receivePub: msgID " << p.number("msgID") << " piece " << k << " > " << n << " pieces");
+                print("receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
                 return;
             }
             //reassemble message            
@@ -209,11 +204,7 @@ struct mbps
             m_received.erase(mId);  //delete msg state
             m_reassemble.erase(mId);
         }                
-        /*
-         * Complete message received, prepare arguments for msgHndlr callback
-         */
-        _LOG_INFO("receivePub: msgID " << p.number("msgID") << "(" << n << " pieces) delivered in " << p.timeDelta("mts") << " sec.");
-
+        // Complete message received, prepare arguments for msgHndlr callback
         mh(*this, mbpsMsg(p), msg);
     }
 
@@ -246,14 +237,7 @@ struct mbps
                 if (m_pending[mId].count() != n) return; // all pieces haven't arrived
             }
             // either msg complete or piece timed out so delivery has failed - delete msg state
-            k = m_pending[mId].count();
             if (m_pending.contains(mId)) m_pending.erase(mId);
-        }
-        if (success) {  //TTP = "time to publish"
-            _LOG_INFO("confirmPublication: msgID " << mId << "(" << n << " pieces) arrived, TTP " << p.timeDelta("mts"));
-            //if a confirmation cb set by app, would go here
-        } else {
-            _LOG_INFO("confirmPublication: msgID " << mId << " " << n - k << " pieces (of " << n << ") timed out");
         }
         try {
             m_msgConfCb.at(mId)(success,mId);
@@ -339,7 +323,6 @@ struct mbps
             mp.emplace_back("sCnt", sCnt);
         }
         if(ch) {
-            _LOG_INFO("mbps has published (with call back) mId: " << mId);
             m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
         }
         return mId;

@@ -74,10 +74,9 @@ struct DistGKey {
     addKeyCb m_newKeyCb;   // called when group key rcvd
     connectedCb m_connCb{[](auto) {}};
     Cap::capChk m_kmCap;   // routine to check a signing chain for key maker capability
-    log4cxx::LoggerPtr staticModuleLogger{log4cxx::Logger::getLogger("DistGKey")};
     thumbPrint m_tp{};
-    keyVal m_pDecKey{};         // transformed pk used to encrypt group key
-    keyVal m_sDecKey{};         // transformed sk used to decrypt group key
+    keyVal m_pDecKey{};         // transformed pk used to encrypt group key; use with
+    keyVal m_sDecKey{};         //  transformed sk used to decrypt group key
     keyVal m_curKey{};          // current group key
     uint64_t m_curKeyCT{};      // current key creation time in microsecs
     std::map<thumbPrint,encGK> m_gkrList{};
@@ -89,18 +88,18 @@ struct DistGKey {
     int m_mayMakeKeys{0};       // >0 if this entity is a candidate key maker
     bool m_init{true};          // key maker status unknown while in initialization
 
-    DistGKey(const std::string& pPre, const Name& wPre, addKeyCb&& gkeyCb, const certStore& cs,
-             std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
+    DistGKey(syncps::FaceType& face, const std::string& pPre, const Name& wPre, addKeyCb&& gkeyCb,
+             const certStore& cs, std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
              std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
              std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
              m_pubPrefix{pPre + "/list"}, m_kmPrefix{pPre + "/km"},
-             m_sync(wPre, m_syncSM.ref(), m_keySM.ref()),
+             m_sync(face, wPre, m_syncSM.ref(), m_keySM.ref()),
              m_certs{cs},
              m_newKeyCb{std::move(gkeyCb)}, //called when a (new) group key arrives or is created
              m_kmCap{Cap::checker("KM", pPre, cs)},
              m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
              m_keyLifetime(reKeyInterval + reKeyRandomize) {
-        m_sync.syncInterestLifetime(70ms);
+        m_sync.cStateLifetime(70ms);
         m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
         m_sync.getLifetimeCb([this](const Publication& p) {
             if (p.getName()[m_pubPrefix.size()].getValue()->front() == 'c') return m_electionDuration; // candidate
@@ -134,7 +133,6 @@ struct DistGKey {
      * key and the secret key to use to decrypt the group key.
      */
     void updateSigningKey(const keyVal sk, const dctCert& pubCert) {
-        _LOG_INFO("updateSigningKey a signing cert Name of " << pubCert.getName().toUri());
         // sigmgrs need to get the new signing keys and public key lookup callbacks
         m_syncSM.updateSigningKey(sk, pubCert);
         m_keySM.updateSigningKey(sk, pubCert);
@@ -144,12 +142,12 @@ struct DistGKey {
         // convert the new key to form needed for group key encrypt/decrypt
         m_sDecKey.resize(crypto_scalarmult_curve25519_BYTES);
         if(crypto_sign_ed25519_sk_to_curve25519(m_sDecKey.data(), sk.data()) != 0) {
-            _LOG_ERROR("DistGKey::updateSigningKey could not convert secret key");
+            //_LOG_ERROR("DistGKey::updateSigningKey could not convert secret key");
         }
         m_pDecKey.resize(crypto_scalarmult_curve25519_BYTES);
         const auto& pk = *pubCert.getContent();
         if(crypto_sign_ed25519_pk_to_curve25519(m_pDecKey.data(), pk.data()) != 0) {
-            _LOG_ERROR("DistGKey::updateSigningKey unable to convert signing pk to sealed box pk");
+            //_LOG_ERROR("DistGKey::updateSigningKey unable to convert signing pk to sealed box pk");
         }
     }
 
@@ -165,13 +163,12 @@ struct DistGKey {
         if (m_mayMakeKeys > 0) return; // shouldn't happen: keyMaker unsubscribes to collection
 
         if (! m_kmCap(dctCert::getKeyLoc(p)).first) {
-            _LOG_WARN("ignored keylist signed by unauthorized identity " << m_certs[p].getName());
+            //_LOG_WARN("ignored keylist signed by unauthorized identity " << m_certs[p].getName());
             return;
         }
         const auto& n = p.getName();
-        _LOG_INFO("receiveGKeyList receives publication " << n.toUri());
         if(n[-1].toTimestampMicroseconds() < m_curKeyCT) {
-            _LOG_INFO("group key publication is older than current stored key");
+            //_LOG_INFO("group key publication is older than current stored key");
             return;
         }
         // if this msg was from an earlier Key Maker epoch, ignore it. If from a later
@@ -191,16 +188,16 @@ struct DistGKey {
             // a new key will have a creation time larger than m_curKeyCT
             // (future: ensure it's from the same creator as last time?)
         } catch (std::runtime_error& ex) {
-            _LOG_WARN("Ignoring groupKey message: content type error: " << ex.what());
+            //_LOG_WARN("Ignoring groupKey message: content type error: " << ex.what());
             return;
         }
         if(newCT <= m_curKeyCT) {
-            _LOG_INFO("key is not newer: new key time " << newCT << " have key time " << m_curKeyCT);
+            //_LOG_INFO("key is not newer: new key time " << newCT << " have key time " << m_curKeyCT);
             return;
         }
         auto it = std::find_if(gkrVec.begin(), gkrVec.end(), [this](auto p){ return p.first == m_tp; });
         if (it == gkrVec.end()) {
-            _LOG_INFO("receiveGKeyList: didn't find a key in publication");
+           //_LOG_INFO("receiveGKeyList: didn't find a key in publication");
             return;
         }
 
@@ -208,16 +205,15 @@ struct DistGKey {
         const auto& nk = it->second;
         uint8_t m[aeadKeySz];
         if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
-            _LOG_INFO("receiver can't open encrypted key");
+            //_LOG_INFO("receiver can't open encrypted key");
             return;
         }
         m_curKeyCT = newCT;
         m_curKey = std::vector<uint8_t>(m, m + aeadKeySz);
-        _LOG_INFO("received new key with creation time " << m_curKeyCT);
         m_newKeyCb(m_curKey, m_curKeyCT);   // call back parent with new key
         if(m_init) {
             // parent has key so callback to start next stage
-            m_sync.syncInterestLifetime(std::chrono::milliseconds(6763));
+            m_sync.cStateLifetime(6763ms);
             m_init = false;
             m_connCb(true);
         }
@@ -260,7 +256,6 @@ struct DistGKey {
      * the current epoch is remembered in m_kmEpoch.
      */
     void setup(connectedCb&& ccb) {
-        _LOG_INFO("DistGKey setUp() mayMakeKeys = " << m_mayMakeKeys);
         m_connCb = std::move(ccb);
         // subscribe to key collection and wait for a group key list
         m_sync.subscribeTo(m_pubPrefix, [this](auto p){ receiveGKeyList(p); });
@@ -290,14 +285,13 @@ struct DistGKey {
     // increments m_KMepoch then sends an 'elected' pub to tell other candidate KMs that it
     // has won. It then sends a group key list to everyone which will take them out of init state.
     void electionDone() {
-        _LOG_DEBUG("DistGKey election done, m_mayMakeKeys = " << m_mayMakeKeys);
         if (m_mayMakeKeys <= 0) return;
 
         ++m_KMepoch;
         m_sync.unsubscribe(m_pubPrefix);   //unless checking for conflicts
         gkeyTimeout();  //create a group key, publish it, callback parent with key
         publishKM("elec");
-        m_sync.syncInterestLifetime(std::chrono::milliseconds(6763));
+        m_sync.cStateLifetime(6763ms);
         m_init = false;
         m_connCb(true); // parent has key so let it proceed
     }
@@ -314,7 +308,7 @@ struct DistGKey {
 
         auto [hasKM, capCert] = m_kmCap(dctCert::getKeyLoc(p));
         if (! hasKM) {
-            _LOG_WARN("ignored candidate pub signed by unauthorized identity " << m_certs[p].getName());
+            //_LOG_WARN("ignored candidate pub signed by unauthorized identity " << m_certs[p].getName());
             return;
         }
         auto pri = 1; //XXX should extract from capCert
@@ -342,11 +336,11 @@ struct DistGKey {
         auto epoch = n[-3].toNumber();
         if (m_KMepoch >= epoch) return; // ignore msg from earlier election
         if (! m_kmCap(dctCert::getKeyLoc(p)).first) {
-            _LOG_WARN("ignored election pub signed by unauthorized identity " << m_certs[p].getName());
+            //_LOG_WARN("ignored election pub signed by unauthorized identity " << m_certs[p].getName());
             return;
         }
         if (m_mayMakeKeys > 0) {
-            _LOG_INFO("elected msg from peer while m_mayMakeKeys = " << m_mayMakeKeys);
+            //_LOG_INFO("elected msg from peer while m_mayMakeKeys = " << m_mayMakeKeys);
             m_mayMakeKeys = -m_mayMakeKeys;
         }
         m_KMepoch = epoch;
@@ -368,7 +362,6 @@ struct DistGKey {
             p = (s + max_gkRs - 1) / max_gkRs;
             dCnt = pubCnt( p + 256 ); //upper 8 bits to k, lower 8 bits to n, 256 is (1 << 8)
         }
-        _LOG_INFO("publishKeyList to publish " << p << " Publications of key records");
 
         auto pubTS = std::chrono::system_clock::now();
         auto it = m_gkrList.begin();
@@ -395,10 +388,11 @@ struct DistGKey {
     // return the group key in a sealed box that can only opened by the 
     // secret key associated with public key 'pk'
     auto encryptGKey(const uint8_t* pk) const noexcept { 
-        // convert pk to form that can be used to encrypt
+        // convert member's identity pk to form that can be used to encrypt
         uint8_t cpk[crypto_scalarmult_curve25519_BYTES];
-        if(crypto_sign_ed25519_pk_to_curve25519(cpk, pk) != 0)
-            _LOG_INFO("encryptGKey: unable to convert signing pk to sealed box pk");
+        if(crypto_sign_ed25519_pk_to_curve25519(cpk, pk) != 0) {
+            //_LOG_INFO("encryptGKey: unable to convert signing pk to sealed box pk");
+        }
         // set encryptedKey to gk encrypted by epk version of pk
         encGK egKey;
         crypto_box_seal(egKey.data(), m_curKey.data(), m_curKey.size(), cpk);
@@ -415,8 +409,6 @@ struct DistGKey {
         //set the key's creation time
         m_curKeyCT = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
-        _LOG_INFO("makeGKey makes " << m_curKey.size() << " byte key with time " << m_curKeyCT
-                    << " for " << m_gkrList.size() << " list members");
 
         //iterate the map of thumbprints and encrypted keys to update the encrypted group key
         std::for_each(m_gkrList.begin(), m_gkrList.end(), [this](auto& gke) {
@@ -444,16 +436,14 @@ struct DistGKey {
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
         // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members. 
         if (m_gkrList.size() == 80*max_gkRs) {
-            _LOG_INFO("addGroupMem can't add this peer as exceeds maximum of " << 80*max_gkRs);
+            //_LOG_INFO("addGroupMem can't add this peer as exceeds maximum of " << 80*max_gkRs);
             return;
         }
         if (m_init) {
-            _LOG_INFO("addGroupMem in init state gets cert " << c.getName().toUri());
             m_gkrList[c.computeThumbPrint()] = encGK{}; //add this peer to m_gkrList with empty key
             return;
         }
         //create new gkr for this peer and add to m_gkrList
-        _LOG_INFO("addGroupMem gets cert " << c.getName().toUri());
         m_gkrList[c.computeThumbPrint()] = encryptGKey(c.getContent()->data());
         publishKeyList();    //publish the updated m_gkrList
     }

@@ -1,0 +1,73 @@
+// Home IoT Message-Based Pub/Sub relay unicast ("remote") trust schema
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+// This can be used with one of the iot[0-2].trust schemas where this
+// gets used for the relay's "remote" transport and the iot[0-2].trust
+// will be used for the "home" multicast DeftT  of the relay.
+// This uses AEAD so that external packets would be encrypted
+
+// trust anchor name associated with this schema
+_network:    "iot"
+
+// MBPS Publication definition
+// target, topic, topicArgs are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
+// A particular application process can make its subscription more
+// specific by using a subscription list with specific subset (designated
+// by targets) and related callback functions.
+
+#iotPub: _network/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+    _origin:   sysId()
+}
+
+lockReport: #iotPub & { target: "lock", topic: "event"|"status"
+    trgtLoc: "frontdoor"
+    topicArgs: "locked" | "unlocked"
+} <= devCert 
+
+lockCommand: #iotPub & { target: "lock", topic: "command" } &
+    { trgtLoc: "frontdoor" } &
+    { topicArgs:  "lock"|"unlock"|"report" } <= opCert
+
+roleCert:    _network/_role/_roleId/_keyinfo <= netCert
+
+// There are different signing chains for opCert & devCerts.
+// "key makers" (authorized by the KM capability, kmCap) are
+// responsible for creating and distributing the nonce
+// symmetric encryption keys used ensure publication privacy
+// and thus provide a service that needs to be highly available.
+// the remote clients are not good candiates for keymakers.
+// keymaker candidates. The assumption is that a relay
+// would be deployed on a continuously running device.
+// (The zone configurer decides at enrollment whether any particular
+// device and bespoke transport is a good key maker candidate.)
+// capability certs format (for capabilities granted to roles)
+// This is only for AEAD cAdd signing
+
+capCert: _net/"CAP"/_capId/_capArg/_keyinfo
+
+// The relay remote bundle needs to have the key maker capability
+
+kmCap:   capCert & { _capId: "KM" } <= netCert
+opCert:  roleCert & { _role: "operator" } <= netCert
+devCert: roleCert & { _role: "device" } <= netCert
+rlyCert: roleCert & { _role: "relay" } <= netCert |kmCap
+
+netCert: _network/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= roleCert
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _network
+#pubValidator: "EdDSA"
+
+// for cAdds
+#wireValidator: "AEAD"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_

@@ -1,7 +1,7 @@
 
 # the code *requires* C++20 or later
 CXX = clang++
-CXXFLAGS = -g -O2 -I. -I../../include -Wall -Wextra
+CXXFLAGS = -g -O3 -I. -I../../include -Wall -Wextra
 CXXFLAGS += -std=c++20
 CXXFLAGS += -I/opt/local/include
 CXXFLAGS += -I/usr/local/include

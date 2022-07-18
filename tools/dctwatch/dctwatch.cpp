@@ -90,18 +90,20 @@
 
 using namespace std::literals;
 
-static bool compact = true;
+static enum oFmt { compact, names, full } ofmt{compact};
 static bool doData = true;
 static bool doInterest = true;
+static bool hashIBLT = false;
 static bool filtering = false;
 static std::regex filter{};
 
 static Dissect di;
 
-using duration = std::chrono::duration<double, std::milli>;
+using durmilli = std::chrono::duration<double, std::milli>;
+using durmicro = std::chrono::duration<double, std::micro>;
 
-static auto tfmt(duration now) {
-    static duration last{};
+static auto tfmt(durmilli now) {
+    static durmilli last{};
     if (last == decltype(last)::zero()) last = now;
     auto dt = (now - last).count();
     last = now;
@@ -127,35 +129,52 @@ static auto tfmt(duration now) {
     return r;
 }
 
-static void compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
+static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
     auto now = std::chrono::system_clock::now();
     rName n{};
-    char ptype;
+    char ptype{};
     switch (d[0]) {
         default:
-            return;
+            return ptype;
         case 5:
+            try { n = rInterest(d, s).name(); } catch (const std::exception& e) { return ptype; }
             ptype = 'I';
-            n = rInterest(d, s).name();
             break;
         case 6:
+            try { n = rData(d, s).name(); } catch (const std::exception& e) { return ptype; }
             ptype = 'D';
-            n = rData(d, s).name();
             break;
     }
     //XXX work-around for fmt chrono problems - want to print seconds to ms resolution but
     // fmt will only do this for durations with a floating pt rep. But chrono prints hours
     // for durations as if they were gmtime but we want localtime so we do H & M from the
     // sys time point and S from it converted to a duration. Ick.
-    auto now2 = duration(now.time_since_epoch());
-    print("{:%H:%M:}{:%S}  {}  {}  {:5} {:4} {}\n", now, now2, tfmt(now2), ptype, sport, s, n);
+    auto now2 = durmicro(now.time_since_epoch());
+    print("{:%H:%M:}{:%S}  {}  {}  {:5} {:4} {}", now, now2, tfmt(now2), ptype, sport, s, n);
+    if (hashIBLT) print(" {:x}", (uint32_t)std::hash<tlvParser>{}(n));
+    print("\n");
+    return ptype;
 }
 
 static void fullPrint(const uint8_t* d, size_t s, uint16_t sport) {
-    compactPrint(d, s, sport);
+    if (compactPrint(d, s, sport) == 0) return;
 
     di.dissect(std::cout, tlvParser(d, s));
     std::cout << '\n';
+}
+
+static void namePrint(const uint8_t* d, size_t s, uint16_t sport) {
+    if (compactPrint(d, s, sport) != 'D') return;
+
+    auto rd = rData(d, s);
+    if (rd.sigType() == 7/*AEAD*/) return;
+
+    for (const auto c : rd.content()) {
+        if (! c.isType(6)) return;
+        rData p{c};
+        if (! p.valid()) return;
+        print(" | {}\n", p.name());
+    }
 }
 
 static void handlePkt(const uint8_t* d, size_t s, uint16_t sport) {
@@ -165,11 +184,15 @@ static void handlePkt(const uint8_t* d, size_t s, uint16_t sport) {
         auto n = d[0] == 5?  rInterest(d, s).name() : rData(d, s).name();
         if (! std::regex_search(format("{}", n), filter)) return;
     }
-    (compact? compactPrint : fullPrint)(d, s, sport);
+    switch (ofmt) {
+        case oFmt::compact: compactPrint(d, s, sport); return;
+        case oFmt::names: namePrint(d, s, sport); return;
+        case oFmt::full: fullPrint(d, s, sport); return;
+    }
 }
 
 static void usage(const char* pname) {
-    std::cerr << "usage: " << pname << " [-f|c] [-d|i|a] [regex]>\n";
+    std::cerr << "usage: " << pname << " [-f|c|n] [-d|i|a] [regex]>\n";
     exit(1);
 }
 
@@ -179,11 +202,12 @@ int main(int argc, char* argv[])
     while (--argc > 0 && **++argv == '-') {
         switch (argv[0][1]) {
             case 'a': doData = true;  doInterest = true; break;
+            case 'c': ofmt = oFmt::compact; break;
             case 'd': doData = true;  doInterest = false; break;
+            case 'f': ofmt = oFmt::full; break;
+            case 'h': hashIBLT = true; break;
             case 'i': doData = false; doInterest = true; break;
-
-            case 'c': compact = true; break;
-            case 'f': compact = false; break;
+            case 'n': ofmt = oFmt::names; break;
 
             default: usage(pname);
         }

@@ -21,12 +21,13 @@
  *  More information on DCT is available from info@pollere.net
  */
 
+#include <netinet/in.h>
 #include <net/if.h>
 #include <ifaddrs.h>
 #ifdef __linux__
 #include <linux/if_link.h>
 #endif
-
+#include <span>
 #include "dct/format.hpp"
 
 bool verbose{false};
@@ -76,7 +77,10 @@ int main(int argc, const char* argv[]) {
             //print("{} : {} {:x} {}", ifa->ifa_name, ifa->ifa_addr->sa_family, ifa->ifa_flags, ifa->ifa_data);
             print("{} : {} {:x}", ifa->ifa_name, ifa->ifa_addr->sa_family, ifa->ifa_flags);
             if ((ifa->ifa_flags & flagsMask) == flagsSet) print("*");
-            if (ifa->ifa_addr->sa_family == AF_INET6) print("!");
+            if (ifa->ifa_addr->sa_family == AF_INET6) {
+                auto addr = std::span(&((struct sockaddr_in6*)(ifa->ifa_addr))->sin6_addr.s6_addr[0], 16);
+                print("! {:x}", fmt::join(addr, ":"));
+            }
             if (ifa->ifa_data) {
 #ifdef __linux__
                 const rtnl_link_stats& ifd = *(rtnl_link_stats*)ifa->ifa_data;

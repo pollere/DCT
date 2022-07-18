@@ -48,7 +48,7 @@
  *  with this program; if not, see <https://www.gnu.org/licenses/>.
  *  You may contact Pollere LLC at info@pollere.net.
  *
- *  dist_gkey is not intended as production code.
+ *  capability is not intended as production code.
  */
 
 #include <functional>

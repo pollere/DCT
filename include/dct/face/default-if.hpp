@@ -28,6 +28,9 @@
 #ifdef __linux__
 #include <linux/if_link.h>
 #endif
+#include <array>
+#include <string>
+#include <string_view>
 
 /*
  * Interface flag testing. Candidate interfaces must be:
@@ -53,6 +56,9 @@ static bool better(void* n, void* o) {
 }
 
 static inline auto defaultIf() {
+    // if specified in environment use that interface name
+    if (auto ep = getenv("DCT_DEFAULT_IF"); ep) return std::string(ep);
+
     ifaddrs* ifaList{};
     if (::getifaddrs(&ifaList) < 0) throw runtime_error("error: getifaddrs failed");
     std::string_view bestIf = "none";
@@ -71,6 +77,23 @@ static inline auto defaultIf() {
     auto res = std::string(bestIf);
     freeifaddrs(ifaList);
     return res;
+}
+
+static inline auto getIp6Addr(std::string_view ifnm) {
+    ifaddrs* ifaList{};
+    if (::getifaddrs(&ifaList) < 0) throw runtime_error("error: getifaddrs failed");
+
+    auto ifa = ifaList;
+    for (; ifa; ifa = ifa->ifa_next) {
+        if (ifnm != ifa->ifa_name) continue;
+        if (! ifa->ifa_addr) continue;
+        if (ifa->ifa_addr->sa_family != AF_INET6) continue;
+        break;
+    }
+    if (! ifa) throw runtime_error(format("error: interface {} not found", ifnm));
+    auto saddr = *(struct sockaddr_in6*)(ifa->ifa_addr);
+    freeifaddrs(ifaList);
+    return saddr;
 }
 
 #endif // DCT_FACE_DEFAULT_IF_HPP

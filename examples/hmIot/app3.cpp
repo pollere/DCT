@@ -1,8 +1,8 @@
 /*
  * app3.cpp: command-line application to exercise mbps.hpp
  *
- * This is an application using mbps client. Messages packaged
- * in int8_t vectors are passed between application and client. To
+ * This is an application using the mbps shim. Messages packaged
+ * in int8_t vectors are passed between application and mbps. To
  * publish a message, an optional list of arguments can also be
  * included.
  *
@@ -38,7 +38,7 @@
 #include <iostream>
 #include <chrono>
 
-#include "../shims/mbps.hpp"
+#include <dct/shims/mbps.hpp>
 
 // handles command line
 static struct option opts[] = {
@@ -85,12 +85,12 @@ void repCmd(mbps &cm) {
         cm.publish(std::move(mp), opNote);
         std::cout << "Operator: " << myId << "-" << myPID << " published status command to all." << std::endl;
     } catch (const std::exception& e) {
-        _LOG_INFO("msgPubr got exception trying to publish message: " << e.what());
+        print("msgPubr got exception trying to publish message: {}\n", e.what());
    }
 }
 
 /*
- * msgPubr passes messages to publish to the mbps client.
+ * msgPubr passes messages to publish to the mbps.
  */
 
 void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
@@ -108,7 +108,7 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
         Pending = false;
         std::cout << "Entity " << role << ":" << myId << "-" << myPID << " published." << std::endl;
     } catch (const std::exception& e) {
-        _LOG_INFO("msgPubr got exception trying to publish message: " << e.what());
+        print("msgPubr got exception trying to publish message: {}\n", e.what());
     }
     if(role == "operator")
         repCmd(cm);
@@ -117,7 +117,7 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
 
 /*
  * msgRecv handles a message received in subscription (callback passed to subscribe)
- * The message is opaque to the mbps client which uses an argument list to pass
+ * The message is opaque to mbps which uses an argument list to pass
  * any necssary data that was not carried in the message body
  *
  * Prints the message content
@@ -134,7 +134,7 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
         auto content = std::string(msgPayload.begin(), msgPayload.end());
         std::cout << "\tmessage body: " << content << std::endl;
     } catch (const std::exception& e) {
-        _LOG_INFO("msgRecv got exception while parsing message and args: " << e.what());
+        print("msgRecv got exception while parsing message and args: {}\n", e.what());
     }
     /* further action can be conditional upon msgArgs and msgPayload
      * e.g., for command, change state if differs and publish event
@@ -155,7 +155,7 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 /*
  * Main() for the application to use.
  * First complete set up: parse input line, set up message to publish,
- * set up entity identifier. Then make the mbps client, connect,
+ * set up entity identifier. Then make the mbps DeftT, connect,
  * and run the context.
  */
 
@@ -163,7 +163,6 @@ static int debug = 0;
 
 int main(int argc, char* argv[])
 {
-    INIT_LOGGERS();
     // parse input line
     for (int c;
         (c = getopt_long(argc, argv, "c:dhl", opts, nullptr)) != -1;) {
@@ -188,7 +187,7 @@ int main(int argc, char* argv[])
     }
 
     myPID = std::to_string(getpid());
-    mbps cm(argv[optind]);     //Create the mbps client
+    mbps cm(argv[optind]);     //Create mbps
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
 
@@ -215,7 +214,7 @@ int main(int argc, char* argv[])
                  << e.what() << std::endl;
         exit(1);
     } catch (int conn_code) {
-        std::cerr << "main mbps client failed to connect with code "
+        std::cerr << "main mbps failed to connect with code "
                  << conn_code << std::endl;
         exit(1);
     } catch (...) {

@@ -30,6 +30,7 @@
 #include "dct/file_to_vec.hpp"
 #include "dct/format.hpp"
 #include "dct/schema/cert_bundle.hpp"
+#include "dct/schema/rpacket.hpp"
 
 
 int main(int argc, const char* argv[]) {
@@ -39,13 +40,28 @@ int main(int argc, const char* argv[]) {
     }
     auto buf = fileToVec(argv[1]);
     try {
+        // make a map relating each cert's thumbprint to its position in bundle
+        std::unordered_map<thumbPrint,int> tpmap{};
+        int c{0};
         for (const auto& [cert, key] : rdCertBundle(buf)) {
-            if (key.size()) {
-                std::span k{key};
-                print("{} key {}...\n", cert.getName().toUri(), fmt::join(k.first(3), ""));
+            const auto& ttp = cert.computeThumbPrint();
+            if (tpmap.contains(ttp)) print("** duplicate thumbprints: cert {} and {}.\n", tpmap[ttp], c);
+            tpmap[ttp] = c++;
+        }
+        c = 0;
+        for (const auto& [cert, key] : rdCertBundle(buf)) {
+            const auto& stp = cert.getKeyLoc();
+            if (dctCert::selfSigned(stp)) {
+                print("{} root", c);
+            } else if (! tpmap.contains(stp)) {
+                print("{} <= ?", c);
             } else {
-                print("{}\n", cert.getName().toUri());
+                print("{} <= {}", c, tpmap[stp]);
             }
+            print(": {}", rData(cert).name());
+            if (key.size()) print(" key '{:x}...", fmt::join(std::span{key}.first(4), ""));
+            print("\n");
+            ++c;
         }
     } catch (const std::runtime_error& se) { print("runtime error: {}\n", se.what()); }
 

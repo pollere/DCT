@@ -217,7 +217,7 @@ struct crName : rName {
 
 struct crPrefix : rPrefix {
     std::vector<uint8_t> v_;    // backing store for name
-    crPrefix(const ndn::Name& n) : v_{*n.wireEncode()} {
+    crPrefix(const std::vector<uint8_t>& v) : v_{v} {
         // skip over the (variable length) type and value
         m_blk = Blk{v_.data(), v_.size()};
         m_off = 1; //skip over type
@@ -227,6 +227,7 @@ struct crPrefix : rPrefix {
         m_blk = Blk{v_.data()+m_off, v_.size()-m_off};
         m_off = 0;
     }
+    crPrefix(const ndn::Name& n) : crPrefix{*n.wireEncode()} { }
 };
 
 template<> struct fmt::formatter<rPrefix>: fmt::dynamic_formatter<> {

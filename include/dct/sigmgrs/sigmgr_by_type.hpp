@@ -29,13 +29,15 @@
  * allocated and subject to compiler RVO. 
  *
  * List of Signature-managers by SIGNER_TYPE:
- * (NFD reserved values 0x01 RSASHA256, 0x04 HMACSHA256, 0x03 ECDSA
- *  are not implemented in DCT but an interested user could add them)
+ * (Note: in case DCT is being used with the NDN forwarder of named-data.net, its values of
+ * 0x01 RSASHA256, 0x04 HMACSHA256, 0x03 ECDSA are not used in DCT.)
  *  0x00 SHA256
  *  0x07 AEAD
  *  0x08 EdDSA
  *  0x09 RFC7693
  *  0x0a NULL
+ *  0x0b PPAEAD
+ *  0x0c PPSIGN
  */
 #include <string>
 #include <string_view>
@@ -46,6 +48,8 @@
 #include "sigmgr_eddsa.hpp"
 #include "sigmgr_rfc7693.hpp"
 #include "sigmgr_sha256.hpp"
+#include "sigmgr_ppaead.hpp"
+#include "sigmgr_ppsigned.hpp"
 #include "sigmgr_null.hpp"
 
 using namespace std::string_literals;
@@ -53,7 +57,7 @@ using namespace std::string_literals;
 template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
 template<class... Ts> overload(Ts...) -> overload<Ts...>;
 
-using Variants = std::variant<SigMgrSHA256,SigMgrAEAD,SigMgrRFC7693,SigMgrNULL,SigMgrEdDSA>;
+using Variants = std::variant<SigMgrSHA256,SigMgrAEAD,SigMgrRFC7693,SigMgrNULL,SigMgrEdDSA,SigMgrPPAEAD,SigMgrPPSIGN>;
 
 struct SigMgrAny : Variants {
     using Variants::Variants;
@@ -68,6 +72,7 @@ struct SigMgrAny : Variants {
     bool validate(rData d) { return ref().validate(d); }
     bool validate(rData d, const dct_Cert& c) { return ref().validate(d, c); }
     bool validateDecrypt(rData d) { return ref().validateDecrypt(d); }
+    bool validateDecrypt(rData d, const dct_Cert& c) { return ref().validateDecrypt(d, c); };
 
     bool sign(ndn::Data& d) { return ref().sign(d); }
     bool sign(ndn::Data& d, const SigInfo& s) { return ref().sign(d, s); }
@@ -77,6 +82,7 @@ struct SigMgrAny : Variants {
     bool validateDecrypt(ndn::Data& d) { return ref().validateDecrypt(d); }
 
     void addKey(const keyVal& k, uint64_t ktm = 0) { ref().addKey(k, ktm); }
+    void addKey(const keyVal& k, const keyVal& s) { ref().addKey(k, s); };
     void updateSigningKey(const keyVal& k, const dct_Cert& c) { ref().updateSigningKey(k, c); }
     void setKeyCb(KeyCb&& kcb) { ref().setKeyCb(std::move(kcb)); }
 
@@ -85,10 +91,12 @@ struct SigMgrAny : Variants {
 
 static inline const std::unordered_map<std::string,uint8_t> sigmgr_name_to_type {
     {"SHA256"s,  SigMgr::stSHA256},
-    {"AEAD",     SigMgr::stAEAD},
+    {"AEAD"s,     SigMgr::stAEAD},
     {"EdDSA"s,   SigMgr::stEdDSA},
     {"RFC7693"s, SigMgr::stRFC7693},
-    {"NULL"s,    SigMgr::stNULL}
+    {"NULL"s,    SigMgr::stNULL},
+    {"PPAEAD"s,     SigMgr::stPPAEAD},
+    {"PPSIGN"s,     SigMgr::stPPSIGN}
 };
 
 static inline SigMgrAny sigMgrByType(uint8_t type) {
@@ -98,6 +106,8 @@ static inline SigMgrAny sigMgrByType(uint8_t type) {
         case SigMgr::stEdDSA:   return SigMgrEdDSA();
         case SigMgr::stRFC7693: return SigMgrRFC7693();
         case SigMgr::stNULL:    return SigMgrNULL();
+        case SigMgr::stPPAEAD:  return SigMgrPPAEAD();
+        case SigMgr::stPPSIGN:    return SigMgrPPSIGN();
     }
     throw std::runtime_error(format("sigMgrByType: unknown signer type {}", type));
 }

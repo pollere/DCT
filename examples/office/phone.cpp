@@ -1,8 +1,8 @@
 /*
  * phone.cpp: phone app for the Office example used for ICN2021 tutorial
  *
- * This application using mbps client. Message body (if any) is packaged
- * in int8_t vectors to pass between application and client. Parameters
+ * This application uses mbps. Message body (if any) is packaged
+ * in int8_t vectors to pass between application and mbps. Parameters
  * are passed to mpbs in an vector of pairs (msgParms) and passed from mbps
  * to the application in a mbpsMsg structure that contains an unordered_map
  * where values are indexed by the tags (components of Names) that are
@@ -10,7 +10,7 @@
  *
  * phone models an app on a user phone
  * The identity bundle gives the app a role and the app can query through
- * its mbps client to get that role (employee, guard, manager) and predicate
+ * mbps to get that role (employee, guard, manager) and predicate
  * actions on the role.
  * (Note that an app can try to publish messages that are not permitted by the
  * trust schema and it will not be permitted to create the publication)
@@ -43,7 +43,7 @@
 #include <iostream>
 #include <random>
 
-#include "../shims/mbps.hpp"
+#include <dct/shims/mbps.hpp>
 
 using namespace std::literals;
 
@@ -69,7 +69,7 @@ static std::string loc{};
 static std::string args{};
 
 /*
- * msgPubr passes messages to publish to the mbps client.
+ * msgPubr passes messages to publish to the mbps.
  */
 static void cmdPubr(mbps &cm) {
     // publish command to func at loc then wait a bit to collect replies
@@ -99,7 +99,6 @@ static int debug = 0;
 
 int main(int argc, char* argv[])
 {
-    INIT_LOGGERS();
     // parse input line
     for (int c;
         (c = getopt_long(argc, argv, ":dh:w:", opts, nullptr)) != -1;) {
@@ -120,7 +119,7 @@ int main(int argc, char* argv[])
         usage(argv[0]);
         exit(1);
     }
-    mbps cm(argv[optind++]);     //Create the mbps client
+    mbps cm(argv[optind++]);     //Create the mbps DeftT 
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");
     room = cm.attribute("_roomId");
@@ -143,7 +142,7 @@ int main(int argc, char* argv[])
         std::cerr << "{} got exception: " << e.what() << std::endl;
         exit(1);
     } catch (int conn_code) {
-        std::cerr << "main mbps client failed to connect with code " << conn_code << std::endl;
+        std::cerr << "main mbps failed to connect with code " << conn_code << std::endl;
         exit(1);
     } catch (...) {
         std::cerr << "default exception";

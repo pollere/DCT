@@ -78,8 +78,8 @@
  * extract other information from the cert
  *
  * To validate, this sigmgr needs the public signing key of the sender.
- * This may be provided by the function that is calling validate() in the future,
- * but for now, there is a callback, m_keyCb that passes in the key locator (from
+ * This may be provided by the function that is calling validate()
+ * or the callback, m_keyCb that passes in the key locator (from
  * the packet) and a holder for a returned signing key. This cb is set using setKeyCb()
  * and if it is not set, then, can't validate. Would expect to set it with a lambda from
  * the parent function that looks like:
@@ -87,7 +87,7 @@
  *      keyCopy.assign(c.getContent().buf(), crypto_sign_PUBLICKEYBYTES);}
  */
 
-struct SigMgrEdDSA final : SigMgr {    
+struct SigMgrEdDSA final : SigMgr {
 
     SigMgrEdDSA() :
         SigMgr(stEdDSA,
@@ -137,16 +137,16 @@ struct SigMgrEdDSA final : SigMgr {
     }
 
     // common validate logic
-    bool validate(rData d, keyRef pk) const {
+    bool validate(rData d, keyRef pk) const{
         auto sig = d.signature();
         if (sig.size() - sig.off() != crypto_sign_BYTES) {
-            print("eddsa size wrong: {}\n", sig.size() - sig.off());
+            //_LOG_WARN("sigmgr_eddsa::validate: eddsa size wrong");
             return false;
         }
         auto strt = d.name().data();
         auto sz = sig.data() - strt; 
         if (crypto_sign_verify_detached(sig.data() + sig.off(), strt, sz, pk.data()) != 0) {
-            print("eddsa verify failed\n");
+            //_LOG_WARN("sigmgr_eddsa::validate: eddsa verify failed");
             return false;
         }
         return true;

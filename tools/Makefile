@@ -1,6 +1,6 @@
-CXXFLAGS = -Wall -Wextra -g -O0 -std=c++20 -I../include
-CXXFLAGS += -fsanitize=address,undefined
-#CXXFLAGS = -Wall -Wextra -g -O3 -std=c++20 -I../include
+#CXXFLAGS = -Wall -Wextra -g -O0 -std=c++20 -I../include
+#CXXFLAGS += -fsanitize=address,undefined
+CXXFLAGS = -Wall -Wextra -g -O3 -std=c++20 -I../include
 
 ifeq ($(shell uname -s),Linux)
 #CXX = clang++
@@ -21,7 +21,7 @@ LIBS =  -lndn-ind -llog4cxx -lsodium -lcrypto
 .DEFAULT_GOAL = all
 
 TOOLS = schema_cert schema_info schema_dump make_cert make_bundle ls_bundle bld_dump schemaCompile
-TESTS = tst_encodeer tst_rpacket tst_validate
+TESTS = tst_encodeer tst_rpacket tst_validate tst_transport time_signing
 
 all: $(TOOLS)
 
@@ -66,6 +66,10 @@ tst_encoder: tst_encoder.cpp
 
 tst_rpacket: tst_rpacket.cpp 
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	#rm -rf $@.dSYM
+
+tst_transport: tst_transport.cpp 
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_validate: tst_validate.cpp 

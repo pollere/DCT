@@ -33,13 +33,13 @@ roleCert:    _network/_role/_roleId/_keyinfo
 // "key makers" (authorized by the KM capability, kmCap) are
 // responsible for creating and distributing the nonce
 // symmetric encryption keys used ensure publication privacy
-// and thus provide a service to the entire trust zone that
+// and thus provide a service to the entire Collection that
 // needs to be highly available.
-// opCerts are used to sign commands issued by (transient) CLI
+// opCerts are used to sign commands issued by (transient) client
 // programs and transient programs shouldn't be key makers.
 // devCerts are used by devices that run continuously
 // (unless they're battery powered) thus make better
-// keymaker candidates. (The zone configurer decides at
+// keymaker candidates. (The domain configurer decides at
 // device enrollment whether any particular device is
 // a good key maker candidate.)
 opCert:  roleCert & { _role: "operator" } <= netCert
@@ -58,16 +58,9 @@ netCert: _network/_keyinfo
 #pubPrefix:    _network
 #pubValidator: "EdDSA"
 
-// Prefix used at the syncps (NDN Interest/Data) level to sync
-// this collection.
-
-#wirePrefix: _ndnprefix & { _ndnprefix: "localnet" }
+// used for cAdds
 #wireValidator: "AEAD"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version
 _keyinfo: "KEY"/_/"dct"/_
-
-// Uses a Publication validator that requires certs. 
-// The wire prefix that the key distributor will use to synchronize these certs
-// is #wirePrefix/"cert". Normal publications use #wirePrefix/"pubs"

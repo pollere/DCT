@@ -8,9 +8,8 @@ CXXFLAGS += -fsanitize=address,undefined
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 CXXFLAGS += $(shell pkg-config --cflags libndn-ind)
 LIBS = -L/opt/local/lib $(shell pkg-config --libs libndn-ind)
-HDRS = ../shims/mbps.hpp
 DEPS = $(HDRS)
-BINS = app1 app2 app3
+BINS = app1 app2 app3 app4
 JUNK = 
 
 # OS dependent definitions
@@ -27,7 +26,7 @@ LIBS += -llog4cxx -lpthread -lsodium -lcrypto
 endif
 
 #all: $(BINS)
-all: app1 app2 app3
+all: app1 app2 app3 app4
 
 .PHONY: clean distclean tags
 
@@ -38,6 +37,9 @@ app2: app2.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 
 app3: app3.cpp $(DEPS)
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+app4: app4.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 
 clean:

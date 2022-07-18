@@ -1,5 +1,6 @@
 #ifndef DCTMODEL_HPP
 #define DCTMODEL_HPP
+
 /*
  * Data Centric Transport schema policy model abstraction
  *
@@ -37,7 +38,7 @@
 #include "validate_pub.hpp"
 #include "dct/distributors/dist_cert.hpp"
 #include "dct/distributors/dist_gkey.hpp"
-
+#include "dct/distributors/dist_sgkey.hpp"
 
 using Publication = ndn::Data;
 using Name = ndn::Name;
@@ -55,15 +56,16 @@ struct DCTmodel {
     static inline std::function<size_t(std::string_view)> _s2i;
     DistCert m_ckd;         // cert collection distributor
     DistGKey* m_gkd{};      // group key distributor (if needed)
+    DistSGKey* m_sgkd{};    // subscriber group key distributor (if needed)
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
 
     SigMgr& wireSigMgr() { return wsm_.ref(); }
     SigMgr& pubSigMgr() { return psm_.ref(); }
     auto pubPrefix() const { return bs_.pubVal("#pubPrefix"); }
 
-    // the wirePrefix is a Name whose first component(s) are the #wirePrefix string from the schema and
-    // last component is the first 8 bytes of the schema cert thumbprint to make it trust-zone specific.
-    auto wirePrefix() const { return Name(bs_.pubVal("#wirePrefix")).append(bs_.schemaTP_.data(), 8); }
+    // all cState/cAdd packet names start with the first 8 bytes
+    // of the schema cert thumbprint to make them trust-zone specific.
+    auto wirePrefix() const { return Name().append(bs_.schemaTP_.data(), 8); }
 
     const auto& certs() const { return cs_; }
 
@@ -170,8 +172,9 @@ struct DCTmodel {
             psm_{getSigMgr(bs_)},
             wsm_{getWireSigMgr(bs_)},
             syncSm_{psm_.ref(), bs_, pv_},
-            m_sync{syncps::SyncPubsub(face, wirePrefix().append("pubs"), wireSigMgr(), syncSm_)},
-            m_ckd{ pubPrefix(), wirePrefix().append("cert"),
+            //m_sync{syncps::SyncPubsub(face, wirePrefix().append("pubs"), wireSigMgr(), syncSm_)},
+            m_sync{face, wirePrefix().append("pubs"), wireSigMgr(), syncSm_},
+            m_ckd{ face, pubPrefix(), wirePrefix().append("cert"),
                    [this](auto cert){ addCert(cert);},  [](auto /*p*/){return false;} }
     {
         // pub sync session is started after distributor(s) have completed their setup
@@ -181,18 +184,31 @@ struct DCTmodel {
                 // schema doesn't contain a "KeyMaker" capability cert so AEAD won't work
                 throw schema_error("AEAD requires that some entity(s) have KeyMaker capability");
             }
-            m_gkd = new DistGKey(pubPrefix(), wirePrefix().append("keys"),
+            m_gkd = new DistGKey(face, pubPrefix(), wirePrefix().append("keys"),
                              [this](auto& gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
+        } else if (wsm_.ref().type() == SigMgr::stPPAEAD || wsm_.ref().type() == SigMgr::stPPSIGN) {
+            if (matchesAny(bs_, pubPrefix() + "/CAP/KM/_/KEY/_/dct/_") < 0) {
+                // schema doesn't contain a "KeyMaker" capability cert so PPAEAD and TBSC won't work
+                throw schema_error("PPAEAD and TBSC require that some entity(s) have KeyMaker capability");
+            }
+            m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix().append("keys"),
+                             [this](auto& gpk, auto& gsk, auto ct){ wsm_.ref().addKey(gpk, gsk, ct);}, certs());
         }
         // cert distributor needs a callback when cert added to certstore.
         // when it's set up, push all the certs that went in prior to the
         // callback to the distributor (all the bootstrap info).
         // If using AEAD wireSigMgr, the group key distributor needs an update for new members
         //  (but shouldn't call with its own signing key)
+        // NOTE: should possibly change this to use thumbPrint in future
         if (m_gkd) {
             cs_.addCb_ = [this, &ckd=m_ckd, &gkd=*m_gkd] (const dctCert& cert) {
                             ckd.publishCert(cert);
                             if (isSigningCert(cert)) gkd.addGroupMem(cert);
+                         };
+        } else if (m_sgkd) {    //sg is currently on possible on wire prefix
+            cs_.addCb_ = [this, &ckd=m_ckd, &sgkd=*m_sgkd] (const dctCert& cert) {
+                            ckd.publishCert(cert);
+                            if (isSigningCert(cert)) sgkd.addGroupMem(cert);
                          };
         } else {
             cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
@@ -269,14 +285,21 @@ struct DCTmodel {
 
     // set start callback for shims that have a separate connect/start like mbps
     void start(connectedCb&& cb) {
-        if(! m_gkd) {
-            m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-            return;
-        }
-        m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+        if (m_gkd) {
+            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                         if (!c) { cb(false); return; }
                         m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                     });
+            return;
+        }
+        if (m_sgkd) {
+            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+                        if (!c) { cb(false); return; }
+                        m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                    });
+            return;
+        }
+        m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
     }
 
     // inspection API to extract information from the schema.
@@ -292,7 +315,7 @@ struct DCTmodel {
     // return the 'value' of some publication in the schema, either as a Name or,
     // if a tag for the pub is given, the value of that component. This is intended
     // to extract information from parameter-less meta-information pubs like
-    // #wirePrefix or #chainInfo. If used on a pub that requires parameters it
+    // #pubPrefix or #chainInfo. If used on a pub that requires parameters it
     // will throw an error.
     auto pubVal(std::string_view pubnm) const {
         auto cs{cs_};

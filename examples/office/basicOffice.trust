@@ -28,8 +28,7 @@ netCert:    _net/_keyinfo
 #pubPrefix:    _net
 #pubValidator: "EdDSA"
 
-// Prefix used for syncData (NDN Interest/Data)
-#wirePrefix: _ndnprefix/_net & { _ndnprefix: "localnet" }
+// for cAdds
 #wireValidator: "AEAD"
 
 // The final components are KEY,keyID, issuerID and version 
