@@ -43,7 +43,7 @@ An application can receive its bundle via the command line, a pipe or some other
 
 A secure commissioning procedure can be employed to configure devices with a bootstrap identity bundle. DCT does not include such a procedure; we recommend using the best practice suitable for your particular installation. A simple example is to have the configurer set up devices by being in physical contact with them and using a USB stick or a dedicated connection. The general steps in configuration are shown in the figure, where the process of making identity certs and identity bundles is repeated for all devices to be configured. Every time a device is added, the trust anchor signing key can be used by the configurer to make a new identity and identity bundle and add it to the device.
 
-![tools.config](/Users/nichols/ActiveProjects/DCT/tools/tools.config.png)
+![tools.config](tools.config.png)
 
 Using the DCT library, programs could be written to add updated trust schemas to the domain's cert collection and methods added to update validated trust schema. Once devices are part of the domain, signing chains can be updated over the network by using the cert Collection and encrypting new signing keys with the previous public signing key. Examples and methods for this may be added to DCT in the future but it's best to make your own if you need this functionality.
 
