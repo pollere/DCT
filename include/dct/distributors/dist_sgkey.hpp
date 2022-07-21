@@ -70,7 +70,8 @@ struct DistSGKey {
     using gkr = std::pair<const thumbPrint, encSGK>;
     static constexpr int max_gkRs = (syncps::maxPubSize - kxpkKeySz - 12) / (sizeof(thumbPrint) + encSGKeySz);
 
-    Name m_pubPrefix;     // prefix for subscriber group key pair publications (topic list)
+    Name m_pubPrefix;     // prefix for subscriber group key publications
+    Name m_sgpkPrefix;    // prefix for subscriber group public key (adds "pbk"
     Name m_kmPrefix;      // prefix for keyMaker election publications (topic km)
     SigMgrAny m_syncSM{sigMgrByType("EdDSA")};  // to sign/validate SyncData packets
     SigMgrAny m_keySM{sigMgrByType("EdDSA")};   // to sign/validate Publications in key Collection
@@ -102,7 +103,7 @@ struct DistSGKey {
              std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
              std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
              std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
-             m_pubPrefix{pPre + "/list"}, m_kmPrefix{pPre + "/km"},
+             m_pubPrefix{pPre + "/sgk"}, m_sgpkPrefix{m_pubPrefix + "/pbk"}, m_kmPrefix{pPre + "/km"},
              m_sync(face, wPre, m_syncSM.ref(), m_keySM.ref()),
              m_certs{cs},
              m_newKeyCb{std::move(sgkeyCb)}, //called when a (new) group key arrives or is created
@@ -173,28 +174,26 @@ struct DistSGKey {
     }
 
     /*
-     * Called when a new Publication is received in the key collection
-     * If have subr capability, look for the group key record with *my* key thumbprint
-     * No need to keep track of all the Publications (if more than one)
-     * unless to indicate an error condition if no matching key was found, so skipping for now.
-     * (syncps should take care of getting any missing Publication as it would show up in the IBLT)
+     * Called when a new Publication is received in the subscriber group key collection public key topic
+     * Name of pubs this handles should have form: <m_pubPrefix>/pbk/<m_KMepoch>/<timestamp>
      */
-    void receiveSGKeyList(syncps::Publication& p)
+    void rcvSGPubKy(syncps::Publication& p)
     {
-        if (m_mayMakeKeys > 0) return;  //shouldn't happen: keyMaker unsubscribes to collection
+        if (m_mayMakeKeys > 0 || m_subr)
+            return;  //shouldn't happen: keyMaker unsubscribes to collection, only non subscribing members just sub to pbk
         if (! m_kmCap(dctCert::getKeyLoc(p)).first || ! m_sgCap(dctCert::getKeyLoc(p)).first) {      
             return; //ignore keylist signed by unauthorized identity
         }
         const auto& n = p.getName();
         if(n[-1].toTimestampMicroseconds() < m_curKeyCT) {
-            return; //group key publication is older than current stored key
+            return; //key publication is older than current stored key
         }
         // if this msg was from an earlier Key Maker epoch, ignore it. If from a later
         // epoch, wrongEpoch will cancel any in-progress election and update our epoch.
-        auto epoch = n[-3].toNumber();
+        auto epoch = n[-2].toNumber();
         if (wrongEpoch(epoch) && epoch != m_KMepoch) return;
 
-        // decode the Content
+        // decode the Content - should be creation time and the SG public key
         uint64_t newCT{};
         std::span<const gkr> gkrVec{};
         try {
@@ -208,46 +207,76 @@ struct DistSGKey {
 
             // the second tlv should be type 150 and should decode to a vector of uint8_t (for public SG key)
             m_sgPK = decode.nextBlk(150).toVector<uint8_t>();
-            if(!m_subr) {
-                if(m_init) {
-                    m_curKeyCT = newCT;
-                    m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT); //use addKeyCb to set new sg public key in pub privacy sigmgr
-                    // parent has public key so callback to start next stage
-                    m_sync.cStateLifetime(std::chrono::milliseconds(6763));
-                    m_init = false;
-                    m_connCb(true);
-                }
-                return;
+            m_curKeyCT = newCT;
+            m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT); //use addKeyCb to set new sg public key in pub privacy sigmgr
+            if(m_init) {
+                // parent has public key so callback to start next stage
+                m_sync.cStateLifetime(std::chrono::milliseconds(6763));
+                m_init = false;
+                m_connCb(true);
             }
-            // the second tlv should be type 130 and should be a vector of gkr pairs
-            gkrVec = decode.nextBlk(130).toSpan<gkr>();    
+            return;
+            // (future: ensure it's from the same creator as last time?)
+        } catch (std::runtime_error& ex) {
+            return; //ignore this publication - content type error e.what()
+        }
+    }
+
+    /*
+     * Called when a new Publication is received in the subscriber group key collection, m_tp topic
+     * Name of pubs this handles should have form: <m_pubPrefix>/<m_tp>/<m_KMepoch>/<timestamp>
+     * SG subscribers get the new key pair from this publication
+     */
+    void rcvSGScrKy(syncps::Publication& p)
+    {
+        if (m_mayMakeKeys > 0 || !m_subr)
+            return;  //shouldn't happen: keyMaker unsubscribes to collection, non-subrs don't subscribe
+        if (! m_kmCap(dctCert::getKeyLoc(p)).first || ! m_sgCap(dctCert::getKeyLoc(p)).first) {
+            return; //ignore keylist signed by unauthorized identity
+        }
+        const auto& n = p.getName();
+        if(n[-1].toTimestampMicroseconds() < m_curKeyCT) {
+            return; //group key publication is older than current stored key
+        }
+        // if this msg was from an earlier Key Maker epoch, ignore it. If from a later
+        // epoch, wrongEpoch will cancel any in-progress election and update our epoch.
+        auto epoch = n[-3].toNumber();
+        if (wrongEpoch(epoch) && epoch != m_KMepoch) return;
+
+        // decode the Content: creation time, public key, encrypted secret key
+        uint64_t newCT{};
+        std::span<const gkr> gkrVec{};
+        try {
+            tlvParser decode(*p.getContent(), 0);
+            // the first tlv should be type 36 and it should decode to a uint64_t
+            newCT = decode.nextBlk(36).toNumber();
+            // a new key will have a creation time larger than m_curKeyCT
+            if(newCT <= m_curKeyCT) {
+                return; //received key is not newer that current key
+            }
+            // the second tlv should be type 150 and should decode to a vector of uint8_t (for public SG key)
+            m_sgPK = decode.nextBlk(150).toVector<uint8_t>();
+            // the second tlv should be type 150 and should decode to a vector of uint8_t (for encrypted secret SG key)
+            const auto& nk = decode.nextBlk(150).toVector<uint8_t>();
+            // decrypt and save the secret key of pair [might not need to save since gets passed to sigmgr to use]
+            uint8_t m[kxskKeySz];
+            if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
+                return; //can't open encrypted key
+            m_sgSK = std::vector<uint8_t>(m, m + kxskKeySz); // it's a good key, so set it
+            m_curKeyCT = newCT;
+            m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT);   //call back parent to pass the new sg key pair to pub privacy sigmgr
+            if(m_init) {
+                // parent has key so callback to start next stage
+                m_sync.cStateLifetime(std::chrono::milliseconds(6763));
+                m_init = false;
+                m_connCb(true);
+            }
             // (future: ensure it's from the same creator as last time?)
         } catch (std::runtime_error& ex) {
             return; //ignore this groupKey message - content type error e.what()
         }
-
-        auto it = std::find_if(gkrVec.begin(), gkrVec.end(), [this](auto p){ return p.first == m_tp; });
-        if (it == gkrVec.end()) {
-            return; //didn't find a key in publication
-        }
-
-        // decrypt and save the secret key of pair [might not need to save since gets passed to sigmgr to use]
-        const auto& nk = it->second;
-        uint8_t m[kxskKeySz];
-        if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
-            return; //can't open encrypted key
-        }
-
-        m_sgSK = std::vector<uint8_t>(m, m + kxskKeySz);
-        m_curKeyCT = newCT; //now that we know it's a good key, we can set it
-        m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT);   //call back parent to pass the new sg key pair to pub privacy sigmgr
-        if(m_init) {
-            // parent has key so callback to start next stage
-            m_sync.cStateLifetime(std::chrono::milliseconds(6763));
-            m_init = false;
-            m_connCb(true);
-        }
     }
+
 
     /*
      * setUp() is called from a connect() function in dct_model, typically
@@ -287,8 +316,10 @@ struct DistSGKey {
      */
     void setup(connectedCb&& ccb) {
         m_connCb = std::move(ccb);
-        // subscribe to key collection and wait for a group key list
-        m_sync.subscribeTo(m_pubPrefix, [this](auto p){ receiveSGKeyList(p); });
+        if(m_subr) // SG subscribers need their encrypted copy of secret key
+            m_sync.subscribeTo(Name(m_pubPrefix).append(m_tp), [this](auto p){ rcvSGScrKy(p); });
+        else // subscribe to subscriber group key collection, public key and wait for a key
+            m_sync.subscribeTo(m_sgpkPrefix, [this](auto p){ rcvSGPubKy(p); });
         m_sync.subscribeTo(Name(m_kmPrefix).append("elec"), [this](auto p){ handleKMelec(p); });
         if(m_mayMakeKeys > 0) joinKMelection();
     }
@@ -318,7 +349,8 @@ struct DistSGKey {
         if (m_mayMakeKeys <= 0) return;
 
         ++m_KMepoch;
-        m_sync.unsubscribe(m_pubPrefix);   //unless checking for conflicts
+        m_sync.unsubscribe(Name(m_pubPrefix).append(m_tp)); //unless checking for conflicts
+
         sgkeyTimeout();  //create a group key, publish it, callback parent with key, set next rekey
         publishKM("elec");
         m_sync.cStateLifetime(std::chrono::milliseconds(6763));
@@ -373,33 +405,29 @@ struct DistSGKey {
      * Publish even if the list is empty to continue to assert keyMaker role
      */
     void publishKeyList() {
-        // assume one publication will hold all the keys
-        int p = 1;
-        auto dCnt = pubCnt(0);
-        auto s = m_gkrList.size();
-        if(s > max_gkRs) {
-            // determine number of Publications needed since > 1 required
-            p = (s + max_gkRs - 1) / max_gkRs;
-            dCnt = pubCnt( p + 256 ); //upper 8 bits to k, lower 8 bits to n, 256 is (1 << 8)
-        }
+        // publish the SG public key
+        syncps::Publication p(Name(m_sgpkPrefix).appendNumber(m_KMepoch).appendTimestamp(ts));
+        tlvEncoder sgpk{};    //tlv encoded SG private key
+        sgpk.addNumber(36, m_curKeyCT);
+        sgpk.addArray(150, m_sgPK);
+        p.setContent(sgpk);
+        m_keySM.sign(p);
+        m_sync.publish(std::move(p));
+
+        // iterate list of encrypted secret keys and publish
         auto pubTS = std::chrono::system_clock::now();
-        auto it = m_gkrList.begin();
-        for(auto i=0; i<p; ++i) {
-            auto r = s < max_gkRs ? s : max_gkRs;
-            tlvEncoder gkrEnc{};    //tlv encoded content
-            gkrEnc.addNumber(36, m_curKeyCT);
-            gkrEnc.addArray(150, m_sgPK);
-            it = gkrEnc.addArray(130, it, r);
-            publishKeySeg(dCnt, pubTS, gkrEnc.vec());
-            dCnt += 256;   // increment the publication# part of dCnt
-            s -= r;
+        for(const auto& [key, value] : m_gkrList) {
+            tlvEncoder sgsk{};    //tlv encoded SG secret key
+            sgsk.addNumber(36, m_curKeyCT);
+            sgsk.addArray(150, value);  //the encrypted value
+            publishKeyMem(key, pubTS, sgsk);
         }
     }
 
-    // Publish one segment of the subscriber group key list
-    void publishKeySeg(pubCnt d, auto ts, auto& c) {
-        syncps::Publication p(Name(m_pubPrefix).append(sysID()).appendNumber(m_KMepoch)
-                                               .appendNumber(d).appendTimestamp(ts));
+    // Publish one member of the subscriber group list
+    void publishKeyMem(auto& tp, auto ts, auto& c) {
+        syncps::Publication p(Name(m_pubPrefix).append(tp).appendNumber(m_KMepoch)
+                                               .appendTimestamp(ts));
         p.setContent(c);
         m_keySM.sign(p);
         m_sync.publish(std::move(p));
@@ -451,17 +479,25 @@ struct DistSGKey {
      * This indicates to the keyMaker there is a new peer that needs the group key
      * Ignore if not a keyMaker. If initialization, go ahead and add to list in case
      * this becomes the keyMaker, but don't try to publish.
+     *
+     * Shouldn't have to republish the entire keylist, so this version publishes each
+     * encrypted secret key separately. The trade-off is that the number of Publications
+     * should be fewer than 'complete peeling' iblt threshold (currently 80).
+     * Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members
+     * if they are published as a list. This method limits to 80 members. A future hybrid
+     * could make the individual Publications short-lived or segment the publications of
+     * the list with more meaningful names
+     *
      */
     void addGroupMem(const dctCert& c) {
         if(m_mayMakeKeys <= 0) return;  //this entity is not a keymaker
         auto tp = dctCert::computeThumbPrint(c);
-        //shouldn't have to republish the keylist so a publisher can get public key since key list lifefime is long
+        //a publish-only member can get public key since key list lifefime is long
         if(!m_sgCap(tp).first) return;  //this signing cert doesn't have SG capability.
 
-        // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
-        // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members. 
-        if (m_gkrList.size() == 80*max_gkRs) {
-            return; // exceeds maximum of " << 80*max_gkRs);
+        // see larger comment above
+        if (m_gkrList.size() == 80) {
+            return;
         }
         // convert pk to form that can be used to encrypt and add to member list
         if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), c.getContent()->data()) != 0)
@@ -471,7 +507,10 @@ struct DistSGKey {
             m_gkrList[tp] = encSGK{}; //add this peer to m_gkrList with empty key
         } else {
             m_gkrList[tp] = encryptSGKey(tp);   //add this peer to key list with encrypted sg sk
-            publishKeyList();                   //publish the updated m_gkrList
+            tlvEncoder sgsk{};    //tlv encoded SG secret key
+            sgsk.addNumber(36, m_curKeyCT);
+            sgsk.addArray(150, m_gkrList[tp]);  //the encrypted value
+            publishKeyMem(tp, std::chrono::system_clock::now(), sgsk);
         }
     }
 
