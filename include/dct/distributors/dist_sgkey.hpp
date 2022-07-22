@@ -419,6 +419,7 @@ struct DistSGKey {
         for(const auto& [key, value] : m_gkrList) {
             tlvEncoder sgsk{};    //tlv encoded SG secret key
             sgsk.addNumber(36, m_curKeyCT);
+            sgpk.addArray(150, m_sgPK);
             sgsk.addArray(150, value);  //the encrypted value
             publishKeyMem(key, pubTS, sgsk);
         }
@@ -509,6 +510,7 @@ struct DistSGKey {
             m_gkrList[tp] = encryptSGKey(tp);   //add this peer to key list with encrypted sg sk
             tlvEncoder sgsk{};    //tlv encoded SG secret key
             sgsk.addNumber(36, m_curKeyCT);
+            sgpk.addArray(150, m_sgPK);
             sgsk.addArray(150, m_gkrList[tp]);  //the encrypted value
             publishKeyMem(tp, std::chrono::system_clock::now(), sgsk);
         }
