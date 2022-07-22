@@ -262,6 +262,7 @@ struct DistSGKey {
             uint8_t m[kxskKeySz];
             if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
                 return; //can't open encrypted key
+            }
             m_sgSK = std::vector<uint8_t>(m, m + kxskKeySz); // it's a good key, so set it
             m_curKeyCT = newCT;
             m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT);   //call back parent to pass the new sg key pair to pub privacy sigmgr
@@ -516,8 +517,12 @@ struct DistSGKey {
         }
     }
 
-    // won't encrypt a group key for this thumbPrint in future
-    // if reKey is set, change the group key now to exclude the removed member
+    /*
+     * won't encrypt a group key for this thumbPrint in future
+     * if this becomes a subscription callback for blacklist publications, should
+     * probably mark entries rather than delete
+     * if reKey is set, change the group key now to exclude the removed member
+     */
     void removeGroupMem(thumbPrint& tp, bool reKey = false) {
         m_gkrList.erase(tp);
         m_mbrList.erase(tp);
