@@ -103,7 +103,7 @@ struct DistSGKey {
              std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
              std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
              std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
-             m_pubPrefix{pPre + "/sgk"}, m_sgpkPrefix{m_pubPrefix + "/pbk"}, m_kmPrefix{pPre + "/km"},
+             m_pubPrefix{pPre + "/sgk"}, m_sgpkPrefix{pPre + "/sgk/pbk"}, m_kmPrefix{pPre + "/km"},
              m_sync(face, wPre, m_syncSM.ref(), m_keySM.ref()),
              m_certs{cs},
              m_newKeyCb{std::move(sgkeyCb)}, //called when a (new) group key arrives or is created
@@ -195,7 +195,6 @@ struct DistSGKey {
 
         // decode the Content - should be creation time and the SG public key
         uint64_t newCT{};
-        std::span<const gkr> gkrVec{};
         try {
             tlvParser decode(*p.getContent(), 0);
             // the first tlv should be type 36 and it should decode to a uint64_t
@@ -245,7 +244,6 @@ struct DistSGKey {
 
         // decode the Content: creation time, public key, encrypted secret key
         uint64_t newCT{};
-        std::span<const gkr> gkrVec{};
         try {
             tlvParser decode(*p.getContent(), 0);
             // the first tlv should be type 36 and it should decode to a uint64_t
@@ -406,8 +404,9 @@ struct DistSGKey {
      * Publish even if the list is empty to continue to assert keyMaker role
      */
     void publishKeyList() {
+        auto pubTS = std::chrono::system_clock::now();
         // publish the SG public key
-        syncps::Publication p(Name(m_sgpkPrefix).appendNumber(m_KMepoch).appendTimestamp(ts));
+        syncps::Publication p(Name(m_sgpkPrefix).appendNumber(m_KMepoch).appendTimestamp(pubTS));
         tlvEncoder sgpk{};    //tlv encoded SG private key
         sgpk.addNumber(36, m_curKeyCT);
         sgpk.addArray(150, m_sgPK);
@@ -416,7 +415,7 @@ struct DistSGKey {
         m_sync.publish(std::move(p));
 
         // iterate list of encrypted secret keys and publish
-        auto pubTS = std::chrono::system_clock::now();
+
         for(const auto& [key, value] : m_gkrList) {
             tlvEncoder sgsk{};    //tlv encoded SG secret key
             sgsk.addNumber(36, m_curKeyCT);
@@ -509,11 +508,11 @@ struct DistSGKey {
             m_gkrList[tp] = encSGK{}; //add this peer to m_gkrList with empty key
         } else {
             m_gkrList[tp] = encryptSGKey(tp);   //add this peer to key list with encrypted sg sk
-            tlvEncoder sgsk{};    //tlv encoded SG secret key
-            sgsk.addNumber(36, m_curKeyCT);
-            sgpk.addArray(150, m_sgPK);
-            sgsk.addArray(150, m_gkrList[tp]);  //the encrypted value
-            publishKeyMem(tp, std::chrono::system_clock::now(), sgsk);
+            tlvEncoder sgkp{};    //tlv encoded SG secret key
+            sgkp.addNumber(36, m_curKeyCT);
+            sgkp.addArray(150, m_sgPK);
+            sgkp.addArray(150, m_gkrList[tp]);  //the encrypted value
+            publishKeyMem(tp, std::chrono::system_clock::now(), sgkp);
         }
     }
 
