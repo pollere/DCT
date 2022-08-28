@@ -33,8 +33,7 @@
 
 using schema_error = bschema::schema_error;
 
-using certName = ndn::Name;
-using certVec = std::vector<certName>;
+using certVec = std::vector<tlvVec>;
 using certChain = std::vector<thumbPrint>;
 using keyVal = std::vector<uint8_t>;
 using certAddCb = std::function<void(const dctCert&)>;
@@ -51,7 +50,7 @@ struct certStore {
     void dumpcerts() const {
         print("Cert Dump\n");
         int i = 0;
-        for (const auto& [tp, cert] : certs_) print("{} {} tp {:x}\n", i++, cert.getName().toUri(), fmt::join(tp," "));
+        for (const auto& [tp, cert] : certs_) print("{} {} tp {:x}\n", i++, cert.name(), fmt::join(tp," "));
     }
 
     auto begin() const { return certs_.cbegin(); }
@@ -72,15 +71,11 @@ struct certStore {
         }
         return get(tp);
     }
-    const auto& operator[](const ndn::Data& data) const {
-         const auto& tp = dctCert::getKeyLoc(data);
-         return dctCert::selfSigned(tp)? reinterpret_cast<const dctCert&>(data) : get(tp);
-    }
 
     // lookup the (public) signing key of 'data'
     auto signingKey(rData data) const {
         const auto& tp = dctCert::getKeyLoc(data);
-        if (! dctCert::selfSigned(tp)) data = rData(get(tp)); //XXX fix when get returns rData
+        if (! dctCert::selfSigned(tp)) data = get(tp);
         return data.content().rest();
     }
 
@@ -101,10 +96,26 @@ struct certStore {
     // to change but this is not currently checked).
     // All return an <iterator,status> pair the points to the element added with
     // 'status' true if the element was added and false if it was already there.
-    auto add(const dctCert& c) { return finishAdd(certs_.try_emplace(c.computeThumbPrint(), c)); }
-    auto add(dctCert&& c) { return finishAdd(certs_.try_emplace(c.computeThumbPrint(), std::move(c))); }
+    auto add(const dctCert& c) {
+        if (! c.valid()) {
+            print("cert {} invalid\n", c.name());
+            return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
+        }
+        return finishAdd(certs_.try_emplace(c.computeThumbPrint(), c));
+    }
+    auto add(dctCert&& c) {
+        if (! c.valid()) {
+            print("cert {} invalid\n", c.name());
+            return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
+        }
+        return finishAdd(certs_.try_emplace(c.computeThumbPrint(), std::move(c)));
+    }
 
     auto add(const dctCert& c, const keyVal& k) {
+        if (! c.valid()) {
+            print("cert {} invalid\n", c.name());
+            return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
+        }
         auto it = finishAdd(certs_.try_emplace(c.computeThumbPrint(), c));
         if (k.size() && it.second) {
             const auto& [tp, cert] = *it.first;
@@ -139,8 +150,8 @@ struct certStore {
     // construct a vector of the names of each cert in cert's signing chain.
     certVec chainNames(const dctCert& cert) const {
         certVec cv{};
-        cv.emplace_back(cert.getName());
-        for (const auto& c: chainIter(cert.getKeyLoc(),*this)) cv.emplace_back(c.getName());
+        cv.emplace_back(tlvVec{cert.name()});
+        for (const auto& c: chainIter(cert.getKeyLoc(),*this)) cv.emplace_back(tlvVec{c.name()});
         return cv;
     }
 

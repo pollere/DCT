@@ -52,6 +52,7 @@
 #include <dct/shims/ptps.hpp>
 
 using namespace std::literals;
+using namespace dct;
 
 // handles command line
 static struct option opts[] = {
@@ -92,7 +93,7 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
 static void pubRecv(ptps* s, const Publication& p) {
     auto now = std::chrono::system_clock::now();
     print("{:%M:%S} {}:{}:{}\trcvd pub {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-          (s->label().size()? s->label() : "default"), p.getName().toUri());
+          (s->label().size()? s->label() : "default"), p.name());
     try {
         for (auto sp : dtList)  
             if (sp != s) { 
@@ -117,10 +118,10 @@ static void pubRecv(ptps* s, const Publication& p) {
  * needs further investigation as more subscription restrictions are added. Also it may be more costly to filter
  * the cert than to forward it.
  */
-static void certRecv(ptps* s, const dctCert& c) {
+static void certRecv(ptps* s, const rData c) {
     auto now = std::chrono::system_clock::now();
     print("{:%M:%S} {}:{}:{}\trcvd cert {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-          (s->label().size()? s->label() : "default"), c.getName().toUri());
+          (s->label().size()? s->label() : "default"), c.name());
 
     try {
         for (auto sp : dtList)
@@ -139,7 +140,7 @@ static void certRecv(ptps* s, const dctCert& c) {
  * or when there's a success)
  */
 static void pubFailure(ptps* s, const Publication& pub) {
-    print("pubFailure: {} timed out on DeftT interFace {}:{}\n", pub.getName().toUri(), s->label(), s->attribute("_roleId"));
+    print("pubFailure: {} timed out on DeftT interFace {}:{}\n", pub.name(), s->label(), s->attribute("_roleId"));
     if(failThresh && s->failCnt() > failThresh) {
         // [future] republish p on alternate link, set up alternate to be used
         // auto p = Publication(pub);  //save on republish list

@@ -52,21 +52,17 @@
 
 struct SigMgrSHA256 final : SigMgr {
 
-    SigMgrSHA256() : SigMgr(stSHA256, {0x16, 0x03, 0x1b, 0x01, stSHA256}) {
-        if (sodium_init() == -1) exit(EXIT_FAILURE);
-    }
-    bool sign(ndn::Data& data, const SigInfo& si, const keyVal&) override final {
-        // get Data in wire format then compute the SHA256 hash of the signed part
-        auto dataWF = setupSignature(data, si);
-        std::vector<uint8_t> sigValue (crypto_hash_sha256_BYTES,0);
-        crypto_hash_sha256(sigValue.data(), dataWF.signedBuf(), dataWF.signedSize());
-        data.getSignature()->setSignature(sigValue);
+    SigMgrSHA256() : SigMgr(stSHA256) { }
 
-
-        // Encode again to include the signature.
-        dataWF = data.wireEncode();
+    bool sign(crData& d, const SigInfo& si, const keyVal&) override final {
+        d.siginfo(si);
+        auto sig = d.signature(crypto_hash_sha256_BYTES);
+        auto s = d.rest();
+        s = s.first(s.size() - sig.size() - 2);
+        crypto_hash_sha256(sig.data(), s.data(), s.size());
         return true;
     }
+
     bool validate(rData d) override final {
         std::array<uint8_t, crypto_hash_sha256_BYTES> dataHash;
 
@@ -80,10 +76,6 @@ struct SigMgrSHA256 final : SigMgr {
         if (std::memcmp(sig.data() + sig.off(), dataHash.data(), dataHash.size()) != 0) return false;
         return true;
     }
-    bool validate(const ndn::Data& d) override final { return validate(rData(d)); }
-    bool validate(const ndn::Data& d, const dct_Cert&) override final { return validate(rData(d)); }
-
-    bool needsKey() const noexcept override final { return 0; };
 };
 
 #endif // SIGMGRSHA256_HPP

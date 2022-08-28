@@ -16,7 +16,7 @@ FLEX = /opt/local/bin/flex
 CXXFLAGS += -I/opt/local/include
 LDFLAGS += -L/opt/local/lib
 endif
-CXXFLAGS += -DCOMPILER_VERSION='"$(shell git describe --tags --long)"'
+CXXFLAGS += -DCOMPILER_VERSION='"$(shell git describe --first-parent --all --long)"'
 
 HEADERS = dag.hpp driver.hpp names.hpp output.hpp symtab.hpp semantics.hpp
 SRCS = parser.ypp scanner.lpp

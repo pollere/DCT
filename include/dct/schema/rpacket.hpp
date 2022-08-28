@@ -1,7 +1,7 @@
 #ifndef RPACKET_HPP
 #define RPACKET_HPP
 /*
- * Data Centric Transport NDN (raw) Interest and Data packet parsers
+ * DCT (raw) packet TLV parsing
  *
  * Copyright (C) 2020-2 Pollere LLC
  *
@@ -25,15 +25,22 @@
 
 #include <compare>
 #include <cstring>
+extern "C" {
+#include <sodium.h>
+}
 
 #include "tlv_parser.hpp"
 
 // return a parser for a Name object.
 struct rName : tlvParser {
-    rName() : tlvParser() { }
+    constexpr rName() = default;
+    rName(const rName&) = default;
+    rName(rName&&) = default;
+    rName& operator=(const rName&) = default;
+    rName& operator=(rName&&) = default;
+
     rName(tlvParser n) : tlvParser(n) { }
     rName(const std::vector<uint8_t>& v) : tlvParser(v) { }
-    rName(const ndn::Name& n) : tlvParser(n) { }
 
     // a name is valid if its length exactly covers its contained TLVs.
     bool valid() const {
@@ -44,16 +51,21 @@ struct rName : tlvParser {
         return true;
     }
 
+    auto last() const { return lastBlk(); }
+
     // A name prefix is the body of a name. I.e., the list of component
     // tlv's without the leading tlv::name and length. Because of the leading
     // (variable length) length, names can't be easily longest-match ordered
     // but prefixes can.
     struct rPrefix : tlvParser {
-        rPrefix() : tlvParser() { }
-        rPrefix(const rName& n) : tlvParser(n.rest(), 0) { }
-        rPrefix(rName&& n) : tlvParser(n.rest(), 0) { }
-        rPrefix(const rPrefix& p, size_t sz) : tlvParser(tlvParser::Blk{p.data(), sz}, 0) { }
-        rPrefix(rPrefix&& p, size_t sz) : tlvParser(tlvParser::Blk{p.data(), sz}, 0) { }
+        constexpr rPrefix() = default;
+        rPrefix(const rPrefix&) = default;
+        rPrefix(rPrefix&&) = default;
+        rPrefix& operator=(const rPrefix&) = default;
+        rPrefix& operator=(rPrefix&&) = default;
+
+        rPrefix(rName n) : tlvParser(n.rest(), 0) { }
+        rPrefix(rPrefix p, size_t sz) : tlvParser(tlvParser::Blk{p.data(), sz}, 0) { }
 
         using ordering = std::strong_ordering;
         auto operator<=>(const rPrefix& rhs) const noexcept {
@@ -71,13 +83,13 @@ struct rName : tlvParser {
         }
 
         // 'true' if this prefix is a prefix of 'p'
-        constexpr bool isPrefix(const rPrefix& p) const {
+        constexpr bool isPrefix(const rPrefix& p) const noexcept {
             auto tsz = size();
             auto psz = p.size();
             if (psz < tsz) return false;
             return std::memcmp(data(), p.data(), tsz) == 0;
         }
-        bool isPrefix(const rName& n) const { return isPrefix(rPrefix{n}); }
+        constexpr bool isPrefix(const rName& n) const noexcept { return isPrefix(rPrefix{n}); }
     };
 
     auto operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
@@ -85,20 +97,6 @@ struct rName : tlvParser {
 
     // 'true' if this name is a prefix of 'nm'
     bool isPrefix(const rName& nm) const { return rPrefix(*this).isPrefix(rPrefix(nm)); }
-
-    // convert raw to ndn::Name (ndn-ind backwards compat)
-    auto r2n() const {
-        ndn::Name n{};
-        n.wireDecode(data(), size());
-        return n;
-    }
-
-    // convert raw to shared_ptr<>& (ndn-ind backwards compat)
-    auto r2spcn() const {
-        ndn::Name n{};
-        n.wireDecode(data(), size());
-        return std::make_shared<const ndn::Name>(std::move(n));
-    }
 };
 using rPrefix = rName::rPrefix;
 
@@ -110,11 +108,15 @@ template<> struct std::hash<rPrefix> {
 };
 
 struct rInterest : tlvParser {
-    rInterest() : tlvParser() { }
+    constexpr rInterest() = default;
+    rInterest(const rInterest&) = default;
+    rInterest(rInterest&&) = default;
+    rInterest& operator=(const rInterest&) = default;
+    rInterest& operator=(rInterest&&) = default;
+
     rInterest(tlvParser i) : tlvParser(i) { }
     rInterest(const uint8_t* pkt, size_t sz) : tlvParser(pkt, sz) { }
     rInterest(const std::vector<uint8_t>& v) : tlvParser(v) { }
-    rInterest(const ndn::Interest& i) : tlvParser(i) { }
 
     auto name() const { return rName(tlvParser(*this).nextBlk(tlv::Name)); }
 
@@ -131,31 +133,18 @@ struct rInterest : tlvParser {
         return std::chrono::milliseconds(lt);
     }
     auto operator<=>(const rInterest& rhs) const noexcept { return name() <=> rhs.name(); }
-
-    // convert raw to shared_ptr<Interest>& (ndn-ind backwards compat)
-    auto r2spi() const {
-        ndn::Interest i{};
-        i.wireDecode(data(), size());
-        return std::make_shared<ndn::Interest>(std::move(i));
-    }
-    auto r2spci() const {
-        ndn::Interest i{};
-        i.wireDecode(data(), size());
-        return std::make_shared<const ndn::Interest>(i);
-    }
-    auto r2i() const {
-        ndn::Interest i{};
-        i.wireDecode(data(), size());
-        return i;
-    }
 };
 
 struct rData : tlvParser {
-    rData() : tlvParser() { }
+    constexpr rData() = default;
+    rData(const rData&) = default;
+    rData(rData&&) = default;
+    rData& operator=(const rData&) = default;
+    rData& operator=(rData&&) = default;
+
     rData(tlvParser d) : tlvParser(d) { }
     rData(const uint8_t* pkt, size_t sz) : tlvParser(pkt, sz) { }
     rData(const std::vector<uint8_t>& v) : tlvParser(v) { }
-    rData(const ndn::Data& d) : tlvParser(d) { }
 
     // a Data is valid if it starts with the correct TLV, its name is valid and
     // it contains the 5 required TLV blocks in the right order and nothing else.
@@ -174,60 +163,85 @@ struct rData : tlvParser {
 
     auto name() const { return rName(tlvParser(*this).nextBlk(tlv::Name)); }
 
-    auto metaInfo() const { return tlvParser(*this).findBlk(tlv::MetaInfo); }
+    auto metainfo() const { return tlvParser(*this).findBlk(tlv::MetaInfo); }
+
+        auto contentType() const { return metainfo().findBlk(tlv::ContentType).toByte(); }
 
     auto content() const { return tlvParser(*this).findBlk(tlv::Content); }
 
     auto sigInfo() const { return tlvParser(*this).findBlk(tlv::SignatureInfo); }
 
+        auto sigType() const { return sigInfo().findBlk(tlv::SignatureType).toByte(); }
+
+        using thumbPrint = std::array<uint8_t,32>;
+        auto& thumbprint() const {
+            static constinit std::array<uint8_t,4> kloc{ 28, 34, 29, 32 };
+            auto si = sigInfo().findBlk(tlv::KeyLocator);
+            if (memcmp(si.data(), kloc.data(), kloc.size()) != 0)
+                throw runtime_error("KeyLocator not a DCT thumbprint");
+            return *(thumbPrint*)(si.data() + sizeof(kloc));
+        }
+
+        thumbPrint computeTP() const {
+            thumbPrint tp;
+            crypto_hash_sha256(tp.data(), data(), size());
+            return tp;
+        }
+
     auto signature() const { return tlvParser(*this).findBlk(tlv::SignatureValue); }
 
-    auto sigType() const {
-        auto st = tlvParser(*this).findBlk(tlv::SignatureInfo).findBlk(tlv::SignatureType);
-        if (st.size() != 3) throw runtime_error("malformed Data: multi-byte signature type");
-        return st[2];
-    }
-
-    auto thumbprint() const {
-        static constinit std::array<uint8_t,4> kloc{ 28, 34, 29, 32 };
-        auto si = sigInfo().findBlk(tlv::KeyLocator);
-        if (memcmp(si.data(), kloc.data(), kloc.size()) != 0) throw runtime_error("KeyLocator not a DCT thumbprint");
-        return si.data() + sizeof(kloc);
-    }
-
     auto operator<=>(const rData& rhs) const noexcept { return name() <=> rhs.name(); }
+};
 
-    // convert raw to shared_ptr<cData>& (backwards compat)
-    auto r2spd() const {
-        ndn::Data d{};
-        d.wireDecode(data(), size());
-        return std::make_shared<ndn::Data>(std::move(d));
+// Cert validity periods use a time point encoded in ISO 8601-1:2019 format (the 2014
+// and later versions of the standard *require* that lexicographic order correspond
+// to chronological order (e.g., pad with leading zeros, not spaces). This is a stuct
+// so it can include its ordering operators
+struct iso8601 : std::array<uint8_t,15> {
+    iso8601(std::chrono::system_clock::time_point tp) {
+        auto s = fmt::format("{:%G%m%dT%H%M%S}", fmt::gmtime(tp));
+        std::copy(s.begin(), s.begin()+this->size(), this->begin());
     }
-    auto r2d() const {
-        ndn::Data d{};
-        d.wireDecode(data(), size());
-        return d;
+    using ordering = std::strong_ordering;
+    auto operator<=>(const iso8601& rhs) const noexcept {
+        auto res = std::memcmp(data(), rhs.data(), size());
+        return res == 0? ordering::equal : res < 0? ordering::less : ordering::greater;
+    }
+    auto operator==(const iso8601& rhs) const noexcept {
+        return std::memcmp(data(), rhs.data(), size()) == 0;
     }
 };
 
-struct crName : rName {
-    std::vector<uint8_t> v_;    // backing store for name
-    crName(const ndn::Name& n) : rName{*n.wireEncode()}, v_{*n.wireEncode()} { m_blk = Blk{v_.data(), v_.size()}; }
-};
+// An rCert is an rData with a particular structure.  This class validates that structure.
+struct rCert : rData {
+    constexpr rCert() = default;
+    rCert(rData d) : rData{d} { }
 
-struct crPrefix : rPrefix {
-    std::vector<uint8_t> v_;    // backing store for name
-    crPrefix(const std::vector<uint8_t>& v) : v_{v} {
-        // skip over the (variable length) type and value
-        m_blk = Blk{v_.data(), v_.size()};
-        m_off = 1; //skip over type
-        auto len = blkLen();
-        if (len + m_off != size()) throw runtime_error(format("crPrefix: len {} != size {}", len + m_off, size()));
-        // the prefix object shouldn't include the TLV hdr
-        m_blk = Blk{v_.data()+m_off, v_.size()-m_off};
-        m_off = 0;
+    // The cert's rData validity was checked on arrival. Check that its content type is
+    // Key, its sigInfo contains a validity period and 'now' is within the period.
+    bool valid() const noexcept {
+        // Since the rData is valid none of the following should throw
+        if (contentType() != uint8_t(tlv::ContentType_Key)) return false;
+        // a DCT cert siginfo is constant size so its entire structure can be
+        // checked at once
+        static const std::array<uint8_t,4> si0{22, 81, 27, 1};
+        static const std::array<uint8_t,4> si5{28, 34, 29, 32};
+        static const std::array<uint8_t,8> si41{253, 0, 253, 38, 253, 0, 254, 15};
+        static const std::array<uint8_t,4> si64{253, 0, 255, 15};
+        const auto si = sigInfo().data();
+        if (std::memcmp(si+0, si0.data(), si0.size()) || std::memcmp(si+5, si5.data(), si5.size()) ||
+            std::memcmp(si+41, si41.data(), si41.size()) || std::memcmp(si+64, si64.data(), si64.size())) return false; 
+
+        // check validity period
+        auto now = iso8601(std::chrono::system_clock::now());
+        if (std::memcmp(now.data(), si+49, now.size()) < 0) return false; // not valid yet
+        if (std::memcmp(si+68, now.data(), now.size()) < 0) return false; // expired
+        return true;
     }
-    crPrefix(const ndn::Name& n) : crPrefix{*n.wireEncode()} { }
+    bool valid(uint8_t sType) const noexcept {
+        if (! valid()) return false;
+        return sigType() == sType;
+    }
 };
 
 template<> struct fmt::formatter<rPrefix>: fmt::dynamic_formatter<> {

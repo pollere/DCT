@@ -3,7 +3,7 @@
 #  'schema' is the filename of the schema's .trust file
 PATH=../../../tools:$PATH
 
-numLR=5
+numLR=9
 numMon=2
 
 if [ -z "$1" ]; then echo "-$0: must supply a .trust schema filename"; exit 1; fi;
@@ -14,7 +14,6 @@ Schema=${Schema%.trust}
 Bschema=$Schema.scm
 RootCert=$Schema.root
 SchemaCert=$Schema.schema
-KMCapCert=
 SGCapCert=
 
 schemaCompile -o $Bschema $1
@@ -27,25 +26,19 @@ PubValidator=$(schema_info -t $Bschema "#pubValidator");
 make_cert -s $PubValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
 
-# PPAEAD requires a keymaker capability cert and also a subscription group capability cert
-    if [ -z $(schema_info -c $Bschema "KM") ]; then
+# PPAEAD and PPSIGN require a subscription group capability cert.
+# At least one member of the SG must have a non-zero capability argument
+# in this cert so that there is at least on key maker
+# Here, just setting all SG members to be potential key makers.
+if [ -z $(schema_info -c $Bschema "SG") ]; then
     echo
-    echo "- error: PPAEAD encryption requires entity(s) with a KM (KeyMaker) Capability"
+    echo "- error: PPAEAD/PPSIGN require entity(s) with a SG (subscription group) Capability"
     echo "         but schema $1 doesn't have any."
     exit 1;
-    fi;
-    if [ -z $(schema_info -c $Bschema "SG") ]; then
-    echo
-    echo "- error: PPAEAD encryption requires entity(s) with a SG (subscription group) Capability"
-    echo "         but schema $1 doesn't have any."
-    exit 1;
-    fi;
-    # make the 'subscriber group' capability cert
-    SGCapCert=sg.cap
-    make_cert -s $PubValidator -o $SGCapCert $PubPrefix/CAP/SG/1 $RootCert
-    # make the 'key maker' capability cert
-    KMCapCert=km.cap
-    make_cert -s $PubValidator -o $KMCapCert $PubPrefix/CAP/KM/1 $SGCapCert
+fi;
+# make the 'subscriber group' capability cert (with ability to be a key maker)
+SGCapCert=sg.cap
+make_cert -s $PubValidator -o $SGCapCert $PubPrefix/CAP/SG/1 $RootCert
 
 # make the location reporter certs
 for (( n=1; n <= $numLR; ++n )); do
@@ -56,7 +49,7 @@ done
 # if there's a subscriber group, putting all the monitors in it
 for (( n=1; n <= $numMon; ++n )); do
     if [ -n $SGCapCert ]; then
-        make_cert -s $PubValidator -o mon$n.cert $PubPrefix/monitor/$n $KMCapCert
+        make_cert -s $PubValidator -o mon$n.cert $PubPrefix/monitor/$n $SGCapCert
     else
         make_cert -s $PubValidator -o mon$n.cert $PubPrefix/monitor/$n $RootCert
     fi;
@@ -69,15 +62,15 @@ done
 # The other certs don't (and shouldn't) have signing keys.
 
 # make the ID bundles. If the schema uses PPAEAD encryption, only monitors
-# given "KM" (Key Maker) capability and "SG" (subscriber group) capability
+# given "SG" (subscriber group) capability 
 for (( n=1; n <= $numLR; ++n )); do
     make_bundle -v -o locRptr$n.bundle $RootCert $SchemaCert +locR$n.cert
 done
 
 for (( n=1; n <= $numMon; ++n )); do
     if [ -n $SGCapCert ]; then
-	    make_bundle -v -o monitor$n.bundle $RootCert $SchemaCert $SGCapCert $KMCapCert +mon$n.cert
+	    make_bundle -v -o monitor$n.bundle $RootCert $SchemaCert $SGCapCert +mon$n.cert
     else
 	    make_bundle -v -o monitor$n.bundle $RootCert $SchemaCert +mon$n.cert
-    fi
+    fi;
 done

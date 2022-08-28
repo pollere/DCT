@@ -55,9 +55,9 @@ static inline std::pair<keyVal,keyVal> createKeypair() {
  *
  *  @returns a pair consisting of the signed cert and its signing key
  */
-static inline std::pair<dctCert,keyVal> signedCert(certName&& nm, SigMgr& sm) {
+static inline std::pair<dctCert,keyVal> signedCert(crName&& nm, SigMgr& sm) {
     auto [pk, sk] = createKeypair();
-    return {dctCert(nm, pk, sm), sk};
+    return {dctCert(std::move(nm), pk, sm), sk};
 }
 
 /**
@@ -70,10 +70,10 @@ static inline std::pair<dctCert,keyVal> signedCert(certName&& nm, SigMgr& sm) {
  *
  *  @returns a pair consisting of the signed cert and its signing key
  */
-static inline std::pair<dctCert,keyVal> selfSignedCert(certName&& nm, SigMgr& sm) {
+static inline std::pair<dctCert,keyVal> selfSignedCert(crName&& nm, SigMgr& sm) {
     auto [pk, sk] = createKeypair();
     sm.addKey(sk);
-    return {dctCert(nm, pk, sm), sk};
+    return {dctCert(std::move(nm), pk, sm), sk};
 }
 
 #endif // SIGNED_CERT_HPP

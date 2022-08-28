@@ -30,8 +30,9 @@
 
 template <typename N>
 struct DAG {
-    std::set<N> nodes_;
-    std::map<N, std::set<N>> links_;
+    std::set<N> nodes_{};
+    std::map<N, std::set<N>> links_{};
+    std::map<N, int> attr_{};
 
     using Path = std::vector<N>;
     using PathSet = std::set<Path>;
@@ -42,6 +43,9 @@ struct DAG {
 
     constexpr auto& links(const N& n) const { return links_.at(n); }
     constexpr bool linked(const N& src, const N& dst) const { return links_.at(src).contains(dst); }
+
+    constexpr auto attr(const N& n) const { return attr_.contains(n)? attr_.at(n) : 0; }
+    auto& attr(const N& n, int a) { attr_[n] = a; return *this; }
 
     constexpr DAG<N>& add(N n) {
         nodes_.insert(n);
@@ -58,19 +62,13 @@ struct DAG {
     }
     constexpr DAG<N>& add(const std::vector<N>& p) {
         // add the entire path 'p'
-        for (size_t i = 1; i < p.size(); i++) {
-            add(p[i-1], p[i]);
-        }
+        for (size_t i = 1; i < p.size(); i++) add(p[i-1], p[i]);
         return *this;
     }
 
     constexpr NodeSet sinks() const {
         NodeSet s{};
-        for (const N& n : nodes_) {
-            if (links_.at(n).size() == 0) {
-                s.emplace(n);
-            }
-        }
+        for (const N& n : nodes_) if (links_.at(n).size() == 0) s.emplace(n);
         return s;
     }
     constexpr NodeSet sources() const { return reverse().sinks(); }
@@ -82,9 +80,7 @@ struct DAG {
         if (src == dst && cur.size() > 1) {
             ps.emplace(cur);
         } else {
-            for (auto& nxt : links_.at(src)) {
-                paths(nxt, dst, cur, ps);
-            }
+            for (auto& nxt : links_.at(src)) paths(nxt, dst, cur, ps);
         }
         cur.pop_back();
     }
@@ -118,60 +114,54 @@ struct DAG {
     using dfsFunc = std::function<int(const N&)>;
 
     // DFS recursion
-    constexpr bool dfs(N cur, N strt, nodeInfo& visit, dfsFunc f) const {
+    constexpr bool dfs(const N& cur, nodeInfo& visit, dfsFunc f) const {
+        if (visit.contains(cur)) return visit[cur] != 0;
+        visit[cur] = 0;
         for (const auto succ : links_.at(cur)) {
-            if (succ == strt) {
-                // found a loop
-                return false;
-            }
-            if (visit[succ] == 0) {
-                if (! dfs(succ, strt, visit, f)) {
-                    return false;
-                }
-            }
+            if (! dfs(succ, visit, f)) return false;
         }
         visit[cur] = f(cur);
         return true;
+    }
+
+    // if graph has a cycle return the nodes in it
+    constexpr std::vector<N> hasCycle() const {
+        std::vector<N> cy{};
+        nodeInfo visit{};
+        auto num = nodes_.size();
+        dfsFunc f = [&num](auto /*n*/) { return --num; };
+        for (const auto& node : nodes_) {
+            if (! dfs(node, visit, f)) {
+                // cycle in graph - return 
+                for (const auto& [n, d] : visit) if (d == 0) cy.emplace_back(n);
+                break;
+            }
+        }
+        return cy;
     }
 
     // construct a topological ordering of the DAG
     constexpr std::vector<N> topo() const {
         nodeInfo visit{};
         auto num = nodes_.size();
-        dfsFunc f = [&num](auto /*n*/) mutable { return --num; };
-        for (const auto node : nodes_) {
-            if (visit[node] == 0) {
-                if (! dfs(node, node, visit, f)) {
-                    // graph isn't a DAG
-                    break;
-                }
-            }
-        }
-        // return a vector of nodes in topo order.
+        dfsFunc f = [&num](auto /*n*/) { return --num; };
+        for (const auto& node : nodes_) if (! visit.contains(node)) dfs(node, visit, f);
+
+        // return topo ordered vector of nodes.
         std::vector<N> to(visit.size());
-        for (const auto& [n, d] : visit) {
-            to[d] = n;
-        }
+        for (const auto& [n, d] : visit) to[d] = n;
         return to;
     }
 
     // get each node's out-degree
     constexpr std::multimap<int,N> outDegree() const {
         nodeInfo visit{};
-        for (const auto node : nodes_) {
-            if (visit[node] == 0) {
-                if (! dfs(node, node, visit,
-                          [this](auto n){return links_[n].size()+1;})) {
-                    // graph isn't a DAG
-                    break;
-                }
-            }
+        for (const auto& node : nodes_) {
+            if (! dfs(node, visit, [this](auto n){return links_[n].size()+1;})) break;
         }
         // return multimap of nodes ordered by out degree
         std::multimap<int,N> dm{};
-        for (const auto& [n, d] : visit) {
-            dm.emplace(d, n);
-        }
+        for (const auto& [n, d] : visit) dm.emplace(d, n);
         return dm;
     }
 };

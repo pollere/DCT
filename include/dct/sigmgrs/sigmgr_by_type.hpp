@@ -66,24 +66,17 @@ struct SigMgrAny : Variants {
     SigMgr& ref() const noexcept { return (SigMgr&)*this; }
 
     // invoke methods of whichever sigmgr is set in the variant
-    bool sign(rData d) { return ref().sign(d); }
-    bool sign(rData d, const SigInfo& s) { return ref().sign(d, s); }
-    bool sign(rData d, const SigInfo& s, const keyVal& k) { return ref().sign(d, s, k); }
+    bool sign(crData& d) { return ref().sign(d); }
+    bool sign(crData& d, const SigInfo& s) { return ref().sign(d, s); }
+    bool sign(crData& d, const SigInfo& s, const keyVal& k) { return ref().sign(d, s, k); }
     bool validate(rData d) { return ref().validate(d); }
-    bool validate(rData d, const dct_Cert& c) { return ref().validate(d, c); }
+    bool validate(rData d, const rData& c) { return ref().validate(d, c); }
     bool validateDecrypt(rData d) { return ref().validateDecrypt(d); }
-    bool validateDecrypt(rData d, const dct_Cert& c) { return ref().validateDecrypt(d, c); };
+    bool validateDecrypt(rData d, const rData& c) { return ref().validateDecrypt(d, c); };
 
-    bool sign(ndn::Data& d) { return ref().sign(d); }
-    bool sign(ndn::Data& d, const SigInfo& s) { return ref().sign(d, s); }
-    bool sign(ndn::Data& d, const SigInfo& s, const keyVal& k) { return ref().sign(d, s, k); }
-    bool validate(const ndn::Data& d) { return ref().validate(d); }
-    bool validate(const ndn::Data& d, const dct_Cert& c) { return ref().validate(d, c); }
-    bool validateDecrypt(ndn::Data& d) { return ref().validateDecrypt(d); }
-
-    void addKey(const keyVal& k, uint64_t ktm = 0) { ref().addKey(k, ktm); }
-    void addKey(const keyVal& k, const keyVal& s) { ref().addKey(k, s); };
-    void updateSigningKey(const keyVal& k, const dct_Cert& c) { ref().updateSigningKey(k, c); }
+    void addKey(keyRef k, uint64_t ktm = 0) { ref().addKey(k, ktm); }
+    void addKey(keyRef k, keyRef s) { ref().addKey(k, s); };
+    void updateSigningKey(keyRef k, const rData& c) { ref().updateSigningKey(k, c); }
     void setKeyCb(KeyCb&& kcb) { ref().setKeyCb(std::move(kcb)); }
 
     bool needsKey() const noexcept { return ref().needsKey(); }

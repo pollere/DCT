@@ -67,12 +67,26 @@ WS      [ \t]
            }
 %%
 
+static void usage(const char* prog) {
+    print("-usage: {} [-q|v|d] [-V|D] [-o schemaBin] input\n", prog);
+}
+static void help(const char* prog) {
+    usage(prog);
+    print("   -q   quiet (no diagnostic output)\n"
+          "   -v   increase diagnostic level\n"
+          "   -d   debug (highest diagnostic level)\n"
+          "   -D   print schema's cert DAG then exit\n"
+          "   -V   print compiler version and exit\n");
+}
+
 int main(int argc, const char *argv[])
 {
     static const char* copyright = "VerSec Schema Compiler Copyright (C) 2020 Pollere Inc.";
     static const char* version = COMPILER_VERSION;
     std::string file{};
     yy::parser parse(drv_);
+
+    if (argc < 2) { help(argv[0]); exit(1); }
 
     for (int i = 1; i < argc; ++i) {
         if (argv[i] == std::string ("-d")) {
@@ -87,12 +101,20 @@ int main(int argc, const char *argv[])
             yy_flex_debug = true;
         } else if (argv[i] == std::string ("-v")) {
             ++drv_.verbose_;
+        } else if (argv[i] == std::string ("-D")) {
+            drv_.printDag_ = true;
+        } else if (argv[i] == std::string ("-V")) {
+            print("{}, {}\n", copyright, version);
+            exit(0);
+        } else if (argv[i] == std::string ("-h")) {
+            help(argv[0]);
+            exit(0);
         } else {
             file = argv[i];
         }
     }
     if (drv_.verbose_ > 0) print("{}, {}\n", copyright, version);
-    if (file.empty() || file == "-") {
+    if (file == "-") {
         yyin = stdin;
     } else if (!(yyin = fopen(file.c_str(), "r"))) {
         std::cerr << "cannot open " << file << ": " << strerror(errno) << '\n';

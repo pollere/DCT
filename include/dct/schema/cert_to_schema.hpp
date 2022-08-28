@@ -33,8 +33,7 @@
 // It's assumed that the cert signature has been validated and
 // the cert name checked for conformance to schema conventions.
 bSchema certToSchema(const dctCert& cert, thumbPrint& tp) {
-    const auto& pk = *cert.getContent();
-    std::istringstream is(std::string((char*)pk.data(), pk.size()), std::ios::binary);
+    std::istringstream is(std::string(cert.content().toSv()), std::ios::binary);
     auto bs = rdSchema(is).read();
     bs.schemaTP_.insert(bs.schemaTP_.begin(), tp.begin(), tp.end());
     return bs;

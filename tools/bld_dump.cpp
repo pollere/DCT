@@ -32,6 +32,8 @@
 #include "dct/schema/buildpub.hpp"
 #include "dct/schema/validate_bootstrap.hpp"
 
+using namespace dct;
+
 int main(int argc, const char* argv[]) {
     if (argc < 2) {
         print("- usage: {} bundle [pubname]\n", argv[0]);

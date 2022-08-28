@@ -30,13 +30,11 @@
  * sign() sets SignatureValue.
  * validate() computes the SHA256 hash over the passed in Data packet's signed
  * portion, the signature of that, and compares it to the value in SignatureValue.
- * Signed portion includes the key locator - up to, not including the Signature Value TLV
+ * Signed portion omits the leading Data TLV but includes everything else up to
+ * but not including the payload of the SignatureValue TLV.
  *
  * see https://doc.libsodium.org/ for excellent explanations of the library
  *
- */
-
-/*
  * SignatureBlake2bWithEdDSA defines an EdDSA public key signature that is calculated over
  * the Blake2b hash of the “signed portion” of a Data packet.
  * Requires a signing key and access to the public key's of signers of
@@ -65,9 +63,7 @@
  *      fields that are computed for each Data
  */
 
-#include <array>
 #include "sigmgr.hpp"
-#include "dct/schema/dct_cert.hpp"
 
 /*
  * The sigInfo this signature manager uses stays the same for a
@@ -89,14 +85,7 @@
 
 struct SigMgrEdDSA final : SigMgr {
 
-    SigMgrEdDSA() :
-        SigMgr(stEdDSA,
-                  { 0x16, 39, // siginfo, 39 bytes
-                      0x1b,  1, stEdDSA, // sig type eddsa
-                      0x1c,  34, 0x1d, 32, // keylocator is 32 byte keydigest (thumbprint)
-                        0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0, // thumbprint (defaults to "self-signed")
-                        0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0
-                  }) { if (sodium_init() == -1) exit(EXIT_FAILURE); }
+    SigMgrEdDSA() : SigMgr(stEdDSA) { }
 
     /*
      * Called by parent when there is a new signing key.
@@ -105,80 +94,45 @@ struct SigMgrEdDSA final : SigMgr {
      * Here Key Locator is the subName of cert Name that includes Key Id
      * (one component past 'KEY')
      */
-    void updateSigningKey(const keyVal& sk, const dct_Cert& nk) override final {
+    void updateSigningKey(keyRef sk, const rData& nk) override final {
         // update private signing key then compute thumbprint of cert and put it at end of sigInfo
         addKey(sk);
-        auto tp = dctCert::computeThumbPrint(nk);
+        auto tp = nk.computeTP();;
         const auto off = m_sigInfo.size() - sizeof(tp);
         std::copy(tp.begin(), tp.end(), m_sigInfo.begin() + off);
     }
 
     /* private signing key */
-    void addKey(const keyVal& sk, uint64_t = 0) override final { m_signingKey.assign(sk.begin(), sk.end()); }
+    void addKey(keyRef sk, uint64_t = 0) override final { m_signingKey.assign(sk.begin(), sk.end()); }
 
-    /*
-     * This method is added for use by Certificates
-     * (or anything that needs additions to sigInfo)
-     * certificates will have Signature Info filled in
-     * except for Signature so skips the "set up the Signature
-     * field" section in sign() above
-     */
-    bool sign(ndn::Data& data, const SigInfo& si, const keyVal& sk) override final {
-        if(sk.empty() || si.empty()) {
-            throw std::runtime_error("SigMgrEdDSA: can't sign without a key and siginfo");
-        }
-        std::vector<uint8_t> sigValue (crypto_sign_BYTES,0);
+    bool sign(crData& d, const SigInfo& si, const keyVal& sk) override final {
+        if(sk.empty() || si.empty()) return false;
+
+        // add the two final TLVs to 'd' to avoid realloc memcpy during signing
+        d.siginfo(si);
+        auto sig = d.signature(crypto_sign_BYTES);
         unsigned long long sigLen;
-        auto dataWF = setupSignature(data, si);
-        crypto_sign_detached(sigValue.data(), &sigLen, dataWF.signedBuf(), dataWF.signedSize(), sk.data());
-        data.getSignature()->setSignature(sigValue);
-        dataWF = data.wireEncode();
+        auto s = d.rest();
+        s = s.first(s.size() - sig.size() - 2);
+        crypto_sign_detached(sig.data(), &sigLen, s.data(), s.size(), sk.data());
         return true;
     }
 
     // common validate logic
-    bool validate(rData d, keyRef pk) const{
+    bool validate(rData d, keyRef pk) const {
         auto sig = d.signature();
-        if (sig.size() - sig.off() != crypto_sign_BYTES) {
-            //_LOG_WARN("sigmgr_eddsa::validate: eddsa size wrong");
-            return false;
-        }
+        if (sig.size() - sig.off() != crypto_sign_BYTES) return false;
+
+        // signed region goes from start of 'name' to end of 'signature' tlv
         auto strt = d.name().data();
-        auto sz = sig.data() - strt; 
-        if (crypto_sign_verify_detached(sig.data() + sig.off(), strt, sz, pk.data()) != 0) {
-            //_LOG_WARN("sigmgr_eddsa::validate: eddsa verify failed");
-            return false;
-        }
-        return true;
-    }
-    bool validate(rData d, const dct_Cert& scert) override final {
-        return validate(d, *(scert.getContent()));
-    }
-    bool validate(rData d) override final {
-        if (m_keyCb == 0) throw std::runtime_error("SigMgrEdDSA validate needs signing key callback");
-        try {
-            return validate(d, m_keyCb(d));
-        } catch (...) {}
-        return false;
+        return crypto_sign_verify_detached(sig.data() + sig.off(), strt, sig.data() - strt, pk.data()) == 0;
     }
 
-    bool validate(const ndn::Data& data, keyRef pk) const {
-        auto sig = data.getSignature()->getSignature();
-        if((sig.size()) != crypto_sign_BYTES) return false;
-        const auto& wf = data.wireEncode();
-        if (crypto_sign_verify_detached(sig.buf(), wf.signedBuf(), wf.signedSize(), pk.data()) != 0) return false;
-        return true;
-    }
-    bool validate(const ndn::Data& data, const dct_Cert& scert) override final {
-        return validate(data, *(scert.getContent()));
-    }
-    bool validate(const ndn::Data& data) override final {
-        if (m_keyCb == 0) {
-            throw std::runtime_error("SigMgrEdDSA validate needs callback to get signing keys");
-        }
-        try {
-            return validate(data, m_keyCb(data));
-        } catch (...) {}
+    bool validate(rData d, const rData& scert) override final { return validate(d, scert.content().rest()); }
+
+    bool validate(rData d) override final {
+        assert(m_keyCb != 0);
+        try { return validate(d, m_keyCb(d)); } catch (...) {}
         return false;
     }
 };

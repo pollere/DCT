@@ -37,6 +37,8 @@
 #include "dct/distributors/dist_cert.hpp"
 #include "dct/distributors/dist_gkey.hpp"
 
+namespace dct {
+
 struct pubValidator {
     std::vector<pTmplt> ptmplts_;
     std::unordered_map<bTok,bComp> ptm_;    // pub-specific token map
@@ -57,14 +59,8 @@ struct pubValidator {
         }
     }
 
-    using Name = ndn::Name;
-    using Comp = Name::Component;
-
-    // convert a name component to a string_view
-    static inline auto to_sv(const Comp& comp) {
-        const auto& b = *comp.getValue();
-        return std::string_view((const char*)b.data(), b.size());
-    }
+    using Name = rName;
+    using Comp = tlvParser;
 
     // Map 'nm' component 'c' to a template token number.
     // Returns the token number if found, maxTok otherwise.
@@ -77,24 +73,28 @@ struct pubValidator {
     //  - 'param', 'call' or 'anon' match anything
     //  - a literal or template-specific literal matches exactly
     //  - a value set matches any member of the set
-    bool matchCompVal(const bSchema& bs, const Comp& nmc, const bComp ptc) const noexcept {
+    bool matchCompVal(const bSchema& bs, std::string_view nmc, const bComp ptc) const noexcept {
         if (isAnon(ptc)) return true;     // template doesn't constrain value
-        auto pval = to_sv(nmc);
-        if (isLit(ptc)) return pval == bs.tok_[ptc];    // comp must match template literal
-        if (isIndex(ptc)) return pval == ptok_[typeValue(ptc)]; // value must match cor literal
+        if (isLit(ptc)) return nmc == bs.tok_[ptc];    // comp must match template literal
+        if (isIndex(ptc)) return nmc == ptok_[typeValue(ptc)]; // value must match cor literal
         return false;
     }
     // check that everything in the template matches its correponding name component
     bool matchComps(const bSchema& bs, const Name& nm, const pTmplt& pt) const noexcept {
-        for (auto c = 0u; c < nm.size(); c++) if (!matchCompVal(bs, nm[c], pt.tmplt_[c])) return false;
+        auto n{nm};
+        for (auto c = 0u; c < pt.tmplt_.size(); c++) {
+            if (!matchCompVal(bs, n.nextBlk().toSv(), pt.tmplt_[c])) return false;
+        }
         return true;
     }
     // check that Name 'nm' matches one of our pub templates
     bool matchTmplt(const bSchema& bs, const Name& nm) const noexcept {
+        auto ncomp = nm.nBlks();
         for (const auto& pt : ptmplts_) {
+            if (ncomp != pt.tmplt_.size()) continue;
             // if template has a discriminator check it first
             if (pt.vs_.to_ulong() > 1ul) {
-                if (auto t = compToTok(bs, to_sv(nm[pt.dpar_])); t == maxTok || !pt.vs_[t]) continue;
+                if (auto t = compToTok(bs, nm.nthBlk(pt.dpar_).toSv()); t == maxTok || !pt.vs_[t]) continue;
             }
             if (matchComps(bs, nm, pt)) return true;
         }
@@ -135,23 +135,24 @@ struct SigMgrSchema final : SigMgr {
     const tpToValidator& pv_;
 
     SigMgrSchema(SigMgr& pubsm, const bSchema& bs, const tpToValidator& pv) :
-        SigMgr(pubsm.type(), pubsm.getSigInfo()), pubsm_{pubsm}, bs_{bs}, pv_{pv} { }
+        SigMgr(pubsm.type()), pubsm_{pubsm}, bs_{bs}, pv_{pv} { }
 
-    bool validate(const ndn::Data& data) override final {
+    bool validate(rData data) override final {
         // cryptographically validate 'data'
         if (! pubsm_.validate(data)) {
-            //print("invalid sig {}\n", data.getName().toUri());
+            print("invalid sig {}\n", data.name());
             return false;
         }
         // structurally validate 'data'
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(data));
-            auto valid = pubval.matchTmplt(bs_, data.getName());
-            //if (!valid) print("invalid str {}\n", data.getName().toUri());
+            auto valid = pubval.matchTmplt(bs_, data.name());
+            if (!valid) print("invalid structure {}\n", data.name());
             return valid;
-        } catch (std::exception&) {}
+        } catch (std::exception& e) { print("structure validation err: {}\n", e.what()); }
         return false;
     }
 };
 
+} // namespace dct
 #endif // VALIDATE_PUB_HPP

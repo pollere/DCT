@@ -64,11 +64,10 @@ int main(int argc, const char* argv[]) {
             auto [scert, key] = rdCertBundle(fileToVec(signer))[0];
             sm.ref().updateSigningKey(key, scert);
         }
-        auto [cert, sk] = signer? signedCert(certName(name), sm.ref()) : selfSignedCert(certName(name), sm.ref());
-        auto wfmt = cert.wireEncode();
+        auto [cert, sk] = signer? signedCert(crName(name), sm.ref()) : selfSignedCert(crName(name), sm.ref());
         
         std::ofstream os{outfile, std::ios::binary};
-        os.write((char*)wfmt.buf(), wfmt.size());
+        os.write((char*)cert.data(), cert.size());
         // for now, make the sk a tlv 'signature' object following the cert.
         os.put(23);
         os.put(sk.size());

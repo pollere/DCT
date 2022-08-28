@@ -1,7 +1,7 @@
-#ifndef SIGMGRNULL_HPP
-#define SIGMGRNULL_HPP
+#ifndef RAND32_HPP
+#define RAND32_HPP
 /*
- * Null Signature Manager
+ * DCT random number generator (for non-crypto use like Interest nonces)
  *
  * Copyright (C) 2020-2 Pollere LLC
  *
@@ -23,27 +23,16 @@
  *  More information on DCT is available from info@pollere.net
  */
 
-/*
- * SigMgr Null provides a signing and validation methods that do nothing.
- * This is specifically provided for cert distribution and should not be
- * used otherwise (i.e., if you don't know why you are using this, don't!).
- *
- */
-
 #include <array>
-#include "sigmgr.hpp"
+#include <random>
 
-struct SigMgrNULL final : SigMgr {
+static inline auto& randGen() noexcept {
+    static std::minstd_rand randomGen{};
+    static bool needInit{true};
+    if (needInit) { randomGen.seed((std::random_device{})()); needInit = false; }
+    return randomGen;
+}
 
-    SigMgrNULL() : SigMgr(stNULL) {}
+static inline auto rand32() noexcept { return randGen()(); }
 
-    bool sign(crData& , const SigInfo& , const keyVal& ) override final { return true; }
-
-    /*
-     * Here just return true
-     */
-    bool validate(rData ) override final { return true; }
-    bool validate(rData , const rData&) override final { return true; }
-};
-
-#endif // SIGMGRNULL_HPP
+#endif  // RAND32_HPP

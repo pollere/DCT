@@ -34,9 +34,19 @@
 
 
 int main(int argc, const char* argv[]) {
-    if (argc != 2) {
-        print("- usage: {} name\n", argv[0]);
+    using namespace std::literals;
+    int verbose{};
+    if (argc < 2) {
+        print("- usage: {} [-v] name\n", argv[0]);
         exit(1);
+    }
+    if (argc == 3) {
+        if ("-v"sv != argv[1]) {
+            print("- usage: {} [-v] name\n", argv[0]);
+            exit(1);
+        }
+        --argc; ++argv;
+        ++verbose;
     }
     auto buf = fileToVec(argv[1]);
     try {
@@ -58,6 +68,7 @@ int main(int argc, const char* argv[]) {
             } else {
                 print("{} <= {}", c, tpmap[stp]);
             }
+            if (verbose) print(" {:02x} ", fmt::join(std::span(cert.computeThumbPrint()).first(4),""));
             print(": {}", rData(cert).name());
             if (key.size()) print(" key '{:x}...", fmt::join(std::span{key}.first(4), ""));
             print("\n");

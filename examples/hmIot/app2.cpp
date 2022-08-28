@@ -52,6 +52,7 @@ static constexpr bool deliveryConfirmation = false; // get per-message delivery 
 
 // handles command line
 static struct option opts[] = {
+    {"addr", required_argument, nullptr, 'a'},
     {"capability", required_argument, nullptr, 'c'},
     {"debug", no_argument, nullptr, 'd'},
     {"help", no_argument, nullptr, 'h'},
@@ -67,6 +68,7 @@ static void help(const char* cname)
 {
     usage(cname);
     std::cerr << " flags:\n"
+           "  -a addr           transport addr, defaults to multicast\n"
            "  -c capability     defaults to 'lock'\n"
            "  -d |--debug       enable debugging output\n"
            "  -h |--help        print help then exit\n"
@@ -81,6 +83,7 @@ static std::chrono::microseconds pubWait = std::chrono::seconds(1);
 static decltype(std::chrono::system_clock::now().time_since_epoch()) lastSend;
 static int Cnt = 0;
 static int nMsgs = 10;
+static std::string addr{};
 static std::string capability{"lock"};
 static std::string location{"all"}; // target's location (for operators)
 static std::string myState{"unlocked"};       // simulated state (for devices)
@@ -176,8 +179,11 @@ int main(int argc, char* argv[])
     std::srand(std::time(0));
     // parse input line
     for (int c;
-        (c = getopt_long(argc, argv, ":c:dhl:n:w:", opts, nullptr)) != -1;) {
+        (c = getopt_long(argc, argv, ":a:c:dhl:n:w:", opts, nullptr)) != -1;) {
         switch (c) {
+                case 'a':
+                    addr = optarg;
+                    break;
                 case 'c':
                     capability = optarg;
                     break;

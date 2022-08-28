@@ -24,7 +24,7 @@
 
 /** DCT 'Direct' face
  *
- * An NDN 'face' is the interface between an application and a particular packet
+ * A 'face' is the interface between an application and a particular packet
  * transport instance.  It handles the Interest & Data packet send/recv semantics
  * and provides the necessary application callbacks (e.g., when a matching Data arrives
  * for some pending Interest). Other NDN libraries delegate most of this work to
@@ -54,12 +54,12 @@
 
 using namespace std::literals;
 
-namespace ndn {
+namespace dct {
     using TimerCb = std::function<void()>;
 
 /**
  * A DirectFace implements a subset of the NDN application-level API used by both the ndn-cxx
- * and ndn-ind libraries. It directly connects DCT-based applications to an NDN network without
+ * and ndn-ind libraries. It directly connects DCT-based applications to a network without
  * requiring a forwarding agent like NFD.
  */
 class DirectFace {
@@ -105,7 +105,7 @@ class DirectFace {
     // Get the asio io_context used by this face
     boost::asio::io_context& getIoContext() const noexcept { return ioContext_; }
 
-    constexpr size_t getMaxNdnPacketSize() const noexcept { return 1500 - 40 - 8; } //XXX
+    constexpr size_t getMaxPacketSize() const noexcept { return 1500 - 40 - 8; } //XXX
 
     std::shared_ptr<Timer> schedule(std::chrono::microseconds delay, TimerCb&& cb) {
         auto timer = std::make_shared<Timer>(ioContext_, delay);
@@ -155,7 +155,7 @@ class DirectFace {
     void pitErase(const rInterest& i) { if (auto it = pit_.find(rPrefix(i.name())); pit_.found(it)) pitErase(it); };
 
     /*
-     * Send NDN packet 'pkt' of length 'len' bytes
+     * Send packet 'pkt' of length 'len' bytes
      */
     void send(const uint8_t* pkt, size_t len) { io_.send(pkt, len); }
     void send(const std::vector<uint8_t>& v) { send(v.data(), v.size()); }
@@ -236,9 +236,6 @@ class DirectFace {
         return vec;
     }
 
-    //XXX temporary for debugging
-    uint32_t hashIBLT(const rName& n) const { return ndn::CryptoLite::murmurHash3(0x53a1df9a, n.data(), n.size()); }
-
     /**
      * Handle an outgoing data:
      * - if it's not in the pit or not marked as 'fromNet', ignore it
@@ -272,6 +269,12 @@ class DirectFace {
 
 };
 
-}  // namespace ndn
+static inline DirectFace& defaultFace() {
+    static DirectFace* face{};
+    if (face == nullptr) face = new DirectFace();
+    return *face;
+}
+
+}  // namespace dct
 
 #endif  // DCT_FACE_DIRECT_HPP

@@ -64,48 +64,42 @@
 #include <tuple>
 #include <vector>
 
-#include <ndn-ind/name.hpp>
-#include <ndn-ind/lite/util/crypto-lite.hpp>
+#include "murmurHash3.hpp"
 
-namespace syncps {
-
-/*
- * Optimal number of hashes is 3 or 4. 3 results in less computation and
- * fewer cache misses so this code uses 3 hashes. The following
- * declaration documents this fact but doesn't allow the number of
- * hashes to be changed.
- */
-static constexpr size_t N_HASH{3};
-static constexpr size_t N_HASHCHECK{0x53a1df9a}; // random bit string with half the bits set
-
-struct HashTableEntry {
-    int32_t count;
-    uint32_t keySum;
-    uint32_t keyCheck;
-
-    bool isPure() const {
-        if (count == 1 || count == -1) {
-            uint32_t check = ndn::CryptoLite::murmurHash3(N_HASHCHECK, keySum);
-            return keyCheck == check;
-        }
-        return false;
-    }
-    bool isEmpty() const {
-        return count == 0 && keySum == 0 && keyCheck == 0;
-    }
-};
-
-struct IBLT;
-static inline std::ostream& operator<<(std::ostream& out, const IBLT& iblt);
-static inline std::ostream& operator<<(std::ostream& out, const HashTableEntry& hte);
+namespace dct {
 
 /**
  * @brief Invertible Bloom Lookup Table (Invertible Bloom Filter)
  */
+template<typename HashVal>
 struct IBLT {
+    /*
+     * Optimal number of hashes is 3 or 4. 3 results in less computation and
+     * fewer cache misses so this code uses 3 hashes. The following
+     * declaration documents this fact but doesn't allow the number of
+     * hashes to be changed.
+     */
+    static constexpr size_t N_HASH{3};
+    static constexpr size_t N_HASHCHECK{0x53a1df9a}; // random bit string with half the bits set
     static constexpr size_t stsize = 19; // sub-table size (should be prime)
     static constexpr size_t nEntries = stsize * N_HASH; // must be <128
     static constexpr uint8_t MAXCNT = 0x80; // max run length & run start marker, must be > nEntries
+    static constexpr murmurHash3 mh3{};
+
+    template<typename V>
+    static inline HashVal hashobj(const V& v) noexcept { return mh3(N_HASHCHECK, v.data(), v.size()); }
+
+    struct HashTableEntry {
+        int32_t count;
+        HashVal keySum;
+        HashVal keyCheck;
+
+        bool isPure() const {
+            return (count == 1 || count == -1) && mh3(uint64_t(keySum) | (N_HASHCHECK << 32)) == keyCheck;
+        }
+        bool isEmpty() const { return count == 0 && keySum == 0 && keyCheck == 0; }
+    };
+
     using HashTable = std::array<HashTableEntry,nEntries>;
     HashTable hashTable_{};
 
@@ -174,13 +168,22 @@ struct IBLT {
     }
 
     /**
-     * Entry Hash functions. The hash table is split into N_HASH
-     * interleaved sub-tables with a different hash function for each.
-     * Each entry is added/deleted from all subtables.
+     * The hash table is split into N_HASH interleaved sub-tables with a
+     * different hash for each (the interleaved tables provide slightly
+     * better cache hit rates for small table sizes). Since the tables
+     * are <<2^20 entries, a single 64-bit hash is computed and different
+     * parts of it are used for per-table indices. Each entry is added/deleted
+     * from all subtables.
+     *
+     * XXX hash index should be computed via Lemire's multiplicative method. See:
+     *  https://github.com/lemire/fastmod/blob/master/include/fastmod.h
+     *  https://arxiv.org/abs/1902.01961
+     *  https://github.com/lemire/fastmod
+     *  https://lemire.me/blog/2019/02/08/faster-remainders-when-the-divisor-is-a-constant-beating-compilers-and-libdivide/
      */
     auto hash(size_t key) const noexcept
     {
-        auto h = ndn::CryptoLite::murmurHash3(104729, key);
+        auto h = mh3(key);
         auto h0 = (h % stsize) * N_HASH;
         auto h1 = ((h >> 8) % stsize) * N_HASH + 1;
         auto h2 = ((h >> 16) % stsize) * N_HASH + 2;
@@ -193,8 +196,7 @@ struct IBLT {
      * twice or deleting something that wasn't inserted). Anomalies
      * detected are:
      *  - one or more of the key's 3 hash entries is empty
-     *  - one or more of the key's 3 hash entries is 'pure' but doesn't
-     *    contain 'key'
+     *  - one or more of the key's 3 hash entries is 'pure' but doesn't contain 'key'
      */
     bool chkPeer(size_t key, size_t idx) const noexcept {
         auto hte = getHashTable().at(idx);
@@ -206,9 +208,9 @@ struct IBLT {
         return chkPeer(key, hash0) || chkPeer(key, hash1) || chkPeer(key, hash2);
     }
 
-    void insert(uint32_t key) { update(INSERT, key); }
+    void insert(HashVal key) { update(INSERT, key); }
 
-    void erase(uint32_t key) {
+    void erase(HashVal key) {
         if (badPeers(key)) {
             std::cerr << "error - invalid iblt erase: badPeers for key " << std::hex << key << "\n";
             return;
@@ -225,10 +227,10 @@ struct IBLT {
      * Entries listed in "need"  are in rcvdIBLT but not in ownIBLT
      */
     auto peel() const noexcept {
-        std::set<uint32_t> have{};
-        std::set<uint32_t> need{};
+        std::set<HashVal> have{};
+        std::set<HashVal> need{};
         bool peeledSomething;
-        IBLT peeled = *this;
+        IBLT peeled{*this};
 
         do {
             peeledSomething = false;
@@ -236,7 +238,8 @@ struct IBLT {
                 if (! entry.isPure()) continue;
 
                 if (peeled.badPeers(entry.keySum)) {
-                    std::cerr << "error - invalid iblt: badPeers for entry:" << entry << "\n";
+                    //std::cerr << "error - invalid iblt: badPeers for entry:" << entry << "\n";
+                    std::cerr << "error - invalid iblt: badPeers for entry:" << entry.keySum << "\n";
                     peeledSomething = false;
                     break;
                 }
@@ -262,14 +265,13 @@ struct IBLT {
 
     const HashTable& getHashTable() const noexcept { return hashTable_; }
 
-   private:
-    void update1(int plusOrMinus, uint32_t key, size_t idx) {
+    void update1(int plusOrMinus, HashVal key, size_t idx) {
         HashTableEntry& entry = hashTable_.at(idx);
         entry.count += plusOrMinus;
         entry.keySum ^= key;
-        entry.keyCheck ^= ndn::CryptoLite::murmurHash3(N_HASHCHECK, key);
+        entry.keyCheck ^= mh3(uint64_t(key) | (N_HASHCHECK << 32));
     }
-    void update(int plusOrMinus, uint32_t key) {
+    void update(int plusOrMinus, HashVal key) {
         const auto [hash0, hash1, hash2] = hash(key);
         update1(plusOrMinus, key, hash0);
         update1(plusOrMinus, key, hash1);
@@ -277,21 +279,26 @@ struct IBLT {
     }
 };
 
-static inline bool operator==(const IBLT& iblt1, const IBLT& iblt2)
+template<typename T>
+static inline bool operator==(const IBLT<T>& iblt1, const IBLT<T>& iblt2)
 {
     return memcmp(iblt1.hashTable_.data(), iblt2.hashTable_.data(), iblt1.hashTable_.size()) == 0;
 }
 
-static inline bool operator!=(const IBLT& iblt1, const IBLT& iblt2) { return !(iblt1 == iblt2); }
+template<typename T>
+static inline bool operator!=(const IBLT<T>& iblt1, const IBLT<T>& iblt2) { return !(iblt1 == iblt2); }
 
-static inline std::ostream& operator<<(std::ostream& out, const HashTableEntry& hte)
-{
+#if 0
+template<typename T>
+static inline std::ostream& operator<<(std::ostream& out, const IBLT<T>::HashTableEntry& hte) {
     out << std::dec << std::setw(5) << hte.count << std::hex << std::setw(9)
         << hte.keySum << std::setw(9) << hte.keyCheck;
     return out;
 }
+#endif
 
-static inline std::string prtPeer(const IBLT& iblt, size_t idx, size_t rep) {
+template<typename T>
+static inline std::string prtPeer(const IBLT<T>& iblt, size_t idx, size_t rep) {
     if (idx == rep) return "";
 
     std::ostringstream rslt{};
@@ -305,7 +312,8 @@ static inline std::string prtPeer(const IBLT& iblt, size_t idx, size_t rep) {
     return rslt.str();
 }
 
-static inline std::string prtPeers(const IBLT& iblt, size_t idx) {
+template<typename T>
+static inline std::string prtPeers(const IBLT<T>& iblt, size_t idx) {
     auto hte = iblt.getHashTable().at(idx);
     // can only get the peers of 'pure' entries
     if (! hte.isPure()) return "";
@@ -313,7 +321,8 @@ static inline std::string prtPeers(const IBLT& iblt, size_t idx) {
     return prtPeer(iblt, idx, hash0) + prtPeer(iblt, idx, hash1) + prtPeer(iblt, idx, hash2);
 }
 
-static inline std::ostream& operator<<(std::ostream& out, const IBLT& iblt) {
+template<typename T>
+static inline std::ostream& operator<<(std::ostream& out, const IBLT<T>& iblt) {
     out << "idx count keySum keyCheck\n";
     auto idx = 0;
     for (const auto& hte : iblt.getHashTable()) {
@@ -323,6 +332,6 @@ static inline std::ostream& operator<<(std::ostream& out, const IBLT& iblt) {
     return out;
 }
 
-}  // namespace syncps
+}  // namespace dct
 
 #endif  // SYNCPS_IBLT_HPP

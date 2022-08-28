@@ -132,17 +132,17 @@ static auto tfmt(durmilli now) {
 static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
     auto now = std::chrono::system_clock::now();
     rName n{};
-    char ptype{};
+    const char* ptype{};
     switch (d[0]) {
         default:
             return ptype;
         case 5:
             try { n = rInterest(d, s).name(); } catch (const std::exception& e) { return ptype; }
-            ptype = 'I';
+            ptype = "St";
             break;
         case 6:
             try { n = rData(d, s).name(); } catch (const std::exception& e) { return ptype; }
-            ptype = 'D';
+            ptype = "Ad";
             break;
     }
     //XXX work-around for fmt chrono problems - want to print seconds to ms resolution but
@@ -150,21 +150,21 @@ static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
     // for durations as if they were gmtime but we want localtime so we do H & M from the
     // sys time point and S from it converted to a duration. Ick.
     auto now2 = durmicro(now.time_since_epoch());
-    print("{:%H:%M:}{:%S}  {}  {}  {:5} {:4} {}", now, now2, tfmt(now2), ptype, sport, s, n);
-    if (hashIBLT) print(" {:x}", (uint32_t)std::hash<tlvParser>{}(n));
-    print("\n");
+    print("{:%H:%M:}{:%S}  {}  {}  {:5} {:4}", now, now2, tfmt(now2), ptype, sport, s);
+    if (hashIBLT) print("  {:08x} ", (uint32_t)std::hash<tlvParser>{}(n));
+    print(" {}\n", n);
     return ptype;
 }
 
 static void fullPrint(const uint8_t* d, size_t s, uint16_t sport) {
-    if (compactPrint(d, s, sport) == 0) return;
-
+    if (! compactPrint(d, s, sport)) return;
     di.dissect(std::cout, tlvParser(d, s));
     std::cout << '\n';
 }
 
 static void namePrint(const uint8_t* d, size_t s, uint16_t sport) {
-    if (compactPrint(d, s, sport) != 'D') return;
+    compactPrint(d, s, sport);
+    if (d[0] != 6) return;
 
     auto rd = rData(d, s);
     if (rd.sigType() == 7/*AEAD*/) return;
