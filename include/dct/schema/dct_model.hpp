@@ -38,10 +38,11 @@
 #include "validate_pub.hpp"
 #include "dct/distributors/dist_cert.hpp"
 #include "dct/distributors/dist_gkey.hpp"
+#ifndef notdef
 #include "dct/distributors/dist_sgkey.hpp"
+#endif
 
-using Publication = ndn::Data;
-using Name = ndn::Name;
+namespace dct {
 
 //template<typename sPub>
 struct DCTmodel {
@@ -52,20 +53,22 @@ struct DCTmodel {
     SigMgrAny psm_;         // publication signing/validation
     SigMgrAny wsm_;         // wire packet signing/validation
     SigMgrSchema syncSm_;   // syncps pub validator
-    syncps::SyncPubsub m_sync;  // sync collection for pubs
+    SyncPS m_sync;  // sync collection for pubs
     static inline std::function<size_t(std::string_view)> _s2i;
     DistCert m_ckd;         // cert collection distributor
     DistGKey* m_gkd{};      // group key distributor (if needed)
+#ifndef notdef
     DistSGKey* m_sgkd{};    // subscriber group key distributor (if needed)
+#endif
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
 
     SigMgr& wireSigMgr() { return wsm_.ref(); }
     SigMgr& pubSigMgr() { return psm_.ref(); }
-    auto pubPrefix() const { return bs_.pubVal("#pubPrefix"); }
+    auto pubPrefix() const { return crName{bs_.pubVal("#pubPrefix")}; }
 
     // all cState/cAdd packet names start with the first 8 bytes
     // of the schema cert thumbprint to make them trust-zone specific.
-    auto wirePrefix() const { return Name().append(bs_.schemaTP_.data(), 8); }
+    auto wirePrefix() const { return crName()/std::span(bs_.schemaTP_).first(8); }
 
     const auto& certs() const { return cs_; }
 
@@ -74,7 +77,7 @@ struct DCTmodel {
         // all the chains and see if the first item matches 'cert'
         for (const auto& chn : bs_.chain_) {
             if (chn.size() == 0) continue;
-            if (matches(bs_, cert.getName(), bs_.cert_[chn[0]])) return true;
+            if (matches(bs_, cert.name(), chn[0])) return true;
         }
         return false;
     }
@@ -111,35 +114,33 @@ struct DCTmodel {
     // Cryptographically and structurally validate a cert before adding it to the
     // cert store. Since certs can arrive in any order, a small number of certs
     // are held pending their signing cert's arrival.
-    void addCert(const dctCert& cert) {
-        const auto tp = dctCert::computeThumbPrint(cert);
+    void addCert(rData d) {
+        const auto tp = dctCert::computeThumbPrint(d);
         if (cs_.contains(tp)) return;
-        // check if cert is consistent with the schema
+        // check if cert is consistent with the schema:
+        //  - cert metainfo must say it's a key
+        //  - siginfo has to include a validity period and now must be within the period
+        //  - signature type must match schema requirement
+        //  - name has to match some cert template in the schema
+        //  - can't be a root cert or a trust schema
+        // (new root certs and schemas are currently ignored because they often result from
+        // a configuration error (e.g., updating a schema in some but not all id bundles.)
+        // XXX eventually need tools to securely check/update certs & bundles
         try {
-            auto ctype = cert.getSigType();
-            if (ctype != pubSigMgr().type()) return; // signature doesn't match schema
-
-            const auto& cname = cert.getName();
+            auto cert = rCert{d};
+            if (! cert.valid(pubSigMgr().type())) return;
+            auto cname = tlvVec(cert.name());
             if (matchesAny(bs_, cname) < 0) return; // name doesn't match schema
 
-            // new root certs and schemas arriving in a session generally
-            // result from a configuration error (e.g., updating a schema in
-            // some but not all id bundles) so ignore them.
-            // XXX eventually need tools to securely check/update certs & bundles
-            const auto& stp = cert.getKeyLoc();
-            if (dctCert::selfSigned(stp)) {
-                //_LOG_WARNING("ignoring new root cert " << cname);
-                return;
-            }
-            if (cname.size() >= 8 && to_sv(cname[-6]) == "schema") {
-                //_LOG_WARNING("ignoring new schema cert " << cname);
-                return;
-            }
+            const auto& stp = cert.thumbprint();
+            if (dctCert::selfSigned(stp)) return; // can't add new root cert
 
+            if (cname.size() >= 7 && cname[-6].toSv() == "schema") return; // can't add new schema
+ 
             // cert is structurally ok so see if it crytographically validates
             if (! cs_.contains(stp)) {
                 // don't have cert's signing cert - check it when that arrives
-                if (pending_.size() > 32) {
+                if (pending_.size() > 64) {
                     // XXX too many pending certs - drop something
                 } 
                 pending_.emplace(stp, cert);
@@ -152,47 +153,47 @@ struct DCTmodel {
                 // in the certstore so we can validate all the names in the chain
                 // against the schema. If the chain is ok, set up structural validation
                 // state for pubs signed with this thumbprint.
-                auto chain = validateChain(bs_, cs_, cert);
-                if (chain < 0) return; // chain structurally invalid
+                if (validateChain(bs_, cs_, cert) < 0) return; // chain structure invalid
                 cs_.add(cert);
                 setupPubValidator(tp);
                 return; // done since nothing can be pending on a signing cert
             }
             cs_.add(cert);
+            checkPendingCerts(cert, tp);
         } catch (const std::exception&) {};
-        checkPendingCerts(cert, tp);
     }
 
 
     // create a new DCTmodel instance using the certs in the bootstrap bundle file 'bootstrap'
     // optional string for face name
-    DCTmodel(std::string_view bootstrap, syncps::FaceType& face = syncps::SyncPubsub::defaultFace()) :
+    DCTmodel(std::string_view bootstrap, DirectFace& face = defaultFace()) :
             bs_{validateBootstrap(bootstrap, cs_)},
             bld_{pubBldr(bs_, cs_, bs_.pubName(0))},
             psm_{getSigMgr(bs_)},
             wsm_{getWireSigMgr(bs_)},
             syncSm_{psm_.ref(), bs_, pv_},
-            //m_sync{syncps::SyncPubsub(face, wirePrefix().append("pubs"), wireSigMgr(), syncSm_)},
-            m_sync{face, wirePrefix().append("pubs"), wireSigMgr(), syncSm_},
-            m_ckd{ face, pubPrefix(), wirePrefix().append("cert"),
+            m_sync{face, wirePrefix()/"pubs", wireSigMgr(), syncSm_},
+            m_ckd{ face, pubPrefix(), wirePrefix()/"cert",
                    [this](auto cert){ addCert(cert);},  [](auto /*p*/){return false;} }
     {
         // pub sync session is started after distributor(s) have completed their setup
         m_sync.autoStart(false);
         if(wsm_.ref().type() == SigMgr::stAEAD) {
-            if (matchesAny(bs_, pubPrefix() + "/CAP/KM/_/KEY/_/dct/_") < 0) {
+            if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                 // schema doesn't contain a "KeyMaker" capability cert so AEAD won't work
                 throw schema_error("AEAD requires that some entity(s) have KeyMaker capability");
             }
-            m_gkd = new DistGKey(face, pubPrefix(), wirePrefix().append("keys"),
-                             [this](auto& gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
+            m_gkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys",
+                             [this](auto gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
+#ifndef notdef
         } else if (wsm_.ref().type() == SigMgr::stPPAEAD || wsm_.ref().type() == SigMgr::stPPSIGN) {
-            if (matchesAny(bs_, pubPrefix() + "/CAP/KM/_/KEY/_/dct/_") < 0) {
-                // schema doesn't contain a "KeyMaker" capability cert so PPAEAD and TBSC won't work
-                throw schema_error("PPAEAD and TBSC require that some entity(s) have KeyMaker capability");
+            if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
+                // schema doesn't contain a member with keymaker ability so PPAEAD won't work
+                throw schema_error("PPAEAD and PPSIGNED requires that some entity(s) have Subscriber capability");
             }
-            m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix().append("keys"),
-                             [this](auto& gpk, auto& gsk, auto ct){ wsm_.ref().addKey(gpk, gsk, ct);}, certs());
+            m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys",
+                             [this](auto gpk, auto gsk, auto ct){ wsm_.ref().addKey(gpk, gsk, ct);}, certs());
+#endif
         }
         // cert distributor needs a callback when cert added to certstore.
         // when it's set up, push all the certs that went in prior to the
@@ -205,15 +206,17 @@ struct DCTmodel {
                             ckd.publishCert(cert);
                             if (isSigningCert(cert)) gkd.addGroupMem(cert);
                          };
+#ifndef notdef
         } else if (m_sgkd) {    //sg is currently on possible on wire prefix
             cs_.addCb_ = [this, &ckd=m_ckd, &sgkd=*m_sgkd] (const dctCert& cert) {
                             ckd.publishCert(cert);
                             if (isSigningCert(cert)) sgkd.addGroupMem(cert);
                          };
+#endif
         } else {
             cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
         }
-        for (const auto& [tp, cert] : cs_) m_ckd.initialPub(dctCert(cert));
+        for (const auto& [tp, cert] : cs_) m_ckd.initialPub(cert);
 
         // pub and wire sigmgrs each need its signing key setup and its validator needs
         // a callback to return a public key given a cert thumbprint.
@@ -232,19 +235,17 @@ struct DCTmodel {
  
     auto run() { m_sync.run(); };
 
-    auto& subscribeTo(const syncps::Name& topic, syncps::UpdateCb&& cb) {
-        m_sync.subscribeTo(topic, std::move(cb));
+    auto& subscribe(const Name& topic, SubCb&& cb) {
+        m_sync.subscribe(crPrefix{topic}, std::move(cb));
         return *this;
     }
-    auto& unsubscribe(const syncps::Name& topic) {
-        m_sync.unsubscribe(topic);
+    auto& unsubscribe(const Name& topic) {
+        m_sync.unsubscribe(crPrefix{topic});
         return *this;
     }
-    auto publish(syncps::Publication&& pub) { return m_sync.publish(std::move(pub)); }
+    auto publish(Publication&& pub) { return m_sync.publish(std::move(pub)); }
 
-    auto publish(syncps::Publication&& pub, syncps::PublishCb&& cb) {
-        return m_sync.publish(std::move(pub), std::move(cb));
-    }
+    auto publish(Publication&& pub, DelivCb&& cb) { return m_sync.publish(std::move(pub), std::move(cb)); }
 
     auto& pubLifetime(std::chrono::milliseconds t) {
         m_sync.pubLifetime(t);
@@ -267,7 +268,8 @@ struct DCTmodel {
     template<typename... Rest> requires ((sizeof...(Rest) & 1) == 0)
     auto pub(std::span<const uint8_t> content, Rest&&... rest) {
         Publication pub(name(std::forward<Rest>(rest)...));
-        pubSigMgr().sign(pub.setContent(content.data(), content.size()));
+        pub.content(content);
+        pubSigMgr().sign(pub);
         return pub;
     }
 
@@ -275,7 +277,8 @@ struct DCTmodel {
 
     auto pub(std::span<const uint8_t> content, const std::vector<parItem>& pvec) {
         Publication pub(name(pvec));
-        pubSigMgr().sign(pub.setContent(content.data(), content.size()));
+        pub.content(content);
+        pubSigMgr().sign(pub);
         return pub;
     }
 
@@ -292,6 +295,7 @@ struct DCTmodel {
                     });
             return;
         }
+#ifndef notdef
         if (m_sgkd) {
             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                         if (!c) { cb(false); return; }
@@ -299,6 +303,7 @@ struct DCTmodel {
                     });
             return;
         }
+#endif
         m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
     }
 
@@ -325,7 +330,7 @@ struct DCTmodel {
     auto pubVal(std::string_view pubnm, std::string_view fldNm) const {
         auto cs{cs_};
         pubBldr<false> bld{bs_, cs, pubnm};
-        return bld.name()[bld.index(fldNm)].getValue().toRawStr();
+        return std::string(bld.name().nthBlk(bld.index(fldNm)).toSv());;
     }
 
     struct sPub : Publication {
@@ -338,12 +343,10 @@ struct DCTmodel {
         size_t index(size_t s) const { return s;  }
         size_t index(std::string_view s) const { return _s2i(s); }
 
-        std::string string(auto c) const { return getName()[index(c)].getValue().toRawStr(); }
+        auto string(auto c) const { return std::string(name().nthBlk(index(c)).toSv()); }
 
-        uint64_t number(auto c) const { return getName()[index(c)].toNumber(); }
-        using ticks = std::chrono::microseconds; // period used in NDN timestamps
-        using clock = std::chrono::sys_time<ticks>;
-        clock time(auto c) const { return clock(ticks(getName()[index(c)].toTimestampMicroseconds())); }
+        uint64_t number(auto c) const { return name().nthBlk(index(c)).toNumber(); }
+        auto time(auto c) const { return name().nthBlk(index(c)).toTimestamp(); }
         double timeDelta(auto c, std::chrono::system_clock::time_point tp = std::chrono::system_clock::now()) const {
                     return std::chrono::duration_cast<std::chrono::duration<double>>(tp - time(c)).count();
         }
@@ -351,4 +354,5 @@ struct DCTmodel {
     };
 };
 
+} // namespace dct
 #endif // DCTMODEL_HPP

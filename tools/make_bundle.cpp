@@ -57,14 +57,13 @@ int main(int argc, const char* argv[]) {
             }
             auto buf = fileToVec(fname);
             for (auto&& [cert, key] : rdCertBundle(buf)) {
-                auto wfmt = cert.wireEncode();
-                os.write((char*)wfmt.buf(), wfmt.size());
+                os.write((char*)cert.data(), cert.size());
                 if (saveKey && key.size()) {
                     os.put(23);
                     os.put(key.size()); //XXX assumes key is < 253 bytes
                     os.write((char*)key.data(), key.size());
                 }
-                if (verbose) print(" {}cert {}\n", saveKey && key.size()? '+':' ', cert.getName().toUri());
+                if (verbose) print(" {}cert {}\n", saveKey && key.size()? '+':' ', cert.name());
             }
         }
     } catch (const std::runtime_error& se) { print("runtime error: {}\n", se.what()); }

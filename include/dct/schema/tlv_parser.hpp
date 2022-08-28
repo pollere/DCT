@@ -1,7 +1,7 @@
 #ifndef TLVPARSER_HPP
 #define TLVPARSER_HPP
 /*
- * Data Centric Transport NDN packet parser
+ * Data Centric Transport TLV-encoded packet parser
  *
  * Copyright (C) 2020-2 Pollere LLC
  *
@@ -28,11 +28,9 @@
 #include <vector>
 #include "dct/format.hpp"
 #include "tlv.hpp"
-#include "ndn-ind/data.hpp"
-#include "ndn-ind/interest.hpp"
 using runtime_error = std::runtime_error;
 
-// routines for parsing NDN tlv blocks
+// routines for parsing NDN-style tlv blocks
 struct tlvParser {
     static constexpr uint8_t extra_bytes_code{253};
     using Blk = std::span<const uint8_t>;
@@ -56,9 +54,9 @@ struct tlvParser {
         return (data()[1] << 8) | data()[2];
     }
 
-    constexpr Blk subspan(size_t off, size_t cnt = std::dynamic_extent) const { return m_blk.subspan(off, cnt); }
+    constexpr Blk subspan(size_t off, size_t cnt = std::dynamic_extent) const noexcept { return m_blk.subspan(off, cnt); }
 
-    constexpr Blk rest() const { return subspan(off()); }
+    constexpr Blk rest() const noexcept { return subspan(off()); }
 
     constexpr auto isType(uint8_t typ) const noexcept { return *data() == typ; }
     constexpr auto isType(tlv typ) const noexcept { return isType((uint8_t)typ); }
@@ -73,7 +71,11 @@ struct tlvParser {
         return m_blk[off()];
     }
 
-    constexpr tlvParser() { }
+    constexpr tlvParser() = default;
+    tlvParser(const tlvParser&) = default;
+    tlvParser(tlvParser&&) = default;
+    tlvParser& operator=(const tlvParser&) = default;
+    tlvParser& operator=(tlvParser&&) = default;
 
     constexpr tlvParser(Blk blk, size_t off) noexcept : m_blk{blk}, m_off{off} { }
 
@@ -87,12 +89,6 @@ struct tlvParser {
             throw runtime_error(format("len {} != size {}", len + m_off, size()));
     }
     tlvParser(const std::vector<uint8_t>& v) : tlvParser(v.data(), v.size()) { }
-
-    tlvParser(const ndn::Data& d) : tlvParser(*d.wireEncode()) { }
-
-    tlvParser(const ndn::Interest& i) : tlvParser(*i.wireEncode()) { }
-
-    tlvParser(const ndn::Name& n) : tlvParser(*n.wireEncode()) { }
 
     // this tlvParser parses a vector of tlv's (like the vector returned by
     // data.getContent()) starting at an explicit offset (usually 0) and
@@ -142,6 +138,23 @@ struct tlvParser {
     }
     auto nextBlk(tlv typ) { return nextBlk((uint8_t)typ); }
 
+    // skip over 'n' bytes in the tlv. return 'this' to support method chaining.
+    auto& skip(size_t s) {
+        if (m_off + s > size()) throw runtime_error("skip past end of tlv block");
+        m_off += s;
+        return *this;
+    }
+    auto& skipTo(size_t off) {
+        if (off > size()) throw runtime_error("skip past end of tlv block");
+        m_off = off;
+        return *this;
+    }
+    // return a parser for the block starting s bytes after the current offset
+    // (generally used to skip over a name prefix)
+    auto nextAt(size_t off) { return skipTo(off).nextBlk(); };
+
+    auto nextAfter(size_t off) { return skip(off).nextBlk(); };
+
     // support c++17 or later range-based 'for' over contained tlv's
     struct tlvIter {
         tlvParser& p_;
@@ -176,7 +189,23 @@ struct tlvParser {
         return nblks;
     }
 
-    // return the backing bytes of the block as a new vector
+    // return a parser for the  n'th blk of the tlv without changing its state
+    // (used, for example,  to get a particular component from a name).
+    auto nthBlk(int blkIdx) const {
+        int n{blkIdx};
+        tlvParser b{*this};
+        tlvParser blk{};
+        for (auto i = b.begin(); i != b.end(); ) {
+            blk = *i;
+            if (--n < 0) return blk;
+        }
+        throw runtime_error(format("requested blk {} but only {} blks in TLV", blkIdx, blkIdx - n));
+    };
+
+    // return the entire Blk as a span
+    constexpr auto asSpan() const noexcept { return m_blk; }
+
+    // return the backing bytes of the entire block as a new vector
     auto asVec() const noexcept { return std::vector<uint8_t>(m_blk.begin(), m_blk.end()); }
 
     constexpr bool starts_with(Blk prefix, size_t off) const noexcept {
@@ -184,35 +213,69 @@ struct tlvParser {
     }
     constexpr bool starts_with(Blk prefix) const noexcept { return starts_with(prefix, m_off); }
 
-    // return the contents of a tlv block as an uint64_t. An error is thrown if the block
-    // contains more than 8 bytes.
-    auto toNumber() {
-        auto len = size() - off();
-        if (len > 8) throw runtime_error("block too large to be a number");
+    // convert encoded integer in big-endian order to an uint64_t
+    auto bsToUInt(auto l, auto o) const noexcept {
         uint64_t res{};
-        while (! eof()) { res <<= 8; res |= nextByte(); } 
+        const auto* cp = m_blk.data() + o;
+        while (--l >= 0) { res <<= 8; res |= *cp++; } 
         return res;
     }
 
+    // convert encoded integer to a microsecond timestamp
+    auto bsToTS(auto l, auto o) const noexcept {
+        return std::chrono::system_clock::time_point(std::chrono::microseconds(bsToUInt(l, o)));
+    }
+
+    // return contents of a 1 byte tlv block
+    auto toByte() const {
+        if (size() != 3) throw runtime_error("expected 1 byte of TLV content");
+        return m_blk[2];
+    }
+
+    // return the contents of a tlv block as an uint64_t. An error is thrown if the block
+    // contains more than 8 bytes.
+    auto toNumber() const {
+        auto o = off();
+        int l = size() - o;
+        if (l > 8) throw runtime_error("block too large to be a number");
+        return bsToUInt(l, o);
+    }
+
+    // return the contents of a tlv block as a time point.
+    // An error is thrown if the block is not a timestamp.
+    auto toTimestamp() const {
+        auto o = off();
+        int l = size() - o;
+        if (l <= 8 && isType(tlv::Timestamp)) return bsToTS(l, o);
+        //XXX look for 'tagged' timestamps (should change to TLV and get rid of these)
+        if (l != 9 || m_blk[o] != 0xfc || m_blk[o+1] != 0) throw runtime_error("block not a timestamp");
+        return bsToTS(l-2, o+2);
+    }
+
+    // return the contents of the tlv block as a string_view.
+    constexpr auto toSv() const noexcept { return std::string_view((const char*)(m_blk.data()+m_off), size() - off()); }
+
     // return the contents of the tlv block as a span of type T. An error is thrown
     // if the block doesn't contain an integral number of items (0 or more).
-    template <typename T>
-    auto toSpan() {
+    template <typename T = uint8_t>
+    constexpr auto toSpan() const noexcept(sizeof(T) == 1) {
         auto len = size() - off();
-        if (len % sizeof(T) != 0) throw runtime_error("block content not integer multiple of item size");
+        if constexpr (sizeof(T) != 1) {
+            if (len % sizeof(T) != 0) throw runtime_error("block content not integer multiple of item size");
+        }
         return std::span<const T>((const T*)(m_blk.data()+m_off), len / sizeof(T));
     }
 
     // return a copy of the contents of the tlv block as a vector of type T. An error
     // is thrown if the block doesn't contain an integral number of items (0 or more).
-    template <typename T>
-    auto toVector() {
+    template <typename T = uint8_t>
+    constexpr auto toVector() const noexcept(sizeof(T) == 1) {
         auto s = toSpan<T>();
         return std::vector<T>(s.begin(), s.end());
     }
 
     using ordering = std::strong_ordering;
-    ordering operator<=>(const tlvParser& rhs) const noexcept {
+    constexpr ordering operator<=>(const tlvParser& rhs) const noexcept {
         // order by size then content (not compatible with 'longest match'
         // but this is comparing packets, not names)
         auto sz = size();
@@ -225,9 +288,35 @@ struct tlvParser {
 };
 
 template<> struct std::hash<tlvParser> {
-    size_t operator()(const tlvParser& tp) const noexcept {
+    constexpr size_t operator()(const tlvParser& tp) const noexcept {
         return std::hash<std::u8string_view>{}({(char8_t*)tp.data(), tp.size()});
     }
+};
+
+// allow a tlv containing other tlvs to be accessed like a vector
+// (e.g., the components of a name). It's assumed that m_off points to the
+// start of the first contained tlv. Offsets to each tlv are recorded but
+// a parser is only instantiated when that component is accessed.
+// The state of the outer tlv is not modified.
+struct tlvVec {
+    tlvParser b_;
+    std::vector<uint16_t> o_{};
+
+    tlvVec(const tlvParser& b) : b_{b} {
+        size_t off;
+        while ((off = b_.off()) < b_.size()) {
+            o_.emplace_back(off);
+            b_.blkLen();        // skip over type
+            b_.skip(b_.blkLen());  // skip over block contents
+        }
+        if (off != b_.size()) throw runtime_error("tlv larger than enclosing block");
+    }
+    constexpr auto size() const { return o_.size(); }
+    auto operator[](int off) {
+        if (off < 0) off += size();
+        return b_.nextAt(o_[off]);
+    }
+    constexpr auto& tlv() { b_.skipTo(o_[0]); return b_; }
 };
 
 #endif // TLVPARSER_HPP

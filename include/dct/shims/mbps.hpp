@@ -40,7 +40,7 @@ static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferenc
 #include <dct/syncps/syncps.hpp>
 #include <dct/schema/dct_model.hpp>
 
-using namespace syncps;
+using namespace dct;
 
 /* 
  * MBPS (message-based publish/subscribe) provides a pub/sub shim
@@ -80,9 +80,9 @@ using MsgCache = std::unordered_map<MsgID,MsgSegs>;
 struct mbps
 {   
     connectCb m_connectCb;
-    FaceType m_face;
+    DirectFace m_face;
     DCTmodel m_pb;
-    Name m_pubpre{};        // full prefix for Publications
+    crName m_pubpre{};        // full prefix for Publications
     std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids
     std::unordered_map<MsgID, confHndlr> m_msgConfCb;
     MsgInfo m_pending{};    // unconfirmed published messages
@@ -90,13 +90,14 @@ struct mbps
     MsgCache m_reassemble{}; //reassembly of received message segments
     Timer* m_timer;
 
-    mbps(std::string_view bootstrap) : m_pb(bootstrap), m_pubpre{m_pb.pubPrefix()}  { }
 
     mbps(std::string_view bootstrap, std::string_view addr)
-        : m_face{FaceType(addr)}, m_pb(bootstrap, m_face), m_pubpre{m_pb.pubPrefix()}  { }
+        : m_face{addr}, m_pb{bootstrap, m_face}, m_pubpre{m_pb.pubPrefix()}  { }
+
+    mbps(std::string_view bootstrap) : mbps(bootstrap, "")  { }
 
     void run() { m_pb.run(); }
-    const auto& pubPrefix() const noexcept { return m_pubpre; } //calling can convert to Name
+    const auto& pubPrefix() const noexcept { return m_pubpre; }
 
     /* relies on trust schema using mbps conventions of collecting all the signing chain
      * identity information (_role, _roleId, _room, etc.) in pseudo-pub "#chainInfo" so
@@ -124,7 +125,7 @@ struct mbps
         //libsodium set up
         if (sodium_init() == -1) throw error("Connect unable to set up libsodium");
         m_connectCb = std::move(scb);
-        m_uniqId = m_pb.pubVal("#chainInfo").toUri();
+        m_uniqId = format("{}", rName(m_pb.pubVal("#chainInfo")));
 
         // call start() with lambda to confirm success/failure
         // Second argument is priority for this entity to make group keys (0 == won't
@@ -145,13 +146,13 @@ struct mbps
      * receivePub() with the Publication and the application's msgHndlr callback
     */
     mbps& subscribe(const msgHndlr& mh)    {
-        m_pb.subscribeTo(pubPrefix(), [this,mh](auto p) {receivePub(p, mh);});
+        m_pb.subscribe(pubPrefix(), [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
     // distinguish subscriptions further by topic or topic/location
     mbps& subscribe(const std::string& suffix, const msgHndlr& mh)    {
-        auto target = pubPrefix().toUri() + "/" + suffix;
-        m_pb.subscribeTo(target, [this,mh](auto p) {receivePub(p, mh);});
+        //XXX 'format' is a hack - need to split suffix on slashes but want c++ ranges for that
+        m_pb.subscribe(crName{format("{}/{}", rName{pubPrefix()}, suffix)}, [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
 
@@ -179,9 +180,9 @@ struct mbps
         SegCnt k = p.number("sCnt"), n = 1u;
         std::vector<uint8_t> msg{}; //for message body
 
+        auto content = p.content().rest();
         if (k == 0) { //single publication in this message
-            if(auto sz = p.getContent().size())
-                msg.assign(p.getContent().buf(), p.getContent().buf() + sz);
+            if(auto sz = content.size()) msg.assign(content.data(), content.data() + sz);
         } else {
             MsgID mId = p.number("msgID");
             n = 255 & k;    //bottom byte
@@ -191,7 +192,7 @@ struct mbps
                 return;
             }
             //reassemble message            
-            const auto& m = *p.getContent();
+            const auto& m = content;
             auto& dst = m_reassemble[mId];
             if (k == n)
                 dst.resize((n-1)*MAX_CONTENT+m.size());

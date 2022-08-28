@@ -1,7 +1,7 @@
 #ifndef TLV_HPP
 #define TLV_HPP
 /*
- * Data Centric Transport NDN c++ TLV defines
+ * Data Centric Transport c++ TLV defines
  * (from NDN Packet Format Specification 0.3
  *  https://named-data.net/doc/NDN-packet-spec/current/types.html)
  *
@@ -24,22 +24,23 @@
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
  */
+#include <array>
 
 enum class tlv : uint16_t {
     Name = 7,
         // name component types
-        GenericNameComponent = 8,
-        ImplicitSha256DigestComponent = 1,
-        ParametersSha256DigestComponent = 2,
-        KeywordNameComponent = 32,
-        SegmentNameComponent = 33,
-        ByteOffsetNameComponent = 34,
-        VersionNameComponent = 35,
-        TimestampNameComponent = 36,
-        SequenceNumNameComponent = 37,
+        Generic = 8,
+        ImplicitSha256Digest = 1,
+        ParametersSha256Digest = 2,
+        Keyword = 32,
+        Segment = 33,
+        ByteOffset = 34,
+        Version = 35,
+        Timestamp = 36,
+        SequenceNum = 37,
 
-    // an NDN Interest packet contains exactly 5 TLV blocks in the following order:
-    //   7 (Name), 10 (Nonce), 12 (InterestLifetime), 33 (CanBePrefix) 18 (MustBeFresh),
+    // an NDN Interest packet contains exactly 3 TLV blocks in the following order:
+    //   7 (Name), 10 (Nonce), 12 (InterestLifetime)
     Interest = 5,
         Nonce = 10,
         InterestLifetime = 12,
@@ -61,6 +62,7 @@ enum class tlv : uint16_t {
                 ContentType_Key = 2,
                 ContentType_Nack = 3,
                 ContentType_Manifest = 4,
+                ContentType_CAdd = 42,
             FreshnessPeriod = 25,
             //FinalBlockId = 26,
         Content = 21,
@@ -77,5 +79,54 @@ enum class tlv : uint16_t {
                 NotAfter = 255,
         SignatureValue = 23
 };
+
+// Routines to construct TLVs at compile time. They result in a std::array
+// containing the TLV(s). 
+
+// flatten 'args' into a single array. Used to make one TLV from two
+// arrays, one containing the T,L and the other containing L bytes
+// of content. Also used to construct a sequence of TLVs.
+template<size_t... S>
+static constexpr auto tlvFlatten(std::array<uint8_t,S>... args) noexcept {
+    constexpr auto s = (0 + ... + sizeof(args));
+    std::array<uint8_t,s> r;
+    size_t o{};
+    ((std::copy(args.begin(), args.end(), r.begin()+o), o += sizeof(args)), ...);
+    return r;
+}
+
+template<tlv typ, size_t siz, size_t n=((uint16_t(typ) < 253? 1 : 3) + (siz < 253? 1 : 3))>
+static consteval auto TLVhdr() {
+    //consteval auto n = (uint16_t(typ) < 253? 1 : 3) + (siz < 253? 1 : 3);
+    //std::array<uint8_t, 6> h;
+    std::array<uint8_t, n> h;
+    unsigned int o = 0;
+    if (uint16_t(typ) >= 253) {
+        h[o++] = 253u;
+        h[o++] = uint8_t(uint16_t(typ) >> 8);
+    }
+    h[o++] = uint8_t(typ);
+
+    if (siz >= 253) {
+        h[o++] = 253u;
+        h[o++] = uint8_t(siz >> 8);
+    }
+    h[o++] = uint8_t(siz);
+    return h;
+}
+
+// wrap 'args' in a tlv of type 'typ'
+template<tlv typ, typename... T>
+static constexpr auto xTLV(T... args) noexcept {
+    constexpr auto s = (0 + ... + sizeof(args));
+    return std::to_array<uint8_t>({ uint8_t(typ), s, args...});
+}
+
+// construct one tlv of type 'typ' with contents 'arg'
+template<tlv typ, size_t S>
+static constexpr auto TLV(std::array<uint8_t,S> arg) noexcept { return tlvFlatten(TLVhdr<typ,S>(), arg); }
+
+template<tlv typ>
+static constexpr auto TLV(uint8_t arg) noexcept { return std::to_array<uint8_t>({ uint8_t(typ), 1, arg}); }
 
 #endif // TLV_HPP

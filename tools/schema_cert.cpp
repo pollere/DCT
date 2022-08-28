@@ -62,13 +62,9 @@ int main(int argc, const char* argv[]) {
             sm.ref().updateSigningKey(key, signer);
         }
         auto cert = schemaCert(bs, buf, sm.ref());
-        auto wfmt = cert.wireEncode();
-        if (! outfile.size()) {
-            auto v = cert.getName()[0].getValue();
-            outfile = std::string((const char*)v.buf(), v.size()).append(bs.pubName(0));
-        }
+        if (! outfile.size()) outfile = std::string(cert.name().nthBlk(0).toSv()).append(bs.pubName(0));
         std::ofstream os{outfile, std::ios::binary};
-        os.write((char*)wfmt.buf(), wfmt.size());
+        os.write((char*)cert.data(), cert.size());
         os.close();
     } catch (const std::runtime_error& se) { print("runtime error: {}\n", se.what()); }
 

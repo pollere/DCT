@@ -127,6 +127,7 @@ struct driver {
     std::string output_{}; // binary schema output file name
     symTab symtab_;
     int verbose_{1};
+    bool printDag_{false};
 
     static inline const std::array<std::string,8> fn2str_{
         "timestamp","sysId","pid","host","uid","seq","",""
@@ -595,15 +596,25 @@ struct driver {
         for (const auto& pri : primary_) pubs_.emplace(pri);
     }
 
-    void printDag(const certDag& g) const {
+    void printGraph(const certDag& g, const auto& nodes) const {
+        static const std::array nattr = { "", " [shape=octagon,color=\"gray\",fontcolor=\"gray\"]",
+                                          " [color=\"red\",penwidth=2]" };
+        static const std::array eattr = { "", " [style=dashed,color=\"gray\"]", " [color=\"red\",penwidth=2]" };
         print("digraph certDag {{\n");
-        for (const auto& src : g.topo()) {
+        for (const auto& src : nodes) {
+            // filter out some things based on verbosity level
+            if (verbose_ < V_FULL && g.attr(src) == 1) continue;
+            if (verbose_ < V_DETAIL && to_string(src) == "#chainInfo"s) continue;
+
+            if (g.attr(src) != 0) print("  \"{}\"{};\n", to_string(src), nattr[g.attr(src)]);
+
             const auto& l = g.links().at(src);
             if (l.size() == 0) {
                 print("  \"{}\";\n", to_string(src));
                 continue;
             }
-            for (const auto& dst : l) print("  \"{}\" -> \"{}\";\n", to_string(src), to_string(dst));
+            for (const auto& dst : l) print("  \"{}\" -> \"{}\"{};\n", to_string(src), to_string(dst),
+                                            eattr[g.attr(src)]);
         }
         print("}}\n");
     }
@@ -648,13 +659,29 @@ struct driver {
  
             for (auto&& c : pubs) {
                 if (parent_.contains(c)) {
-                    if (auto parent = parent_.at(c); parent != c) dag.add(rootComp(c), c);
+                    if (auto parent = parent_.at(c); parent != c) {
+                        dag.add(rootComp(c), c);
+                        // mark this as a type-to-instance relationship rather than
+                        // the default instance-to-signer relationship.
+                        dag.attr(rootComp(c), 1);
+                    }
                 }
                 for (auto&& signer : signers) dag.add(c, signer);
             }
         }
         // verify that there are no cycles, a single trust root, and every leaf has paths to the root.
-        if (verbose_ >= V_DEBUG) printDag(dag);
+        if (const auto cycle = dag.hasCycle(); cycle.size() > 0) {
+            auto src = cycle.back();
+            auto dst = std::find_if(cycle.rbegin(), cycle.rend(), [&src,&dag](auto n){ return dag.linked(src, n);});
+            print("error: cycle in cert chain due to edge from {} to {}\n", to_string(src), to_string(*dst));
+            dag.attr(src, 2);
+            printGraph(dag, dag.nodes());
+            exit(1);
+        }
+        if (verbose_ >= V_DEBUG || printDag_) {
+            printGraph(dag, dag.topo());
+            if (printDag_) exit(0);
+        }
         certDag_ = dag;
         auto sinks = dag.sinks();
         if (sinks.size() > 1) symtab_.throw_error(format("multiple trust anchors: {}", sinks));

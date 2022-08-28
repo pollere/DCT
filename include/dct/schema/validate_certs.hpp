@@ -23,17 +23,10 @@
  *  More information on DCT is available from info@pollere.net
  */
 
-#include <string_view>
 #include "bschema.hpp"
 #include "certstore.hpp"
 #include "dct/format.hpp"
 
-
-// convert a name component to a string_view
-static inline auto to_sv(const ndn::Name::Component& comp) {
-    const auto& b = *comp.getValue();
-    return std::string_view((const char*)b.data(), b.size());
-}
 
 /*
  * Following routines make use of the low-level binary schema to cross-validate cert and
@@ -41,41 +34,49 @@ static inline auto to_sv(const ndn::Name::Component& comp) {
  */
 
 // common code of 'matches' and 'startsWith'. caller must check that prefix.size() <= cert.size().
-static inline bool matchesPrefix(const bSchema& bs, const certName& cert, const bName& prefix) {
+static inline bool matchesPrefix(const bSchema& bs, tlvVec& cert, const bName& prefix) {
     const auto ntok = bs.tok_.size();
     for (auto n = prefix.size(), i=0ul; i < n; i++) {
-        if (prefix[i] < ntok && to_sv(cert[i]) != bs.tok_[prefix[i]]) return false;
+        if (prefix[i] < ntok && cert[i].toSv() != bs.tok_[prefix[i]]) return false;
     }
     return true;
 }
 
 // check if 'cert' matchs schema name 'bcert'
-static inline bool matches(const bSchema& bs, const certName& cert, const bName& bcert) {
+static inline bool matches(const bSchema& bs, tlvVec& cert, const bName& bcert) {
     if (cert.size() != bcert.size()) return false;
     return matchesPrefix(bs, cert, bcert);
 }
 
 // check if 'cert' starts with 'prefix'
-static inline bool startsWith(const bSchema& bs, const certName& cert, const bName& prefix) {
+static inline bool startsWith(const bSchema& bs, tlvVec& cert, const bName& prefix) {
     if (cert.size() < prefix.size()) return false;
     return matchesPrefix(bs, cert, prefix);
 }
 
 // check if 'cert' matchs schema cert at index 'sc'
-static inline bool matches(const bSchema& bs, const certName& cert, const size_t idx) {
+static inline bool matches(const bSchema& bs, tlvVec& cert, const size_t idx) {
     if (idx >= bs.cert_.size()) return false;
     return matches(bs, cert,  bs.cert_[idx]);
 }
+static inline bool matches(const bSchema& bs, const rName& cert, const size_t idx) {
+    auto c = tlvVec{cert};
+    return  matches(bs, c, idx);
+}
 
 // check if 'cert' matchs any schema cert except the root cert
-static inline int matchesAny(const bSchema& bs, const certName& cert) {
+static inline int matchesAny(const bSchema& bs, tlvVec& cert) {
     if (bs.cert_.size() <= 1) return -1;
     for (int n = bs.cert_.size() - 1, i=0; i < n; i++) if (matches(bs, cert,  i)) return i;
     return -1;
 }
+static inline int matchesAny(const bSchema& bs, const rName& cert) {
+    auto c = tlvVec{cert};
+    return matchesAny(bs, c);
+}
 
 // check if 'cv' matchs all the certs in schema chain sc
-static inline bool matchesAll(const bSchema& bs, const certVec& cv, const bChain& sc) {
+static inline bool matchesAll(const bSchema& bs, certVec& cv, const bChain& sc) {
     if (cv.size() != sc.size()) return false;
     for (size_t n = cv.size(), i=0; i < n; i++) if (! matches(bs, cv[i],  sc[i])) return false;
     return true;
@@ -90,9 +91,9 @@ static inline int matchesChain(const bSchema& bs, const certStore& cs, const dct
 
 // check that schema 'bs' cert name component correspondences indexed by 'ci'
 // hold for vector of cert names 'cv'.
-static inline bool validateChainCors(const bSchema& bs, const certVec& cv, coridx ci) {
+static inline bool validateChainCors(const bSchema& bs, certVec&& cv, coridx ci) {
     for (const auto [n1, c1, n2, c2] : bs.cor_[ci]) {
-        if (n1 > 0 && cv[n1-1][c1] != cv[n2-1][c2]) return false;
+        if (n1 > 0 && cv[n1-1][c1].toSv() != cv[n2-1][c2].toSv()) return false;
     }
     return true;
 }

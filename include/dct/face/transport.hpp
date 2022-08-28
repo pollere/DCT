@@ -22,6 +22,7 @@
  *  This is not intended as production code.
  */
 
+#include <cerrno>
 #include <charconv>
 #include <functional>
 #include <memory>
@@ -60,7 +61,7 @@ struct Transport {
     virtual void close() = 0;
 
     static void ehandler(const boost::system::error_code& ec, size_t len) {
-        if (ec.failed() && ec.value() != 61) // ECONREFUSED
+        if (ec.failed() && ec.value() != ECONNREFUSED)
             throw runtime_error(format("send_to failed: {} len {}", ec.message(), len));
     }
 };
@@ -79,6 +80,7 @@ struct TransportMulticast final : Transport {
         // scope_id is not handled correctly for 'node_local' so we stick it in as a numeric value
         auto ifaddr = getIp6Addr(defaultIf());
         auto dst = make_address_v6(maddr);
+        if (ifaddr.sin6_scope_id == 0) ifaddr.sin6_scope_id = if_nametoindex(defaultIf().c_str());
         dst.scope_id(ifaddr.sin6_scope_id);
         // NFD uses port 56363. Use a different one because NFD doesn't handle multicast well:
         // lack of working dup suppression combined with its Content Store makes it babel.
@@ -244,3 +246,4 @@ static Transport& transport(Transport::onRcv&& rcb, Transport::onConnect&& ccb) 
 } // namespace dct
 
 #endif  // DCT_FACE_TRANSPORT_HPP
+

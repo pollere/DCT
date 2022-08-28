@@ -40,16 +40,14 @@ static inline certBundle rdCertBundle(const std::vector<uint8_t>& buf) {
     certBundle cb{};
     auto bundle = tlvParser(tlvParser::Blk(buf), 0U); 
     for (auto obj : bundle) {
-        // Bundles contain only certs (tlv 6 = ndn::Data) and keys (tlv 23 = Signature).
+        // Bundles contain only certs (tlv 6 = Data) and keys (tlv 23 = Signature).
         // Keys immediately follow their cert so each iteration must start with cert.
         // It may be immediately followed by a key that will be attached to the cert.
         // After that must be eof or another cert.
         if (obj[0] != 6) throw std::runtime_error(format("invalid bundle format (type {})", obj[0]));
     
         // have a cert (type tlv::Data)
-        auto data = ndn::Data();
-        data.wireDecode(obj.data(), obj.size());
-        auto cert = dctCert(data);
+        auto cert = dctCert(rData(obj));
         // if the next item is a key, stick it in the bundle with the cert
         // otherwise give the cert an empty key
         keyVal key{};

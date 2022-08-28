@@ -61,9 +61,7 @@ extern "C" {
 #include <array>
 #include <string_view>
 
-#include "dct/sigmgrs/sigmgr.hpp"
-#include "rpacket.hpp"
-
+// thumbprint has to be defined before sigmgr included
 constexpr size_t thumbPrint_s{crypto_hash_sha256_BYTES};
 using thumbPrint = std::array<uint8_t,thumbPrint_s>;
 // XXX would be nice if std:array had its own hash specialization
@@ -73,60 +71,47 @@ template<> struct std::hash<thumbPrint> {
     }
 };
 
-using certName = ndn::Name;
+struct dctCert;
 
-struct dctCert : ndn::Data {
-    // dctCert is a certificate that has contraints on its key locator (which are checked at
-    // sign/validate time). dctCert is derived from ndn::Data
+#include "crpacket.hpp"
+#include "dct/sigmgrs/sigmgr.hpp"
 
-    dctCert(const ndn::Data& p) { *this = reinterpret_cast<const dctCert&>(p); }
-    dctCert(ndn::Data&& p) { *this = std::move(reinterpret_cast<dctCert&&>(p)); }
+struct dctCert : crCert {
+    // dctCert is a certificate with contraints on its name and key locator
+    // (checked at sign/validate time).
+    using systime = std::chrono::system_clock::time_point;;
+    using seconds = std::chrono::seconds;
+    using days = std::chrono::days;
 
+    dctCert(rCert d) : crCert(d) { }
+
+    static constexpr auto keyId(keyRef pk) {
+        // key ID is a 4-byte hash of the public key.
+        std::array<uint8_t, 4> kId;
+        crypto_generichash(kId.data(), kId.size(), pk.data(), pk.size(), NULL, 0);
+        return kId;
+    }
     // construct a dctCert with the given name. The name will be suffixed with the
     // 4 required NDN components (KEY/<kid>/<creator>/<creationTime>), have content type
-    // 'key', a 1 hour freshness period, a 1 year validity period and signed with 'sm'.
-    dctCert(const certName& name, const keyVal& pk, SigMgr& sm) {
-        std::array<uint8_t, 4> kId;  //hash pk to get key Id
-        crypto_generichash(kId.data(), kId.size(), pk.data(), pk.size(), NULL, 0);
-        auto now = std::chrono::system_clock::now();
-        auto nm = name;
-        nm.append("KEY").append(kId.data(), kId.size()).append("dct") .appendTimestamp(now);
-        setName(nm);
+    // 'key', a validity period starting at 'strt' of duration 'dur' and signed with 'sm'.
+    dctCert(crName&& name, keyRef pk, SigMgr& sm, systime strt, seconds dur)
+        : crCert(name/"KEY"/keyId(pk)/"dct"/std::chrono::system_clock::now()) {
+        content(pk);
 
-        getMetaInfo().setType(ndn_ContentType_KEY);
-        getMetaInfo().setFreshnessPeriod(std::chrono::hours(1));
-        setContent(pk.data(), pk.size());
-
-        /* Set Validity Period to 1-year
-         * 0xFD Validity Period 0xFE NotBefore 0xFF Not After
-         * (ValidityPeriod(now, now + std::chrono::hours(1 * 365 * 24)));
-         * notBefore  number of milliseconds since 1970 ndn::MillisecondsSince1970
-         * For some reason, wireEncode() doesn't like the ValidityPeriod in the
-         * GenericSignature but if don't add its length in, it passes through okay.
-         * (Have to insert 0xFD 0x00 before anything larger than 0xFC)
-         */
-        //Type for Validity Period, length of subfields, notBefore type and length
-        std::vector<uint8_t> valPer;
-        uint8_t vp[8] = {0xFD, 0x00, 0xFD, 0x26, 0xFD, 0x00, 0xFE, 0x0F};
-        valPer.insert(valPer.end(),vp, vp+8);
-        auto itt = std::chrono::system_clock::to_time_t(now);
-        char iso8601[16];      //space for string terminator
-        std::strftime(iso8601, 16, "%G%m%eT%H%M%S", gmtime(&itt));
-        valPer.insert(valPer.end(), iso8601, iso8601 + 15);
-        uint8_t na[4] = {0xFD, 0x00, 0xFF, 0x0F}; //type and length for notAfter time
-        valPer.insert(valPer.end(),na, na+4);
-        itt = std::chrono::system_clock::to_time_t(now + std::chrono::hours(1 * 365 * 24));
-        std::strftime(iso8601, 16, "%G%m%eT%H%M%S", gmtime(&itt));
-        valPer.insert(valPer.end(), iso8601, iso8601 + 15);
-
-        std::vector<uint8_t> sigInfo = sm.getSigInfo();
-        sigInfo.insert(sigInfo.end(), valPer.begin(), valPer.end());
-        sigInfo[1] += 0x2A;    //Increase Signature Info length field by Validity Period
-        if (! sm.sign(*this, sigInfo)) {
-          //_LOG_ERROR("dctCert(" << nm << ") signing failed");
-          exit(1);
-        }
+        // set up the cert's signature info including a 1 year validity period
+        auto vp = TLV<tlv::ValidityPeriod>(tlvFlatten(
+                      TLV<tlv::NotBefore>(iso8601(strt)),
+                      TLV<tlv::NotAfter>(iso8601(strt + dur))));
+        auto sigInfo = sm.getSigInfo();
+        sigInfo.insert(sigInfo.end(), vp.begin(), vp.end());
+        sigInfo[1] += vp.size();
+        if (! sm.sign(*this, sigInfo)) exit(1);
     }
+
+    dctCert(crName&& name, keyRef pk, SigMgr& sm)
+     : dctCert(std::move(name), pk, sm, std::chrono::system_clock::now(), days(365)) {}
+
+    dctCert(std::string_view nm, keyRef pk, SigMgr& sm) : dctCert(crName{nm}, pk, sm) {}
  
     // a hash that's 32 bytes of zero is the thumbprint of a "self-signed" cert. The DCT model
     // requires that a thumbprint be cryptographically assured 1-1 mapping to certs. I.e., it
@@ -140,15 +125,12 @@ struct dctCert : ndn::Data {
         return std::all_of(t.begin(), t.end(), [](uint8_t b){ return b == 0; });
     }
 
-    static inline thumbPrint computeThumbPrint(const ndn::Data& cert) {
+    static inline thumbPrint computeThumbPrint(rData cert) {
         thumbPrint tp;
-        auto certWF = cert.wireEncode();
-        crypto_hash_sha256(tp.data(), certWF.buf(), certWF.size());
+        crypto_hash_sha256(tp.data(), cert.data(), cert.size());
         return tp;
     }
-    static inline const thumbPrint& getKeyLoc(rData data) { return (const thumbPrint&)*data.thumbprint(); }
-
-    static inline const thumbPrint& getKeyLoc(const ndn::Data& data) { return getKeyLoc(rData(data)); }
+    static inline const thumbPrint& getKeyLoc(rData data) { return data.thumbprint(); }
 
     const thumbPrint& getKeyLoc() const { return getKeyLoc(*this); }
 
@@ -158,43 +140,7 @@ struct dctCert : ndn::Data {
 
     // return the 'signature type' (tlv 27) byte of 'data'
     static inline auto getSigType(rData data) { return data.sigType(); }
-    static inline auto getSigType(const ndn::Data& data) { return getSigType(rData(data)); }
     auto getSigType() const { return getSigType(*this); }
-};
-
-template<> struct std::hash<dctCert> {
-    size_t operator()(const dctCert& c) const noexcept {
-        const auto& e = *c.wireEncode();
-        return std::hash<std::string_view>{}({(const char*)e.data(), e.size()});
-    }
-};
-template<> struct std::less<dctCert> {
-    bool operator()(const dctCert& a, const dctCert& b) const noexcept {
-        return std::less<decltype(*a.wireEncode())>{}(*a.wireEncode(),*b.wireEncode());
-    }
-};
-template<> struct std::equal_to<dctCert> {
-    bool operator()(const dctCert& a, const dctCert& b) const noexcept {
-        return std::equal_to<decltype(*a.wireEncode())>{}(*a.wireEncode(),*b.wireEncode());
-    }
-};
-
-//XXX these don't belong here but need to be somewhere and aren't in NDN libs
-template<> struct std::hash<ndn::Data> {
-    size_t operator()(const ndn::Data& c) const noexcept {
-        const auto& e = *c.wireEncode();
-        return std::hash<std::string_view>{}({(const char*)e.data(), e.size()});
-    }
-};
-template<> struct std::less<ndn::Data> {
-    bool operator()(const ndn::Data& a, const ndn::Data& b) const noexcept {
-        return std::less<decltype(*a.wireEncode())>{}(*a.wireEncode(),*b.wireEncode());
-    }
-};
-template<> struct std::equal_to<ndn::Data> {
-    bool operator()(const ndn::Data& a, const ndn::Data& b) const noexcept {
-        return std::equal_to<decltype(*a.wireEncode())>{}(*a.wireEncode(),*b.wireEncode());
-    }
 };
 
 #endif // DCTCERT_HPP

@@ -72,8 +72,8 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
     // validate then load the schema
     const auto& scert = cb[1].first;
     if (! sm.validate(scert, root)) throw schema_error("schema cert doesn't validate");
-    const auto& scname = scert.getName();
-    if (to_sv(scname[-6]) != "schema" || to_sv(scname[-4]) != "KEY")
+    auto scname = tlvVec{scert.name()};
+    if (scname[-6].toSv() != "schema" || scname[-4].toSv() != "KEY")
         throw schema_error("schema cert name malformed");
 
     const auto& bs = loadSchema(scert);
@@ -81,13 +81,13 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
         throw schema_error("schema signature type doesn't match its pubValidator");
 
     // check that schema and root cert match (root cert is always last in schema cert table)
-    if (! matches(bs, root.getName(), bs.cert_.size() - 1))
+    if (! matches(bs, root.name(), bs.cert_.size() - 1))
         throw schema_error("root cert name doesn't match schema's root cert");
 
     // check that schema cert name starts with schema's pub prefix, has the correct
     // length and is for the right pub name.
     auto pubPre = bs.pubTmpl0(bs.findPub("#pubPrefix"));
-    if (pubPre.size() == 0 || scname.size() - pubPre.size() != 6 || to_sv(scname[-5]) != bs.pubName(0))
+    if (pubPre.size() == 0 || scname.size() - pubPre.size() != 6 || scname[-5].toSv() != bs.pubName(0))
         throw schema_error("schema cert name malformed");
 
     cs.add(scert);
@@ -99,14 +99,14 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
         const auto& prev = cb[l].first;
         if (cert.getSigType() != sigType) throw schema_error("bundle certs don't all have same signing type");
         if (cert.getKeyLoc() != prev.computeThumbPrint())
-            throw schema_error(format("cert {} signing chain invalid",cert.getName().toUri()));
+            throw schema_error(format("cert {} signing chain invalid",cert.name()));
         if (! sm.validate(cert, prev)) throw schema_error(format("cert {} doesn't validate", c));
-        if (matchesAny(bs, cert.getName()) < 0) throw schema_error(format("cert {} doesn't match a schema cert", cert.getName().toUri()));
+        if (matchesAny(bs, cert.name()) < 0) throw schema_error(format("cert {} doesn't match a schema cert", cert.name()));
         cs.add(cert, key);
     }
     // final cert is the signing cert - make it the signing chain head
     auto sc = cb.back().first;
-    if (validateChain(bs, cs, sc) < 0) throw schema_error(format("cert {} signing chain invalid", sc.getName().toUri()));
+    if (validateChain(bs, cs, sc) < 0) throw schema_error(format("cert {} signing chain invalid", sc.name()));
     cs.addChain(sc);
 
     return bs;

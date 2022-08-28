@@ -40,16 +40,14 @@ static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferenc
 #include <dct/syncps/syncps.hpp>
 #include <dct/schema/dct_model.hpp>
 
-using namespace syncps;
+using namespace dct;
 
 /* 
- * ptps (pass-through publish/subscribe) provides a DefTT pub/sub
+ * ptps (pass-through publish/subscribe) provides a DeftT pub/sub
  * API where the information unit is the same as that used by the
  * sync protocol, i.e., a Publication.
  * Its intended use is a pass-through shim for a relay connecting different
  * Faces under the same trust domain
- *
- * ptps uses Pollere's DCT library and Operant's ndn-ind library
  */
 
  /*
@@ -61,17 +59,17 @@ using namespace syncps;
 
 struct DCTmodelPT final : DCTmodel {
     std::unordered_map<thumbPrint,bool> m_rlyCerts {};
-    addCertCb m_rlyCertCb{[](auto&){}}; //used to relay validated certs to shim
+    addCertCb m_rlyCertCb{}; //used to relay validated certs to shim
 
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
     void addRelayed(thumbPrint tp) { m_rlyCerts[tp] = true;}
 
-    // ensure a publication is valid on the outgoing BT
+    // ensure a publication is valid on the outgoing DeftT
     bool isValidPub(const Publication& pub) {
         // structurally validate 'pub'
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(pub));
-            auto valid = pubval.matchTmplt(bs_, pub.getName());
+            auto valid = pubval.matchTmplt(bs_, pub.name());
             //if (!valid) print("invalid str {}\n", pub.getName().toUri());
             return valid;
         } catch (std::exception&) {}
@@ -80,7 +78,7 @@ struct DCTmodelPT final : DCTmodel {
 
   // create a DCTmodelPT instance using the certs in the bootstrap bundle file 'bootstrap'
   // optional string for face name
-    DCTmodelPT(std::string_view bootstrap, FaceType& face,
+    DCTmodelPT(std::string_view bootstrap, DirectFace& face,
                addCertCb&& rcb = nullptr) : DCTmodel(bootstrap, face)
     {
         //this changes the cert store's callback upon adding a valid cert so that it will relay the cert
@@ -93,6 +91,15 @@ struct DCTmodelPT final : DCTmodel {
                                 if (isSigningCert(cert)) gkd.addGroupMem(cert);
                             }
                          };
+        } else if (m_sgkd) {    //sg is currently on possible on wire prefix
+            cs_.addCb_ = [this, &ckd=m_ckd, &sgkd=*m_sgkd] (const dctCert& cert) {
+                            ckd.publishCert(cert);
+                            if(!wasRelayed(cert.computeThumbPrint())) {
+                                m_rlyCertCb(cert);
+                                if (isSigningCert(cert)) sgkd.addGroupMem(cert);
+                            }
+                         };
+
         } else {
             cs_.addCb_ = [this, &ckd=m_ckd] (const dctCert& cert) {
                                                    ckd.publishCert(cert);
@@ -104,24 +111,24 @@ struct DCTmodelPT final : DCTmodel {
 };
 
 struct ptps;
+
 using ptPub = DCTmodel::sPub;
-using error = std::runtime_error;
 using connectCb = std::function<void()>;
-using confHndlr = std::function<void(const Publication&, const bool)>;
-using TimerCb = std::function<void()>;
 using pubCb = std::function<void(ptps*, const Publication&)>;
-using certCb = std::function<void(ptps*, const dctCert&)>;
+using certCb = std::function<void(ptps*, const rData)>;
+
+using error = std::runtime_error;
 
 struct ptps
 {   
-    FaceType  m_face;
-    connectCb m_connectCb{};
+    connectCb m_connectCb;
+    DirectFace m_face;
     DCTmodelPT m_pb;
-    Name m_pubpre;      // full prefix for Publications
+    crName m_pubpre{};        // full prefix for Publications
+    Timer* m_timer;
     certCb m_ch;        // call back to app when this DefTT's cert distributor gets a cert from its syncps
     pubCb m_failCb;     // call back to app when publication fails if confirmation was requested on publication
     std::string m_label;    //label for the transport to be used by this face
-    std::string m_roleId{};
     uint64_t m_success{};
     uint64_t m_fail{};
     bool m_connected{false};
@@ -129,16 +136,16 @@ struct ptps
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
 
     ptps(std::string_view bootstrap, const std::string& fl, const certCb& certHndlr = {}, const pubCb& failCb={}) :
-        m_face{FaceType{fl}},
+        m_face{fl},
         m_pb(bootstrap, m_face,
-             [this](const dctCert& c){ m_ch(this, c);}),   //to track if certs were NOT relayed, set m_rlyCerts entry false in this lambda
+             [this](const rData c){ m_ch(this, c);}),   //to track if certs were NOT relayed, set m_rlyCerts entry false in this lambda
         m_pubpre{m_pb.pubPrefix()},
         m_ch{certHndlr},
         m_failCb{failCb},
         m_label{fl.size()? fl : "default"} {}
 
     void run() { m_pb.run(); }
-    const auto& pubPrefix() const noexcept { return m_pubpre; } //calling can convert to Name
+    const auto& pubPrefix() const noexcept { return m_pubpre; }
     const std::string& label() { return m_label; }
     const auto& face() { return m_face; }
     auto failCnt() { return m_fail; }
@@ -168,7 +175,7 @@ struct ptps
         //libsodium set up
         if (sodium_init() == -1) throw error("Connect unable to set up libsodium");
         m_connectCb = std::move(scb);
-        m_roleId = attribute("_roleId");
+
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {
                 if(!success) {
@@ -186,13 +193,12 @@ struct ptps
      * use different callbacks that relay to a subset of available Faces
     */
     ptps& subscribe(const pubCb& ph)    {
-        m_pb.subscribeTo(pubPrefix(), [this,ph](auto p) {ph(this, p);});
+        m_pb.subscribe(pubPrefix(), [this,ph](auto p) {ph(this, p);});
         return *this;
     }
     // distinguish subscriptions further by topic or topic/location
     ptps& subscribe(const std::string& suffix, const pubCb& ph)    {
-        auto target = pubPrefix().toUri() + "/" + suffix;
-        m_pb.subscribeTo(target, [this,ph](auto p) {ph(this, p);});
+        m_pb.subscribe(pubPrefix()/suffix, [this,ph](auto p) {ph(this, p);});
         return *this;
     }
 
@@ -258,13 +264,12 @@ struct ptps
      * this is only useful for the case of identical trust schema for all DefTTs so is both
      * less general and not "belt and suspenders"
      */
-    void addRelayedCert(const dctCert& c) {
-        auto tp = c.computeThumbPrint();
+    void addRelayedCert(const rData c) {
+        auto tp = c.thumbprint();
         if(!m_pb.wasRelayed(tp)) {
             m_pb.addRelayed(tp);    //put on list of certs that were relayed to this BT
-            m_pb.addCert(dctCert(c));
+            m_pb.addCert(c);
         }
-        return;
     }
 
     // Can be used by application to schedule a cancelable timer. Note that
@@ -277,3 +282,4 @@ struct ptps
 };
 
 #endif
+

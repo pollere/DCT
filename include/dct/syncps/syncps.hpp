@@ -21,26 +21,29 @@
 #ifndef SYNCPS_SYNCPS_HPP
 #define SYNCPS_SYNCPS_HPP
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
 #include <limits>
 #include <map>
 #include <random>
+#include <ranges>
+#include <type_traits>
 #include <unordered_map>
-
-#include <ndn-ind/lite/util/crypto-lite.hpp>
 
 #include <dct/face/direct.hpp>
 #include <dct/format.hpp>
-#include <dct/sigmgrs/sigmgr.hpp>
+#include <dct/schema/dct_cert.hpp>
 #include "iblt.hpp"
 
-namespace syncps
+namespace dct
 {
+// recognize containers that combine a view with its backing store
+template<typename C> concept hasView = requires { std::remove_cvref_t<C>().asView(); };
 
-using Name = ndn::Name;         // type of a name
-using Publication = ndn::Data;  // type of a publication
-using PubVec = std::vector<Publication>;
+using rPub = rData; // internal pub rep
+using Name = rName; // type of a name
+using Publication = crData;  // type of a publication
 
 using namespace std::literals::chrono_literals;
 
@@ -49,30 +52,31 @@ static constexpr int maxPubSize = 1024; // max payload in Data (with 1448B MTU
                                         // and 424B iblt, 1K left for payload)
 static constexpr std::chrono::milliseconds maxPubLifetime = 2s;
 static constexpr std::chrono::milliseconds maxClockSkew = 1s;
-static constexpr uint32_t maxDifferences = 38u;  // = 57/1.5 (see iblt.hpp)
 
 /**
  * @brief app callback when new publications arrive
  */
-using UpdateCb = std::function<void(const Publication&)>;
+using SubCb = std::function<void(const rPub&)>;
+
 /**
- * @brief app callback when publication arrives from net
+ * @brief callback when pub delivered or times out
  */
-using PublishCb = std::function<void(const Publication&, bool)>;
+using DelivCb = std::function<void(const rPub&, bool)>;
+
 /**
  * @brief app callback to test if publication is expired
  */
-using IsExpiredCb = std::function<bool(const Publication&)>;
+using IsExpiredCb = std::function<bool(const rPub&)>;
 /**
  * @brief app callback to return lifetime of this Publication
  */
-using GetLifetimeCb = std::function<std::chrono::milliseconds(const Publication&)>;
+using GetLifetimeCb = std::function<std::chrono::milliseconds(const rPub&)>;
 /**
  * @brief app callback to filter peer publication requests
  */
-using PubPtr = std::shared_ptr<const Publication>;
-using VPubPtr = std::vector<PubPtr>;
-using FilterPubsCb = std::function<VPubPtr(VPubPtr&,VPubPtr&)>;
+using PubPtr = rPub;
+using PubVec = std::vector<PubPtr>;
+using OrderPubCb = std::function<void(PubVec&)>;
 
 /**
  * @brief sync a collection of publications between an arbitrary set of nodes.
@@ -82,283 +86,221 @@ using FilterPubsCb = std::function<VPubPtr(VPubPtr&,VPubPtr&)>;
  * publications from others are received. Publications are automatically
  * deleted (without notice) at the end their lifetime.
  *
- * Publications are named, signed objects (ndn::Data). The last component of
+ * Publications are named, signed objects (rData). The last component of
  * their name is a version number (local ms clock) that is used to bound the
  * pub lifetime. This component is added by 'publish' before the publication
  * is signed so it is protected against replay attacks. App publications
  * are signed by pubCertificate and external publications are verified by
  * pubValidator on arrival.
  */
-using FaceType=ndn::DirectFace;
-
-//template<typename FaceType=ndn::AsyncFace>
-//template<typename FaceType=ndn::DirectFace>
-struct SyncPubsub {
+struct SyncPS {
+    using Error = std::runtime_error;
     using Nonce = uint32_t; // cState Nonce format
-    struct Error : public std::runtime_error { using std::runtime_error::runtime_error; };
 
-    FaceType& m_face;
-    ndn::Name m_syncPrefix;
-    std::vector<uint8_t>  m_rPrefix; // wire-format syncPrefix
-    IBLT m_iblt;
-    IBLT m_pcbiblt;
-    // currently active published items
-    std::unordered_map<std::shared_ptr<const Publication>, uint8_t> m_active{};
-    std::unordered_map<uint32_t, std::shared_ptr<const Publication>> m_hash2pub{};
-    std::map<const Name, UpdateCb> m_subscription{};
-    std::unordered_map <uint32_t, PublishCb> m_pubCbs;
-    SigMgr& m_sigmgr;               // cAdd packet signing and validation
-    SigMgr& m_pubSigmgr;            // Publication validation
-    std::chrono::milliseconds m_cStateLifetime{1357ms};
-    std::chrono::milliseconds m_cAddLifetime{3s};
-    std::chrono::milliseconds m_pubLifetime{maxPubLifetime};
-    std::chrono::milliseconds m_pubExpirationGB{maxPubLifetime};
-    pTimer m_scheduledCStateId{std::make_shared<Timer>(getDefaultIoContext())};
-    std::minstd_rand m_randGen{};   // random number generator (seeded in constructor)
-    std::uniform_int_distribution<unsigned short> m_rand10{1u, 10u};
-    Nonce  m_nonce{};               // nonce of current cState
-    uint32_t m_publications{};      // # local publications
-    bool m_delivering{false};       // currently processing a cAdd
-    bool m_registering{true};
-    bool m_autoStart{true};
-    GetLifetimeCb m_getLifetime{ [this](auto){ return m_pubLifetime; } }; // default just returns m_pubLifetime
-    IsExpiredCb m_isExpired{
-        // default CB assume last component of name is a timestamp and says pub is expired
-        // if the time from publication to now is >= the pub lifetime
-        [this](auto p) { auto dt = std::chrono::system_clock::now() - p.getName()[-1].toTimestamp();
-                         return dt >= m_getLifetime(p) + maxClockSkew || dt <= -maxClockSkew; } };
-    FilterPubsCb m_filterPubs{
-        [](auto& pOurs, auto& ) mutable {
-            // By default only reply with our pubs, ordered by most recent first.
-            if (pOurs.size() > 1) {
-                std::sort(pOurs.begin(), pOurs.end(), [](const auto p1, const auto p2) {
-                            return p1->getName()[-1].toTimestamp() > p2->getName()[-1].toTimestamp(); });
+    // pubs are identified and accessed only by their hash. A pubs Collection entry holds the
+    // actual pub Item, its source (local or from net) and whether it is active (unexpired).
+    // The collection keeps both a hash-indexed map of entries and the iblt of the collection
+    // so it can guarantee they are consistent with each other.
+    using PubHash = uint32_t; // iblt publication hash type
+    static inline PubHash hashPub(const rPub& r) { return IBLT<PubHash>::hashobj(r); }
+
+    template<typename Item>
+    struct CE { // Collection Entry 
+        Item i_;
+        uint8_t s_; // item status
+
+        constexpr CE(Item&& i, uint8_t s) : i_{std::forward<Item>(i)}, s_{s} {}
+        static constexpr uint8_t act = 1;  // 0 = expired, 1 = active
+        static constexpr uint8_t loc = 2;  // 0 = from net, 2 = local
+        auto active() const noexcept { return (s_ & act) != 0; }
+        auto fromNet() const noexcept { return (s_ & (act|loc)) == act; }
+        auto local() const noexcept { return (s_ & (act|loc)) == (act|loc); }
+        auto& deactivate() { s_ &=~ act; return *this; }
+    };
+
+    template<typename Item, typename Ent = CE<Item>, typename Base = std::unordered_map<PubHash,Ent>>
+    struct Collection : Base {
+        IBLT<PubHash> iblt_{};
+
+        constexpr auto& iblt() noexcept { return iblt_; }
+
+        template<typename C=Item> requires hasView<C>
+        constexpr auto contains(decltype(C().asView())&& c) const noexcept { return Base::contains(hashPub(c)); }
+
+        PubHash add(PubHash h, Item&& i, decltype(Ent::s_) s) {
+            if (const auto& [it,added] = Base::try_emplace(h, std::forward<Item>(i), s); !added) return 0;
+            iblt_.insert(h);
+            return h;
+        }
+        auto addLocal(PubHash h, Item&& i) { return add(h, std::forward<Item>(i), Ent::loc|Ent::act); }
+
+        auto add(Item&& i, decltype(Ent::s_) s) { return add(hashPub(i), std::forward<Item>(i), s); }
+        auto addLocal(Item&& i) { return add(std::forward<Item>(i), Ent::loc|Ent::act); }
+        auto addNet(Item&& i) { return add(std::forward<Item>(i), Ent::act); }
+
+        template<typename C=Item> requires hasView<C>
+        auto addNet(decltype(C().asView())&& c) { return add(Item{c}, Ent::act); }
+
+        auto deactivate(PubHash h) {
+            if (auto p = Base::find(h); p != Base::end() && p->second.active()) {
+                p->second.deactivate();
+                iblt_.erase(h);
             }
-            return pOurs;
-        } };
+        }
+        auto erase(PubHash h) {
+            if (auto p = Base::find(h); p != Base::end()) {
+                if (p->second.active()) iblt_.erase(h);
+                Base::erase(p);
+            }
+        }
+    };
 
-    static FaceType& defaultFace() {
-        static FaceType* face{};
-        if (face == nullptr) face = new FaceType();
-        return *face;
-    }
+    Collection<crData> pubs_{};             // current publications
+    Collection<DelivCb> pubCbs_{};          // pubs requesting delivery callbacks
+    lpmLT<crPrefix,SubCb> subscriptions_{}; // subscription callbacks
 
-    auto rand10() { return m_rand10(m_randGen); }
+    DirectFace& face_;
+    const crName collName_;         // 'name' of the collection
+    SigMgr& pktSigmgr_;             // cAdd packet signing and validation
+    SigMgr& pubSigmgr_;             // Publication validation
+    std::chrono::milliseconds cStateLifetime_{1357ms};
+    std::chrono::milliseconds pubLifetime_{maxPubLifetime};
+    std::chrono::milliseconds pubExpirationGB_{maxPubLifetime};
+    pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
+    std::uniform_int_distribution<unsigned short> randInt_{1u, 13u}; // cstate publish delay interval
+    Nonce  nonce_{};                // nonce of current cState
+    uint32_t publications_{};       // # local publications
+    bool delivering_{false};        // currently processing a cAdd
+    bool registering_{true};        // RIT not set up yet
+    bool autoStart_{true};          // call 'start()' when done registering
+    GetLifetimeCb getLifetime_{ [this](auto){ return pubLifetime_; } };
+    IsExpiredCb isExpired_{
+        // default CB assumes last component of name is a timestamp and says pub is expired
+        // if the time from publication to now is >= the pub lifetime
+        [this](const auto& p) { auto dt = std::chrono::system_clock::now() - p.name().last().toTimestamp();
+                         return dt >= getLifetime_(p) + maxClockSkew || dt <= -maxClockSkew; } };
+    OrderPubCb orderPub_{[](PubVec& pv){
+            // can't use modern c++ on a mac
+            //std::ranges::sort(pOurs, {}, [](const auto& p) { return p.name().last().toTimestamp(); });
+            std::sort(pv.begin(), pv.end(), [](const auto& p1, const auto& p2){
+                    return p1.name().last().toTimestamp() > p2.name().last().toTimestamp(); });
+        }
+    };
+
+    constexpr auto randInt() { return randInt_(randGen()); }
 
     /**
      * @brief constructor
      *
-     * Registers syncPrefix in NFD and sends a cState
-     *
      * @param face - application's face
-     * @param syncPrefix - collection name for cState/cAdd
+     * @param collName - collection name for cState/cAdd
      * @param wsig - sigmgr for cAdd packet signing and validation
      * @param psig - sigmgr for Publication validation
      */
-    SyncPubsub(FaceType& face, Name syncPrefix, SigMgr& wsig, SigMgr& psig)
-        : m_face(face),
-          m_syncPrefix(std::move(syncPrefix)),
-          m_rPrefix(*m_syncPrefix.wireEncode()),
-          m_iblt{},
-          m_pcbiblt{},
-          m_sigmgr(wsig),
-          m_pubSigmgr(psig) {
-
-        // initialize random number generator
-        std::random_device rd;
-        m_randGen.seed(rd());
-
-        // if auto-starting, when 'run()' is called, fire off a register for syncPrefix
-        getDefaultIoContext().dispatch([this]() {
-            if (m_autoStart) start();
-        });
+    SyncPS(DirectFace& face, rName collName, SigMgr& wsig, SigMgr& psig)
+        : face_{face}, collName_{collName}, pktSigmgr_{wsig}, pubSigmgr_{psig} {
+        // if auto-starting at the time 'run()' is called, fire off a register for collection name
+        getDefaultIoContext().dispatch([this]{ if (autoStart_) start(); });
     }
 
-    SyncPubsub(Name syncPrefix, SigMgr& wsig, SigMgr& psig) : SyncPubsub(defaultFace(), syncPrefix, wsig, psig) {}
+    SyncPS(rName collName, SigMgr& wsig, SigMgr& psig) : SyncPS(defaultFace(), collName, wsig, psig) {}
 
 
     /**
-     * @brief startup related methods start and autoStart
-     *
-     * 'start' starts up the bottom half (ndn network) communication by registering RIT
-     * callbacks for cStates matching this collection's prefix then sending an initial
-     * 'cState' to solicit/distribute publications.
-     *
-     * 'autoStart' gives the upper level control over whether 'start' is called automatically
-     * after 'run()' is called (the default) or if it will be called explicitly
+     * @brief add a new local or network publication to the 'active' pubs set
      */
-    void start() {
-        m_face.addToRIT(rName(m_rPrefix), [this](auto p, auto i){ onCState(p, i); },
-                        [this](rName) -> void { m_registering = false; sendCState(); });
-    }
+    auto addToActive(crData&& p, bool localPub) {
+        //print("addToActive {:x} {} {}: {}\n", hashPub(p), p.size(), p.name(), localPub);
+        auto lt = getLifetime_(p);
+        auto hash = localPub? pubs_.addLocal(std::move(p)) : pubs_.addNet(std::move(p));
+        if (hash == 0 || lt == decltype(lt)::zero()) return hash;
 
-    auto& autoStart(bool yesNo) { m_autoStart = yesNo; return *this; }
+        // We remove an expired publication from our active set at twice its pub
+        // lifetime (the extra time is to prevent replay attacks enabled by clock skew).
+        // An expired publication is never supplied in a cAdd so this hold time prevents
+        // spurious end-of-lifetime exchanges due to clock skew.
+        //
+        // Expired publications are kept in the iblt for at least the max clock skew
+        // interval to prevent a peer with a late clock giving it back to us as soon
+        // as we delete it.
 
-    /**
-     * @brief methods to change the 'getLifetime', 'isExpired' and/or 'filterPubs' callbacks
-     */
-    SyncPubsub& getLifetimeCb(GetLifetimeCb&& getLifetime) {
-        m_getLifetime = std::move(getLifetime);
-        return *this;
+        if (localPub) oneTime(lt, [this, hash]{ if (pubCbs_.size() > 0) doDeliveryCb(hash, false); });
+        oneTime(lt + maxClockSkew, [this, hash]{ pubs_.deactivate(hash); });
+        oneTime(lt + pubExpirationGB_, [this, hash]{ pubs_.erase(hash); });
+        return hash;
     }
-    SyncPubsub& isExpiredCb(IsExpiredCb&& isExpired) {
-        m_isExpired = std::move(isExpired);
-        return *this;
-    }
-    SyncPubsub& filterPubsCb(FilterPubsCb&& filterPubs) {
-        m_filterPubs = std::move(filterPubs);
-        return *this;
-    }
-    /**
-     * @brief methods to change various timer values
-     */
-    SyncPubsub& cStateLifetime(std::chrono::milliseconds time) {
-        m_cStateLifetime = time;
-        return *this;
-    }
-    SyncPubsub& cAddLifetime(std::chrono::milliseconds time) {
-        m_cAddLifetime = time;
-        return *this;
-    }
-    SyncPubsub& pubLifetime(std::chrono::milliseconds time) {
-        m_pubLifetime = time;
-        return *this;
-    }
-    SyncPubsub& pubExpirationGB(std::chrono::milliseconds time) {
-        m_pubExpirationGB = time > maxClockSkew? time : maxClockSkew;
-        return *this;
-    }
-
 
     /**
      * @brief handle a new publication from app
      *
      * A publication is published at most once and lives for at most pubLifetime.
-     * Assume Publications arrive signed.
+     * Publications are signed before calling this routine.
      *
      * @param pub the object to publish
      */
-    uint32_t publish(Publication&& pub)
-    {
-        if (isKnown(pub)) {
-            return 0;
-        }
-        ++m_publications;
-        auto h = hashPub(pub);
-        addToActive(std::move(pub), true);
+    PubHash publish(crData&& pub) {
+        auto h = addToActive(std::move(pub), true);
+        if (h == 0) return h;
+        ++publications_;
         // new pub may let us respond to pending cState(s).
-        if (! m_delivering) {
+        if (! delivering_) {
             sendCState();
             handleCStates();
         }
         return h;
     }
+    auto publish(const rData pub) { return publish(crData{pub}); }
+
     /**
-     * @brief handle a new publication from app
+     * @brief handle a new publication from app requiring a 'delivery callback'
      *
-     * A publication is published at most once and lives for at most pubLifetime. This version
-     * takes a callback so publication can be confirmed or failure reported so "at least once" or other
-     * semantics can be built into shim. Sets callback.
+     * Takes a callback so pub arrival at other entity(s) can be confirmed or
+     * failure reported so "at least once" semantics can be built into shim.
      *
      * @param pub the object to publish
      */
-    uint32_t publish(Publication&& pub, PublishCb&& cb)
-    {
+    PubHash publish(crData&& pub, DelivCb&& cb) {
         auto h = publish(std::move(pub));
-        if (h != 0) {
-            //using returned hash of signed pub
-            m_pubCbs[h] = std::move(cb);
-            m_pcbiblt.insert(h);
-        }
+        if (h != 0) pubCbs_.addLocal(h, std::move(cb));
         return h;
     }
 
     /**
-     * @brief subscribe to a subtopic
+     * @brief subscribe to a topic
      *
      * Calls 'cb' on each new publication to 'topic' arriving
      * from some external source.
-     *
-     * @param  topic the topic
      */
-    SyncPubsub& subscribeTo(const Name& topic, UpdateCb&& cb)
-    {
+    auto& subscribe(crPrefix&& topic, SubCb&& cb) {
+        //print("subscribe {}\n", (rPrefix)topic);
         // add to subscription dispatch table. If subscription is new,
         // 'cb' will be called with each matching item in the active
         // publication list. Otherwise subscription will be
         // only be changed to the new callback.
-        if (auto t = m_subscription.find(topic); t != m_subscription.end()) {
+        if (auto t = subscriptions_.find(topic); t != subscriptions_.end()) {
             t->second = std::move(cb);
             return *this;
         }
-        for (const auto& [pub, flags] : m_active) {
-            if ((flags & 3) == 1 && topic.isPrefixOf(pub->getName())) {
-                cb(*pub);
-            }
-        }
-        m_subscription.emplace(topic, std::move(cb));
+        // deliver all active pubs matching this subscription
+        for (const auto& [h, pe] : pubs_) if (pe.fromNet() && topic.isPrefix(pe.i_.name())) cb(pe.i_);
+
+        subscriptions_.add(std::move(topic), std::move(cb));
         return *this;
     }
+    auto& subscribe(crName&& topic, SubCb&& cb) { return subscribe(crPrefix{std::move(topic)}, std::move(cb)); }
+    auto& subscribe(const rName& topic, SubCb&& cb) { return subscribe(crPrefix{topic}, std::move(cb)); }
+
+    auto& unsubscribe(crPrefix&& topic) { subscriptions_.erase(topic); return *this; }
 
     /**
-     * @brief unsubscribe to a subtopic
+     * @brief timers to schedule a callback after some time
      *
-     * A subscription to 'topic', if any, is removed.
-     *
-     * @param  topic the topic
+     * 'oneTime' schedules a non-cancelable callback, 'schedule' creates a cancelable/restartable
+     * timer. Note that this is expensive compared to a oneTime timer and oneTime should be used
+     * when the timer doesn't need to referenced.
      */
-    SyncPubsub& unsubscribe(const Name& topic)
-    {
-        m_subscription.erase(topic);
-        return *this;
-    }
-
-    /**
-     * @brief start running the event manager main loop
-     *
-     * (usually doesn't return)
-     */
-    void run() { getDefaultIoContext().run(); }
-
-    /**
-     * @brief schedule a callback after some time
-     *
-     * Can be used by application to schedule a cancelable timer. Note that
-     * this is expensive compared to a oneTime timer and should be used
-     * only for timers that need to be canceled before they fire. Otherwise
-     * 'oneTime' should be used.
-     *
-     * This lives here to avoid exposing applications to the complicated mess
-     * of NDN's relationship to Boost
-     *
-     * @param after how long to wait (in microseconds)
-     * @param cb routine to call
-     */
-    auto schedule(std::chrono::microseconds after, TimerCb&& cb) { return m_face.schedule(after, std::move(cb)); }
-
-    /**
-     * @brief schedule a one time, self-deleting callback after some time
-     *
-     * @param after how long to wait (in microseconds)
-     * @param cb routine to call
-     */
-    auto oneTime(std::chrono::microseconds after, TimerCb&& cb) { return m_face.oneTime(after, std::move(cb)); }
-
-    /**
-     * Get the publication from the active set by exact name match.
-     * @param name The name of the publication to search for.
-     * @return A shared_ptr to the publication, or a null shared_ptr if not found.
-     */
-    std::shared_ptr<const Publication> getPubByName(const Name& name)
-    {
-      for (auto p = m_active.begin(); p != m_active.end(); ++p) {
-        if (p->first->getName() == name)
-          return p->first;
-      }
-      return std::shared_ptr<const Publication>();
-    }
-
-   private:
+    auto schedule(std::chrono::microseconds after, TimerCb&& cb) const { return face_.schedule(after, std::move(cb)); }
+    void oneTime(std::chrono::microseconds after, TimerCb&& cb) const { return face_.oneTime(after, std::move(cb)); }
 
     /**
      * @brief Send a cState describing our publication set to our peers.
@@ -366,69 +308,50 @@ struct SyncPubsub {
      * Creates & sends cState of the form: /<sync-prefix>/<own-IBF>
      */
     void sendCState() {
-        // if an cState is sent before the initial register is done the reply can't
+        // if n cState is sent before the initial register is done the reply can't
         // reach us. don't send now since the register callback will do it.
-        if (m_registering) return;
+        if (registering_) return;
 
-        m_scheduledCStateId->cancel();
-
-        // Build and ship the cState. Format is /<sync-prefix>/<ourLatestIBF>
-        ndn::Name name = m_syncPrefix;
-        name.append(m_iblt.rlEncode());
-
-        ndn::Interest cState(name);
-        m_nonce = m_randGen();
-       cState.setNonce({(uint8_t*)&m_nonce, sizeof(m_nonce)})
-             .setCanBePrefix(true)
-             .setMustBeFresh(true)
-             .setInterestLifetime(m_cStateLifetime);
-        m_face.express(rInterest(cState),
-                [this](auto ri, auto rd) {
-                    if (! m_sigmgr.validateDecrypt(rd)) {
-                        // if cAdd consumed our current cState refresh it soon
-                        // but not immediately since if we get the same cAdd back
-                        // from some content store we'll just loop here.
-                        if (ri.nonce() == m_nonce) sendCStateSoon();
-                    } else
-                        onCAdd(ri, rd);
-                },
-                [this](auto& ) { sendCState(); });
+        scheduledCStateId_->cancel();
+        nonce_ = rand32();
+        face_.express(crInterest(collName_/pubs_.iblt().rlEncode(), cStateLifetime_, nonce_),
+                        [this](auto ri, auto rd) { // cAdd response to interest
+                            if (! pktSigmgr_.validateDecrypt(rd)) {
+                                // Got an invalid cAdd so ignore the pubs it contains.  Need to reissue
+                                // our pending cState but delay a bit or we'll get the same thing again.
+                                // XXX may want to track & filter out bad actors to avoid DoS potential here.
+                                if (ri.nonce() == nonce_) sendCStateSoon();
+                                return;
+                            }
+                            onCAdd(ri, rd);
+                        },
+                        [this](auto& /*ri*/) { sendCState(); } // interest timeout
+                    );
     }
 
     /**
-     * @brief Send a cState sometime soon
+     * @brief Send a cState after a random delay. If called again before timer expires
+     * restart the time. (This is used to collect all the cAdds responding to a cState
+     * before sending a new cState.)
      */
     void sendCStateSoon() {
-        m_scheduledCStateId->cancel();
-        m_scheduledCStateId = m_face.schedule(std::chrono::milliseconds(rand10()), [this]{ sendCState(); });
-    }
-
-    /**
-     * @brief callback to Process a new cState
-     *
-     * Get differences between our IBF and IBF in the cState.
-     * If we have some things that the other side does not have,
-     * reply with a cAdd packet containing (some of) those things.
-     *
-     * @param prefixName prefix registration that matched cState
-     * @param cState   cState packet
-     */
-    void onCState(const rName& prefixName, const rInterest& cState) {
-        auto name = cState.name();
-
-        if (name.nBlks() - prefixName.nBlks() != 1) {
-            return;
-        }
-        handleCState(name);
+        scheduledCStateId_->cancel();
+        scheduledCStateId_ = schedule(std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
     }
 
     auto name2iblt(const rName& name) const noexcept {
-        IBLT iblt{};
-        try {
-            iblt.rlDecode(name.lastBlk().rest());
-        } catch (const std::exception& e) {
-        }
+        IBLT<PubHash> iblt{};
+        try { iblt.rlDecode(name.last().rest()); } catch (const std::exception& e) { }
         return iblt;
+    }
+
+    void doDeliveryCb(PubHash hash, bool arrived) {
+        auto cb = pubCbs_.find(hash);
+        if (cb == pubCbs_.end()) return;
+
+        // there's a callback for this hash. do it if pub was ours and is still active
+        if (auto p = pubs_.find(hash); p != pubs_.end() && p->second.local()) (cb->second.i_)(p->second.i_, arrived);
+        pubCbs_.erase(hash);
     }
 
     bool handleCState(const rName& name) {
@@ -436,103 +359,46 @@ struct SyncPubsub {
         // the difference between the peer's iblt & ours gives two sets:
         //   have - (hashes of) items we have that they don't
         //   need - (hashes of) items we need that they have
+        //
+        // pubCbs_ contains pubs that require delivery callbacks so which the peer already has.
+        // pubs_ contains all pubs we have so send the ones we have & the peer doesn't.
         auto iblt{name2iblt(name)};
-        if(m_pubCbs.size()) {
-            // some publications have delivery callbacks so see if any
-            // are in this iblt (they'll be in the 'need' set).
-            auto [have, need] = ((m_iblt - m_pcbiblt) - iblt).peel();
-            for (const auto hash : need) {
-                if (!m_pubCbs.contains(hash)) continue;
-                // there's a callback for this hash. make sure the pub is still active
-                if (auto h = m_hash2pub.find(hash); h != m_hash2pub.end()) {
-                    // 2^0 bit of p->second is =1 if pub not expired; 2^1 bit is 1 if we did publication.
-                    if (auto p = m_active.find(h->second); p != m_active.end() && (p->second & 3) == 3) {
-                        //published here and has cb - do the cb then erase it
-                        m_pubCbs[hash](*h->second, true);
-                    }
-                }
-                m_pubCbs.erase(hash);
-                m_pcbiblt.erase(hash);
-            }
+        if(pubCbs_.size()) {
+            // remove delivery confirmation pubs from our iblt to see which the peer has (will be in 'need' set)
+            for (const auto hash : (pubs_.iblt() - pubCbs_.iblt() - iblt).peel().second) doDeliveryCb(hash, true);
         }
-
-        // If we have things the other side doesn't, send as many as
-        // will fit in one cAdd. Make two lists of needed, active publications:
-        // ones we published and ones published by others.
-        auto [have, need] = (m_iblt - iblt).peel();
+        auto [have, need] = (pubs_.iblt() - iblt).peel();
         if (have.size() == 0) return false;
 
-        VPubPtr pOurs, pOthers;
+        PubVec pv{};
         for (const auto hash : have) {
-            if (auto h = m_hash2pub.find(hash); h != m_hash2pub.end()) {
-                // 2^0 bit of p->second is =0 if pub expired; 2^1 bit is 1 if we
-                // did publication.
-                if (const auto p = m_active.find(h->second); p != m_active.end()
-                    && (p->second & 1U) != 0) {
-                    ((p->second & 2U) != 0? &pOurs : &pOthers)->push_back(h->second);
-                }
-            }
+            if (const auto& p = pubs_.find(hash); p != pubs_.end() && p->second.local()) pv.emplace_back(p->second.i_);
         }
-        pOurs = m_filterPubs(pOurs, pOthers);
-        if (pOurs.empty()) {
-            return false;
-        }
+        if (pv.empty()) return false;
 
         // if both have & need are non-zero, peer may need our current cState to reply
-        if (need.size() != 0 && !m_delivering) sendCStateSoon();
+        if (need.size() != 0 && !delivering_) sendCStateSoon();
 
         // send all the pubs that will fit in a cAdd packet, always sending at least one.
-        for (size_t pubsSize = 0, i = 0; i < pOurs.size(); ++i) {
-            auto encoding = pOurs[i]->wireEncode();
-            pubsSize += encoding.size();
-            if (pubsSize >= maxPubSize) {
-                // if we're over and there's more than one piece leave the last
-                if (pubsSize > maxPubSize && i > 0) --i;
-                pOurs.resize(i + 1);
-                break;
+        if (pv.size() > 1) {
+            orderPub_(pv);
+            for (size_t i{}, psize{}; i < pv.size(); ++i) {
+                if (pv[i].size() > maxPubSize) {
+                    print("pub {} too large: {} {}\n", i, pv[i].size(), pv[i].name());
+                    abort();
+                }
+                if ((psize += pv[i].size()) > maxPubSize) { pv.resize(i); break; }
             }
         }
-        sendcAdd(name.r2n(), pOurs);
+        auto cAdd = crData{name}.content(pv);
+        if (pktSigmgr_.sign(cAdd)) face_.send(cAdd);
         return true;
     }
 
     bool handleCStates() {
         bool res{false};
-        for (const auto& n : m_face.pendingInterests(rName(m_rPrefix))) res |= handleCState(n);
+        for (const auto& n : face_.pendingInterests(collName_)) res |= handleCState(n);
         return res;
-    }
-
-    /**
-     * @brief Send a cAdd packet responding to a cState.
-     *
-     * Send a packet containing one or more publications that are known
-     * to be in our active set but not in the cState sender's set.
-     *
-     * @param name  is the name from the cState we're responding to
-     *              (cAdd packet's base name)
-     * @param pubs  vector of publications (cAdd packet's payload)
-     */
-    void sendcAdd(const ndn::Name& name, const VPubPtr& pubs)
-    {
-        ndn::Data cAdd(name);
-        // cAdd only useful until iblt changes so limit freshness
-        cAdd.getMetaInfo().setFreshnessPeriod(m_cAddLifetime);
-        //cAdd.getMetaInfo().setType(tlv::syncpsContent);
-        if (pubs.size() > 1) {
-            // have to concatenate the pubs
-            std::vector<uint8_t> c{};
-            for (const auto& p : pubs) {
-                auto v = *(p->wireEncode());
-                c.insert(c.end(), v.begin(), v.end());
-            }
-            cAdd.setContent(c);
-        } else {
-            cAdd.setContent(pubs[0]->wireEncode());
-        }
-        if(! m_sigmgr.sign(cAdd)) {
-            return;
-        }
-        m_face.send(rData(cAdd));
     }
 
     /**
@@ -545,42 +411,37 @@ struct SyncPubsub {
      * @param cState   cState for which we got the cAdd
      * @param cAdd     cAdd content
      */
-    void onCAdd(const rInterest& , const rData& cAdd) {
+    void onCAdd(const rInterest& /*cState*/, const rData& cAdd) {
 
         // if publications result from handling this cAdd we don't want to
         // respond to a peer's cState until we've handled all of them.
-        m_delivering = true;
-        auto initpubs = m_publications;
+        delivering_ = true;
+        auto initpubs = publications_;
 
         for (auto c : cAdd.content()) {
             if (! c.isType(tlv::Data)) continue;
-            auto d = rData(c);
-            if (! d.valid()) continue;
-            auto pub = d.r2d();
-
-            if (isKnown(pub)) {
+            rData d(c);
+            if (! d.valid() || pubs_.contains(d)) {
+                //print("pub invalid or dup: {}\n", d.name());
                 continue;
             }
-            if (m_isExpired(pub) || ! m_pubSigmgr.validate(pub)) {
+            if (isExpired_(d) || ! pubSigmgr_.validate(d)) {
+                //print("pub {}: {}\n", isExpired_(d)? "expired":"failed validation", d.name());
                 // unwanted pubs have to go in our iblt or we'll keep getting them
-                ignorePub(pub);
+                ignorePub(d);
                 continue;
             }
 
             // we don't already have this publication so deliver it
             // to the longest match subscription.
-            // XXX lower_bound goes one too far when doing longest
-            // prefix match. It would be faster to stick a marker on
-            // the end of subscription entries so this wouldn't happen.
-            // Also, it would be faster to do the comparison on the
-            // wire-format names (excluding the leading length value)
-            // rather than default of component-by-component.
-            const auto& p = addToActive(std::move(pub));
-            const auto& nm = p->getName();
-            auto sub = m_subscription.lower_bound(nm);
-            if ((sub != m_subscription.end() && sub->first.isPrefixOf(nm)) ||
-                (sub != m_subscription.begin() && (--sub)->first.isPrefixOf(nm))) {
-                sub->second(*p);
+            if (addToActive(crData(d), false) == 0) {
+                //print("addToActive failed: {}\n", d.name());
+                continue;
+            }
+            if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) {
+                //print("delivering: {}\n", d.name());
+                s->second(d);
+            //} else { print("no subscription for {}\n", d.name());
             }
         }
 
@@ -591,8 +452,8 @@ struct SyncPubsub {
         // cAdds and its timeout callback will send an updated cState.
         //
         // If the cAdd resulted in new outbound pubs, cAdd them to pending peer CStates.
-        m_delivering = false;
-        if (initpubs != m_publications) handleCStates();
+        delivering_ = false;
+        if (initpubs != publications_) handleCStates();
         sendCStateSoon();
     }
 
@@ -600,72 +461,65 @@ struct SyncPubsub {
      * @brief Methods to manage the active publication set.
      */
 
-    // publications are stored using a shared_ptr so we
-    // get to them indirectly via their hash.
-
-    uint32_t hashPub(const Publication& pub) const noexcept {
-        const auto& b = *pub.wireEncode();
-        return ndn::CryptoLite::murmurHash3(N_HASHCHECK, b.data(), b.size());
-    }
-
-    bool isKnown(uint32_t h) const noexcept { return m_hash2pub.contains(h); }
-
-    bool isKnown(const Publication& pub) const noexcept { return isKnown(hashPub(pub)); }
-
-    std::shared_ptr<Publication> addToActive(Publication&& pub, bool localPub = false) {
-        auto hash = hashPub(pub);
-        auto p = std::make_shared<Publication>(pub);
-        m_active[p] = localPub? 3 : 1;
-        m_hash2pub[hash] = p;
-        m_iblt.insert(hash);
-
-        // We remove an expired publication from our active set at twice its pub
-        // lifetime (the extra time is to prevent replay attacks enabled by clock
-        // skew).  An expired publication is never supplied in response to a sync
-        // cState so this extra hold time prevents end-of-lifetime spurious
-        // exchanges due to clock skew.
-        //
-        // Expired publications are kept in the iblt for at least the max clock skew
-        // interval to prevent a peer with a late clock giving it back to us as soon
-        // as we delete it.
-
-        auto pubLifetime = m_getLifetime(*p);
-        if (pubLifetime == decltype(pubLifetime)::zero()) return p; // this pub doesn't expire
-
-        oneTime(pubLifetime, [this, p, hash] {
-                                                m_active[p] &=~ 1U;
-                                                if(m_pubCbs.contains(hash)) {
-                                                    m_pubCbs[hash](*p, false);
-                                                    m_pubCbs.erase(hash);
-                                                    m_pcbiblt.erase(hash);
-                                                } });
-        oneTime(pubLifetime + maxClockSkew, [this, hash] { m_iblt.erase(hash); });
-        oneTime(pubLifetime + m_pubExpirationGB, [this, p] { removeFromActive(p); });
-
-        return p;
-    }
-
     /*
      * @brief ignore a publication by temporarily adding it to the our iblt
+     * XXX fix to add hash to pubs_ so dups can be recognized
      */
-    void ignorePub(const Publication& pub) {
+    void ignorePub(const rPub& pub) {
         auto hash = hashPub(pub);
-        m_iblt.insert(hash);
-        oneTime(m_pubLifetime + maxClockSkew, [this, hash] { m_iblt.erase(hash); });
+        pubs_.iblt().insert(hash);
+        oneTime(pubLifetime_ + maxClockSkew, [this, hash] { pubs_.iblt().erase(hash); });
     }
 
-    void removeFromActive(const PubPtr& p) {
-        m_active.erase(p);
-        m_hash2pub.erase(hashPub(*p));
+    /**
+     * @brief startup related methods start and autoStart
+     *
+     * 'start' starts up the bottom half (network) communication by registering RIT
+     * callbacks for cStates matching this collection's prefix then sending an initial
+     * 'cState' to solicit/distribute publications. Since the content of cAdd packets
+     * can be encrypted, it's pointless to send a cState before optaining the decryption
+     * key. dct_model sets up an appropriate chain of callbacks such that 'start()' is
+     * called after all the prerequisites for syncing this collection have been obtained.
+     *
+     * 'autoStart' gives the upper level control over whether 'start' is called automatically
+     * after 'run()' is called (the default) or if it will be called explicitly
+     */
+    void start() {
+        face_.addToRIT(collName_,
+                       [this, ncomp = collName_.nBlks()+1](auto /*prefix*/, auto i) {
+                           // cState must have one more name component (an iblt) than the collection name
+                           if (auto n = i.name(); n.nBlks() == ncomp) handleCState(n);
+                       },
+                       [this](rName) -> void { registering_ = false; sendCState(); });
     }
 
-    uint32_t hashIBLT(const rName& n) const noexcept {
-        return ndn::CryptoLite::murmurHash3(N_HASHCHECK, n.data(), n.size());
-    }
+    auto& autoStart(bool yesNo) { autoStart_ = yesNo; return *this; }
 
-    uint32_t hashIBLT(const Name& n) const noexcept { return hashIBLT(rName(n)); }
+    /**
+     * @brief start running the event manager main loop (usually doesn't return)
+     */
+    void run() { getDefaultIoContext().run(); }
+
+    /**
+     * @brief methods to change callbacks
+     */
+    auto& getLifetimeCb(GetLifetimeCb&& getLifetime) { getLifetime_ = std::move(getLifetime); return *this; }
+    auto& isExpiredCb(IsExpiredCb&& isExpired) { isExpired_ = std::move(isExpired); return *this; }
+    auto& orderPubCb(OrderPubCb&& orderPub) { orderPub_ = std::move(orderPub); return *this; }
+
+    /**
+     * @brief methods to change various timer values
+     */
+    auto& cStateLifetime(std::chrono::milliseconds time) { cStateLifetime_ = time; return *this; }
+
+    auto& pubLifetime(std::chrono::milliseconds time) { pubLifetime_ = time; return *this; }
+
+    auto& pubExpirationGB(std::chrono::milliseconds time) {
+        pubExpirationGB_ = time > maxClockSkew? time : maxClockSkew;
+        return *this;
+    }
 };
 
-}  // namespace syncps
+}  // namespace dct
 
 #endif  // SYNCPS_SYNCPS_HPP

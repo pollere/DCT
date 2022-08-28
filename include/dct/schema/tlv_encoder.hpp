@@ -33,7 +33,7 @@
 
 using runtime_error = std::runtime_error;
 
-// routines for encoding NDN tlv blocks
+// routines for encoding NDN-style tlv blocks
 struct tlvEncoder {
     using Blk = std::vector<uint8_t>;
     static constexpr uint8_t extra_bytes_code{253};

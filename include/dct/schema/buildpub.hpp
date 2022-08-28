@@ -39,6 +39,12 @@
 #include "rdschema.hpp"
 #include "rpacket.hpp"
 
+// XXX these should be in <variant> but currently aren't
+template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+
+namespace dct {
+
 using namespace std::string_literals;
 
 // parameter types allowed
@@ -47,13 +53,12 @@ using timeVal = std::chrono::time_point<std::chrono::system_clock>;
 using paramVal = std::variant<std::monostate, std::string, std::string_view, uint64_t, timeVal>;
 using parItem = std::pair<std::string_view, paramVal>;
 
-template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
-template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
+}
 
 template<>
-struct fmt::formatter<paramVal>: fmt::dynamic_formatter<> {
+struct fmt::formatter<dct::paramVal>: fmt::dynamic_formatter<> {
     template <typename FormatContext>
-    auto format(const paramVal& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+    auto format(const dct::paramVal& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return std::visit(overloaded {
             [&](const std::monostate&) { return fmt::format_to(ctx.out(), "(empty)"); },
             [&](const auto& val) { return fmt::format_to(ctx.out(), "{}", val); },
@@ -61,6 +66,7 @@ struct fmt::formatter<paramVal>: fmt::dynamic_formatter<> {
     }
 };
 
+namespace dct {
 
 // template describing one viable pub for some particular signing chain.
 // An array of such templates is the primary structure used by both the
@@ -116,17 +122,19 @@ struct pubBldr {
         }
         return res;
     }
-    bool matches(const certName& cert, const bName& bcert) const {
+    bool matches(tlvVec& cert, const bName& bcert) const {
        if (cert.size() != bcert.size()) return false;
        auto ntok = bs_.tok_.size();
        for (auto n = cert.size(), i=0ul; i < n; i++) {
-           if (bcert[i] < ntok && cert[i].getValue().toRawStr() != bs_.tok_[bcert[i]]) return false;
+           if (bcert[i] < ntok && cert[i].toSv() != bs_.tok_[bcert[i]]) return false;
        }
        return true;
     }
-    bool matches(const certVec& chain, const bChain& bchain) const {
+    bool matches(certVec& chain, const bChain& bchain) const {
        if (chain.size() != bchain.size()) return false;
-       for (auto n = chain.size(), i=0ul; i < n; i++) if (! matches(chain[i], bs_.cert_[bchain[i]])) return false;
+       for (auto n = chain.size(), i=0ul; i < n; i++) {
+           if (! matches(chain[i], bs_.cert_[bchain[i]])) return false;
+       }
        return true;
     }
     // find the first signing chain in the certStore consistent with the
@@ -146,13 +154,10 @@ struct pubBldr {
         for (auto bm = cbm; bm != 0; ) {
             auto c = std::countr_zero(bm);
             bm &=~ (1u << c);
-            if (!matches(cs_.signingChain(), bs_.chain_[c])) cbm &=~ (1u << c);
+            if (!matches(schain, bs_.chain_[c])) cbm &=~ (1u << c);
         }
         if constexpr (pbdebug) {
-            if (cbm != 0) {
-                auto n = *cs_.signingChain()[0].wireEncode();
-                dprint("chain: {}, signer: {}\n", std::countr_zero(cbm), rName(n));
-            }
+            if (cbm != 0) dprint("chain: {}, signer: {}\n", std::countr_zero(cbm), rName{schain[0].tlv()});
         }
         return cbm;
     }
@@ -194,7 +199,7 @@ struct pubBldr {
         c &= SC_VALUE;
         auto cert = cs_.signingChain();
         for (const auto& [cert1, comp1, cert2, comp2] : bs_.cor_[cor]) {
-            if (cert1 == idx && c == comp1) return findOrAddTok(cert[cert2-1][comp2].getValue().toRawStr());
+            if (cert1 == idx && c == comp1) return findOrAddTok(cert[cert2-1][comp2].toSv());
         }
         throw schema_error(format("no corespondence for {:02x}({})", c, tag_[typeValue(c)]));
     }
@@ -303,11 +308,9 @@ struct pubBldr {
     }
 
     // routines to build and sign pubs
-    using Name = ndn::Name;
-    using Comp = ndn::Name::Component;
  
     // A paramVal is a variant type capable of holding any type that can
-    // be put in a Name::Component. Params is a vector of paramVals the
+    // be put in a crName component. Params is a vector of paramVals the
     // same size as the pub template. Thus pub tag, template and Param
     // indices are the same making it easy to build pubs and detect
     // missing or duplicate params in build calls.
@@ -337,27 +340,27 @@ struct pubBldr {
     template<typename... Rest>
     void doParam(Params& par, std::string_view tag, Rest... rest) { doParam(par, tm_[tag], rest...); }
 
-    Comp compValue(const Params& par, bComp c) const {
-        if (isLit(c)) return std::string(bs_.tok_[c]);
-        if (isIndex(c)) return std::string(ptok_[typeValue(c)]);
+    auto appendComp(const Params& par, bComp c, crName res) const {
+        if (isLit(c)) return res / bs_.tok_[c];
+        if (isIndex(c)) return res / ptok_[typeValue(c)];
         if (isParam(c)) return std::visit(overloaded {
-                            [](std::monostate) { return Comp("(empty)"s); },
-                            [](std::string_view val) { return Comp(std::string(val)); },
-                            [](std::string val) { return Comp(val); },
-                            [](timeVal val) { return Comp::fromTimestamp(val); },
-                            [](uint64_t val) { return Comp::fromNumber(val); },
+                            [&res](std::monostate) { return res / "(empty)"; },
+                            [&res](std::string_view val) { return res / val; },
+                            [&res](std::string val) { return res / val; },
+                            [&res](timeVal val) { return res / val; },
+                            [&res](uint64_t val) { return res / val; },
                         }, par[typeValue(c)]);
         if (!isCall(c)) throw schema_error(format("invalid comp {} in template", c));
         // handle 'call()' ops
         c = typeValue(c);
-        if (c == 0) return Comp::fromTimestamp(std::chrono::system_clock::now());
-        if (c == 1) return sysID();
+        if (c == 0) return res / std::chrono::system_clock::now();
+        if (c == 1) return res / sysID();
         throw schema_error(format("invalid call {} in template", c));
     }
-    Name fillTmplt(const Params& par, pTmplt pt) const {
-        std::vector<Comp> res{};
-        for (auto c : pt.tmplt_) res.emplace_back(compValue(par, c));
-        return Name(res);
+    crName fillTmplt(const Params& par, pTmplt pt) const {
+        crName res{};
+        for (auto c : pt.tmplt_) res = appendComp(par, c, res);
+        return crName(res);
     }
     bComp parToTok(const Params& par, compidx c) const {
         auto pval = format("{}", par[c]);
@@ -389,7 +392,7 @@ struct pubBldr {
         throw schema_error("no matching pub template");
     }
 
-    Name completeTmplt(Params& par) const {
+    crName completeTmplt(Params& par) const {
         // make sure all parameters were supplied or defaulted
         for (auto c = 0u; c < par.size(); c++) {
             if (parmbm_[c] && par[c].index() == 0) {
@@ -430,9 +433,8 @@ struct pubBldr {
     // Each tag or component index must refer to one of the pub's
     // parameters and values for all the pub's parameters must be supplied.
     // An error is thrown otherwise.
-    template<typename... Rest>
-        requires ((sizeof...(Rest) & 1) == 0)
-    Name name(Rest&&... rest) {
+    template<typename... Rest> requires ((sizeof...(Rest) & 1) == 0)
+    crName name(Rest&&... rest) {
         static_assert((sizeof...(Rest) & 1) == 0, "must supply name,value argument pairs");
         Params par{};
         par.resize(tag_.size());
@@ -446,7 +448,7 @@ struct pubBldr {
     // Each tag must refer to one of the pub's parameters and values for all
     // the pub's parameters must be supplied.  Errors are thrown otherwise.
 
-    Name name(const std::vector<parItem>& pvec) {
+    crName name(const std::vector<parItem>& pvec) {
         Params par{};
         par.resize(tag_.size());
         for (auto& [tag, val] : pvec) doOneParam(par, tm_[tag], val);
@@ -471,4 +473,6 @@ struct pubBldr {
     int pidx_{-1};              // pub's index in bs_.pub_
 };
 
+} // namespace dct
+ 
 #endif // BUILDPUB_HPP

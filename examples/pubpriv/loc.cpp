@@ -71,7 +71,7 @@ static void locRprtr(mbps &cm) {
     print("{}:{}:{} publishing location report {}\n", role, myId, myPID, Cnt+1);
     // make a message to publish - hokey, but this is just for illustration
     std::string s = format("Location sample #{} from {}:{}:{} at coords: {},{}", ++Cnt, role, myId, myPID,
-        rand() % 91, rand() % 91);
+        arc4random() % 91, arc4random() % 91);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
     mp = msgParms{{"target", "loc"s},{"rptr",fullId}};

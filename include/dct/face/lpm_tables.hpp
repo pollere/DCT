@@ -31,108 +31,8 @@
 #include <type_traits>
 #include <unordered_set>
 
-#include <dct/face/api.hpp>
-
-/**
- * Lookup table to do longest-prefix-match on wire-format NDN names. Both the RIT and PIT
- * are lookup tables containing name prefixes that must be matched against some name
- * (Interest name for RIT, Data name for PIT) and the longest or all matches returned.
- * The rName ordering operator is defined such that it collates prefixes in longest-match
- * order so either use case can be supported but both the RIT and PIT require longest
- * prefix exact match (a restricted instance of longest prefix match from the name's
- * point of view) so don't use of an 'all matches' method.
- *
- * Note that correct semantics only requires testing the target name against prefixes
- * that are <= its size to filter out matches where the name is a prefix of the prefix. 
- *
- * Note that since rName is just a view of the prefix, The caller of these routines must
- * guarantee that the data that backs the prefix exists unmodified during the lifetime
- * of each entry. (The backing data can be placed in the entry to assure this.)
- */
-template<typename Prefix, typename Entry>
-struct lpmLT {
-    //std::unordered_map<Prefix,Entry> lt_{};
-    std::map<Prefix,Entry> lt_{};
-    std::map<uint16_t,int16_t,std::greater<uint16_t>> sz_{};  // key sizes, ordered longest first
-
-    using iterator = typename decltype(lt_)::iterator;
-
-    auto contains(const Prefix& n) const noexcept { return lt_.contains(n); }
-
-    auto found(iterator it) noexcept { return it != lt_.end(); }
-
-    /*
-     * find exact match to name 'n'
-     *
-     * Returns iterator pointing to entry if found (should be tested
-     * with 'found()' which checks against 'lt_.end()).
-     */
-    auto find(const Prefix& n) noexcept { return lt_.find(n); }
-
-    /*
-     * find longest match to name 'n'
-     */
-    auto findLM(const Prefix& n) noexcept {
-        for (auto [sz, cnt] : sz_) {
-            // Do an exact match lookup of n's prefix at each prefix size starting with longest.
-            // This code is not currently taking advantage of the map's ordering and would work
-            // as well with an unordered_map (but sacrifice 'findAllM()'). It could also be
-            // rewritten to explicitly traverse the tree, matching prefixes on the fly, but
-            // there's not yet performance data to justify this.
-            if (sz > n.size()) continue;
-            if (auto it = lt_.find(Prefix(n, sz)); it != lt_.end()) return it;
-        }
-        return lt_.end();
-    }
-
-    /*
-     * invoke unary predicate 'pred' on all matches to prefix 'p'
-     */
-    template <typename Unary>
-    auto findAll(const Prefix& p, Unary pred) const noexcept {
-        auto sz = p.size();
-        for (const auto& kv : lt_) {
-            if (kv.first.size() >= sz && p == Prefix(kv.first, sz)) pred(kv);
-        }
-    }
-
-    // add an entry for prefix 'p' to the map with arguments 'args'.
-    template <typename... Args>
-    auto add(const Prefix& p, Args&&... args) {
-        auto res = lt_.try_emplace(p, std::forward<Args>(args)...);
-        // if a new entry was added, note we have another entry of that size
-        if (res.second) sz_[p.size()]++;
-        return res;
-    }
-    template <typename... Args>
-    auto add(Prefix&& p, Args&&... args) {
-        auto res = lt_.try_emplace(std::move(p), std::forward<Args>(args)...);
-        if (res.second) sz_[p.size()]++;
-        return res;
-    }
-
-    void decrSize(size_t sz) {
-        if (--sz_[sz] < 0) throw runtime_error(format("erasing deleted size {}", sz));
-    }
-
-    void erase(const Prefix& p) { if (lt_.erase(p) > 0) decrSize(p.size()); }
-
-    void erase(iterator it) {
-        decrSize(it->first.size());
-        lt_.erase(it);
-    }
-
-    auto extract(const Prefix& p) {
-        auto nh = lt_.extract(p);
-        if (nh) decrSize(p.size());
-        return nh;
-    }
-
-    auto extract(iterator it) {
-        decrSize(it->first.size());
-        return lt_.extract(it);
-    }
-};
+#include "api.hpp"
+#include "lpm.hpp"
 
 /**
  * The Registered Interest Table (RIT) delivers incoming Interests to a
@@ -171,7 +71,7 @@ struct RIT : lpmLT<rPrefix, RITentry> {
 struct DIT : std::unordered_set<size_t> {
     std::unordered_set<size_t> ihash_{};
 
-    auto hash(const rInterest& i) const { return std::hash<tlvParser>{}(i); }
+    auto hash(const rInterest& i) const noexcept { return std::hash<tlvParser>{}(i); }
 
     void add(size_t h) {
         // if too many entries, remove a random one

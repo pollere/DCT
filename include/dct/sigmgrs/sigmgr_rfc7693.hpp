@@ -51,18 +51,14 @@
 
 struct SigMgrRFC7693 final : SigMgr {
 
-    SigMgrRFC7693() : SigMgr(stRFC7693, {0x16, 0x03, 0x1b, 0x01, stRFC7693}) {
-        if (sodium_init() == -1) exit(EXIT_FAILURE);
-    }
-    bool sign(ndn::Data& data, const SigInfo&, const keyVal&) override final {
-        //set up the Signature field then get the Signed Portion of Data from wire format
-        auto dataWF = setupSignature(data, m_sigInfo);;
-        // get the RFC7693 hash
-        std::vector<uint8_t> sigValue (crypto_generichash_BYTES,0);
-        crypto_generichash(sigValue.data(), sigValue.size(), dataWF.signedBuf(), dataWF.signedSize(), NULL, 0);
-        data.getSignature()->setSignature(sigValue);
-        // Encode again to include the signature.
-        dataWF = data.wireEncode();
+    SigMgrRFC7693() : SigMgr(stRFC7693) { }
+
+    bool sign(crData& d, const SigInfo& si, const keyVal&) override final {
+        d.siginfo(si);
+        auto sig = d.signature(crypto_generichash_BYTES);
+        auto s = d.rest();
+        s = s.first(s.size() - sig.size() - 2);
+        crypto_generichash(sig.data(), sig.size(), s.data(), s.size(), NULL, 0);
         return true;
     }
     bool validate(rData d) override final {
@@ -80,10 +76,6 @@ struct SigMgrRFC7693 final : SigMgr {
         if (std::memcmp(sig.data() + sig.off(), dataHash.data(), dataHash.size()) != 0) return false;
         return true;
     }
-    bool validate(const ndn::Data& d) override final { return validate(rData(d)); }
-    bool validate(const ndn::Data& d, const dct_Cert&) override final { return validate(rData(d)); }
-
-    bool needsKey() const noexcept override final { return 0; };
 };
 
 #endif // SIGMGRRFC7693_HPP

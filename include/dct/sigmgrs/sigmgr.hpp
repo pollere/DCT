@@ -42,34 +42,24 @@
  * signed, does not appear in "wire" packets and should not be otherwise used.
  */
 
-#include <ndn-ind/data.hpp>
-#include <ndn-ind/generic-signature.hpp>
-#include <dct/schema/rpacket.hpp>
+#include <span>
+
 
 // this file is included by syncps.hpp so libsodium calls can be available
 extern "C" {
     #include <sodium.h>
 };
 
-// type signatures for validate() callbacks 
-using ValidDataCb = std::function<void(ndn::Data&)>;
-using FailedDataCb = std::function<void(ndn::Data&, const std::string&)>;
-
 using keyVal = std::vector<uint8_t>;
 using keyRef = std::span<const uint8_t>;
 using SigInfo = std::vector<uint8_t>;
 using SigType = uint8_t;
-using dct_Cert = ndn::Data;
 
-//using KeyCb = std::function<const std::vector<uint8_t>&(const ndn::Data&)>;
+#include <dct/schema/dct_cert.hpp>
+
 using KeyCb = std::function<keyRef(rData)>;
 
 struct SigMgr {
-    SigType m_type;
-    SigInfo m_sigInfo;
-    keyVal m_signingKey{};
-    KeyCb m_keyCb{};
- 
     // Signature types (must match equivalent NDN TLV when there is one)
     static constexpr SigType stSHA256 = 0;
     static constexpr SigType stAEAD = 7;
@@ -79,45 +69,50 @@ struct SigMgr {
     static constexpr SigType stPPAEAD = 11;
     static constexpr SigType stPPSIGN = 12;
 
-    SigMgr(SigType typ, SigInfo&& si = {}) : m_type{typ}, m_sigInfo{std::move(si)} {}
-    SigMgr(SigType typ, const SigInfo& si) : m_type{typ}, m_sigInfo{si} {}
+    const SigType m_type;
+    SigInfo m_sigInfo;
+    keyVal m_signingKey{};
+    KeyCb m_keyCb{};
 
-    bool sign(rData d) { return sign(d, m_sigInfo, m_signingKey); };
-    bool sign(rData d, const SigInfo& si) { return sign(d, si, m_signingKey); }
-    virtual bool sign(rData, const SigInfo&, const keyVal&) { return false; };
+    // types that require a key locator in their sigInfo 
+    static constexpr uint16_t m_needsKeyLoc{(1 << stEdDSA) | (1 << stPPAEAD) | (1 << stPPSIGN)};
+ 
+    static constexpr bool needsKey(SigType typ) noexcept { return (m_needsKeyLoc & (1 << typ)) != 0; };
+
+    // build a siginfo for signing key type 'typ'
+    auto  mkSigInfo(SigType typ) {
+        if (! needsKey(typ)) {
+            auto a = TLV<tlv::SignatureInfo>(TLV<tlv::SignatureType>(typ));
+            return SigInfo{a.begin(), a.end()};
+        } else {
+            auto a = TLV<tlv::SignatureInfo>(tlvFlatten(
+                        TLV<tlv::SignatureType>(typ),
+                        TLV<tlv::KeyLocator>(TLV<tlv::KeyDigest>(std::array<uint8_t,thumbPrint_s>{}))));
+            return SigInfo{a.begin(), a.end()};
+        }
+    }
+
+    SigMgr(SigType typ) : m_type{typ}, m_sigInfo{mkSigInfo(typ)} { if (sodium_init() == -1) exit(EXIT_FAILURE); }
+
+    bool sign(crData& d) { return sign(d, m_sigInfo, m_signingKey); };
+    bool sign(crData& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
+    virtual bool sign(crData&, const SigInfo&, const keyVal&) { abort();return false; };
     virtual bool validate(rData ) { return false; };
-    virtual bool validate(rData, const dct_Cert&) { return false; };
+    virtual bool validate(rData, const rData&) { return false; };
     virtual bool validateDecrypt(rData d) { return validate(d); };
-    virtual bool validateDecrypt(rData d, const dct_Cert&) { return validate(d); };
+    virtual bool validateDecrypt(rData d, const rData&) { return validate(d); };
+    //sigmgrs make own copies
+    virtual void addKey(keyRef, uint64_t = 0) {};
+    virtual void addKey(keyRef pk, keyRef, uint64_t = 0) { addKey(pk, 0); };
+    virtual void updateSigningKey(keyRef, const rData&) {};
 
-    bool sign(ndn::Data& d) { return sign(d, m_sigInfo, m_signingKey); };
-    bool sign(ndn::Data& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
-    virtual bool sign(ndn::Data&, const SigInfo&, const keyVal&) { return false; };
-    virtual bool validate(const ndn::Data&) { return false; };
-    virtual bool validate(const ndn::Data&, const dct_Cert&) { return false; };
-
-    virtual void addKey(const keyVal&, uint64_t = 0) {};
-    virtual void addKey(const keyVal& pk, const keyVal&, uint64_t = 0) { addKey(pk, 0); };
-    virtual void updateSigningKey(const keyVal&, const dct_Cert&) {};
-    virtual bool needsKey() const noexcept { return 1; };
+    constexpr bool needsKey() const noexcept { return needsKey(m_type); };
 
     // if validate requires public keys of publishers, m_keyCb returns by keylocator
     void setKeyCb(KeyCb&& kcb) { m_keyCb = std::move(kcb);}
 
-    void validate(ndn::Data& d, const ValidDataCb& vCB, const FailedDataCb& fCB) {
-        validate(d) ? vCB(d) : fCB(d, "signature error");
-    }
-
     SigType type() const noexcept { return m_type; };
     SigInfo getSigInfo() const noexcept { return m_sigInfo; }
-
-    // sign() helper method
-    auto setupSignature(ndn::Data& data, const SigInfo& si) const {
-        auto sigInfo = ndn::GenericSignature();
-        sigInfo.setSignatureInfoEncoding(si);
-        data.setSignature(sigInfo);
-        return data.wireEncode();
-    }
 };
 
 #endif //SIGMGR_HPP

@@ -21,6 +21,7 @@
  *
  *  This is not intended as production code.
  */
+#include <sstream>
 #include <unordered_map>
 #include <string_view>
 #include <tuple>
@@ -47,15 +48,15 @@ struct Dissect {
         {tlv::SignatureValue, {"SigValue", true, cFmt::unknown}},
     };
     inline static Dict nameTLV = {
-        {tlv::GenericNameComponent, {"Generic", true, cFmt::unknown}},
-        {tlv::KeywordNameComponent, {"Keyword", false, cFmt::unknown}},
-        {tlv::SegmentNameComponent, {"Segment", true, cFmt::unknown}},
-        {tlv::ByteOffsetNameComponent, {"ByteOffset", true, cFmt::unknown}},
-        {tlv::VersionNameComponent, {"Version", true, cFmt::unknown}},
-        {tlv::TimestampNameComponent, {"Timestamp", true, cFmt::tstamp}},
-        {tlv::SequenceNumNameComponent, {"SequenceNum", true, cFmt::unknown}},
-        {tlv::ImplicitSha256DigestComponent, {"ImplicitSha256Digest", true, cFmt::bin}},
-        {tlv::ParametersSha256DigestComponent, {"Sha256Digest", true, cFmt::bin}},
+        {tlv::Generic, {"Generic", true, cFmt::unknown}},
+        {tlv::Keyword, {"Keyword", false, cFmt::unknown}},
+        {tlv::Segment, {"Segment", true, cFmt::unknown}},
+        {tlv::ByteOffset, {"ByteOffset", true, cFmt::unknown}},
+        {tlv::Version, {"Version", true, cFmt::unknown}},
+        {tlv::Timestamp, {"Timestamp", true, cFmt::tstamp}},
+        {tlv::SequenceNum, {"SequenceNum", true, cFmt::unknown}},
+        {tlv::ImplicitSha256Digest, {"ImplicitSha256Digest", true, cFmt::bin}},
+        {tlv::ParametersSha256Digest, {"Sha256Digest", true, cFmt::bin}},
     };
     inline static Dict interestTLV = {
         {tlv::Nonce, {"Nonce", true, cFmt::bin}},
@@ -86,7 +87,7 @@ struct Dissect {
         {tlv::ContentType_Key, {"Key", true, cFmt::num}},
         {tlv::ContentType_Nack, {"Nack", true, cFmt::num}},
         {tlv::ContentType_Manifest, {"Manifest", true, cFmt::num}},
-        {tlv(129), {"SyncpsPubs", true, cFmt::num}},
+        {tlv::ContentType_CAdd, {"CAdd", true, cFmt::num}},
         {tlv(131), {"TrustSchema", true, cFmt::num}},
         {tlv(5), {"PrefixAnn", true, cFmt::num}},
     };
@@ -288,7 +289,7 @@ struct Dissect {
         }
         // XXX hack to handle 'tagged' timestamps in name components
 
-        if (b.len() == 9 && (tlv)b[0] == tlv::GenericNameComponent && b.cur() == 0xfc) {
+        if (b.len() == 9 && (tlv)b[0] == tlv::Generic && b.cur() == 0xfc) {
             dumpts(b);
             return;
         }

@@ -35,8 +35,9 @@
 #include "dct/sigmgrs/sigmgr_by_type.hpp"
 #include "dct/syncps/syncps.hpp"
 
-using certPub = dctCert;
-using addCertCb = std::function<void(const certPub&)>;
+namespace dct {
+
+using addCertCb = std::function<void(const rData)>;
 using connectedCb = std::function<void(bool)>;
 
 /*
@@ -52,32 +53,31 @@ using connectedCb = std::function<void(bool)>;
 
 struct DistCert
 {    
-    ndn::Name m_pubPrefix;  //prefix for subscribeTo()
+    crName m_pubPrefix;  //prefix for subscribe()
     SigMgrAny m_syncSigMgr{sigMgrByType("RFC7693")}; // to sign/validate SyncData packets
     SigMgrAny m_certSigMgr{sigMgrByType("NULL")};   // to sign/validate Publications
-    syncps::SyncPubsub m_sync;
-    addCertCb m_addCertCb{[](auto ){}}; // called when cert rcvd from peer
+    SyncPS m_sync;
     connectedCb m_connCb{[](bool){}};   // called when initial cert exchange done
+    std::unordered_set<size_t> m_initialPubs{};
     bool m_havePeer{false};
     bool m_initDone{false};
-    std::unordered_set<size_t> m_initialPubs{};
 
-    DistCert(syncps::FaceType& face, const std::string& pPre, const ndn::Name& wPre,
-             addCertCb&& addCb, syncps::IsExpiredCb&& eCb) :
+    DistCert(DirectFace& face, const Name& pPre, const Name& wPre, addCertCb&& addCb, IsExpiredCb&& eCb) :
         m_pubPrefix{pPre},
-        m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref()),
-        m_addCertCb{std::move(addCb)}
+        m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref())
+        //m_addCertCb{std::move(addCb)}
     {
         m_sync.cStateLifetime(4789ms);
-        m_sync.cAddLifetime(877ms);       // (data caching not useful)
         m_sync.pubLifetime(0ms); // pubs don't auto expire
         m_sync.isExpiredCb(std::move(eCb));
+#if 0
         m_sync.filterPubsCb([](auto& pOurs, auto& pOthers) mutable {
                     // certs are small so send everything that will fit in a packet
                     pOurs.insert(pOurs.end(), pOthers.begin(), pOthers.end());
                     return pOurs;
                 });
-        m_sync.subscribeTo(m_pubPrefix, [this](auto p) {onReceiveCert(reinterpret_cast<const dctCert&>(p));});
+#endif
+        m_sync.subscribe(m_pubPrefix, std::move(addCb));
     }
 
     /*
@@ -87,13 +87,6 @@ struct DistCert
      * can set a timeout to exit if m_confCb isn't called after a suitable delay
      */
     void setup(connectedCb&& connCb) { m_connCb = std::move(connCb); }
-
-    /*
-     * Called when a new Publication is received in signingKey Collection.
-     * At this point the packet containing the Cert has been validated by
-     * m_syncSigMgr but the cert has not been validated.
-     */
-    void onReceiveCert(const certPub& p) { m_addCertCb(p); }
 
     /*
      * Called when an initial cert exchange has completed (some peer(s) have our cert
@@ -107,13 +100,11 @@ struct DistCert
     /*
      * Certstore has validated and accepted a peer's cert.
      */
-    void publishCert(const certPub& c) {
-        if (! m_initDone) {
-            m_havePeer = true;
-            if (m_initialPubs.empty()) initDone();
-        }
-        //will ensure publication for relayed (or new local) certs
-        m_sync.publish(dctCert(c));
+    void publishCert(const rData c) {
+        m_havePeer = true;
+        if (! m_initDone && m_initialPubs.empty()) initDone();
+        // ensure publication of relayed (or new local) certs
+        m_sync.publish(c);
     }
 
     /*
@@ -132,12 +123,11 @@ struct DistCert
      * aggressive, and the 'connect' callback is called to move to the next
      * phase of operation.
      */
-    void initialPub(certPub&& c) {
+    void initialPub(const rData c) {
         if (! m_initDone) {
-            auto h = std::hash<ndn::Data>{}(c);
+            auto h = std::hash<tlvParser>{}(c);
             m_initialPubs.emplace(h);
-            m_sync.publish(std::move(c),
-                    [this, h](const auto& /*d*/, bool /*acked*/) {
+            m_sync.publish(c, [this, h](const auto& /*d*/, bool /*acked*/) {
                         // since cert pub lifetime is infinite 'acked' should always be true
                         // when this routine is called. If all the initial pubs have been acked
                         // and we have at least one peer's signing chain, initialization is done.
@@ -146,8 +136,10 @@ struct DistCert
                     });
             return;
         }
-        m_sync.publish(std::move(c));
+        m_sync.publish(c);
     }
 };
+
+} // namespace dct
 
 #endif //DIST_CERT_HPP

@@ -4,7 +4,7 @@
 // certificate that is signed and validatable.
 
 // Like the iot2 trust schema, this uses a symmetric key AEAD encryption for the
-// "wire" packets, but publisher privacy is enabled by designating a Subscription
+// "wire" (cAdd) packets, but publisher privacy is enabled by designating a Subscription
 // Group for a collection whose members are the only entities that get the secret
 // key that lets them decrypt the packet.
 
@@ -24,23 +24,23 @@ locRprt: #Pub & { target: "loc" } <= locCert
 roleCert:    _network/_role/_roleId/_keyinfo
 
 // There are different signing chains for monCert & locCerts.
-// "key makers" (authorized by the KM capability, kmCap) are
-// responsible for creating and distributing the nonce
-// symmetric encryption keys used ensure publication privacy
-// and thus provide a service to the entire Collection that
-// needs to be highly available and monitors are expected to be always on.
-// locCerts are used to sign location reports from location apps
-// on mobile devices and shouldn't be key makers.
+// locCerts are used to sign location reports published from location apps
+// on mobile devices and do not subscribe to the location reports.
 // If publisher privacy is desired, a subscription group capability
 // is used by a PPAEAD wire signer/validator to ensure that only
-// members of the subscription group get the encryption key. Here,
-// monitors can be members of a sg;
-monCert:  roleCert & { _role: "monitor" } <= sgCap | kmCap
+// members of the subscription group get the encryption key.
+// Here, only monitors can be members of a subscriber group.
+// Within the SG, "key makers" are responsible for creating and distributing
+// the nonce symmetric encryption keys used to ensure publication privacy
+// and thus provide a service to the entire Collection that
+// needs to be highly available; monitors are expected to be always on.
+// The key maker capability for the SG is indicated by the capability
+// argument being a non-zero value
+monCert:  roleCert & { _role: "monitor" } <= sgCap
 locCert: roleCert & { _role: "locRptr" } <= netCert
 
 // capability certs (capabilities granted to roles)
 capCert: _network/"CAP"/_capId/_capArg/_keyinfo
-kmCap:   capCert & { _capId: "KM" } <= sgCap    // allowed to be a key maker (capArg is priority)
 sgCap:   capCert & { _capId: "SG" } <= netCert  // allowed to be a subscriber (member of subscriber group)
 
 netCert: _network/_keyinfo
@@ -52,7 +52,7 @@ netCert: _network/_keyinfo
 #pubPrefix:    _network
 #pubValidator: "EdDSA"
 
-// used for cAdds
+// used for cAdd PDUs
 #wireValidator: "PPAEAD"
 // #wireValidator: "PPSIGN"
 

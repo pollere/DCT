@@ -1,6 +1,7 @@
-#CXXFLAGS = -Wall -Wextra -g -O0 -std=c++20 -I../include
-#CXXFLAGS += -fsanitize=address,undefined
-CXXFLAGS = -Wall -Wextra -g -O3 -std=c++20 -I../include
+CXXFLAGS = -Wall -Wextra -g -O0 -std=c++20 -I../include
+CXXFLAGS += -fsanitize=address,undefined
+CXXFLAGS += -ferror-limit=3
+#CXXFLAGS = -Wall -Wextra -g -O3 -std=c++20 -I../include
 
 ifeq ($(shell uname -s),Linux)
 #CXX = clang++
@@ -16,11 +17,12 @@ endif
 
 CXXFLAGS += -I/usr/local/include
 LDFLAGS += -L/usr/local/lib
-LIBS =  -lndn-ind -llog4cxx -lsodium -lcrypto
+#LIBS =  -lndn-ind -llog4cxx -lsodium -lcrypto
+LIBS =  -lsodium
 
 .DEFAULT_GOAL = all
 
-TOOLS = schema_cert schema_info schema_dump make_cert make_bundle ls_bundle bld_dump schemaCompile
+TOOLS = schema_cert schema_info schema_dump make_cert make_bundle ls_bundle bld_dump schemaCompile bundle_info
 TESTS = tst_encodeer tst_rpacket tst_validate tst_transport time_signing
 
 all: $(TOOLS)
@@ -33,7 +35,7 @@ default_interface: default_interface.cpp
 	#rm -rf $@.dSYM
 
 schema_cert: schema_cert.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 schema_dump: schema_dump.cpp 
@@ -45,27 +47,39 @@ schema_info: schema_info.cpp
 	#rm -rf $@.dSYM
 
 make_cert: make_cert.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 make_bundle: make_bundle.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 ls_bundle: ls_bundle.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
+bundle_info: bundle_info.cpp 
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 time_signing: time_signing.cpp 
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
+tst_cert: tst_cert.cpp 
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
 tst_encoder: tst_encoder.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
+tst_crpack: tst_crpack.cpp 
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_rpacket: tst_rpacket.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_transport: tst_transport.cpp 
@@ -77,7 +91,7 @@ tst_validate: tst_validate.cpp
 	#rm -rf $@.dSYM
 
 bld_dump: bld_dump.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) -lsodium -lndn-ind -lcrypto
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 #	rm -rf $@.dSYM
 
 schemaCompile:

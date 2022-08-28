@@ -15,15 +15,19 @@
  * so they're found by walking the chain looking for the a cert
  * starting with <prefix>/CAP/<capName>. 
  *
- * Something that needs to know if some identity has a capability
- * should:
+ * Since many different certs may be checked for the same capability,
+ * this Cap::checker("foo",...) *creates* a checker for capability "foo",
+ * precomputing everything it can.  So something that needs to know if
+ * identity(s) have a capability should:
+ *
  *  - Add a method variable to hold the capability checker, e.g.,
  *      Cap::capchk m_fooChk;
+ *
  *  - Initialize that variable in the constructor's member inits:
  *      ..., m_fooChk{Cap::checker("foo", pubPrefix, cs)}, ...
- *    where 'pubPrefix' is the schema's pub prefix string and
- *    'cs' is a "const CertStore&" reference to the DCT model's
- *    cert store.
+ *    where 'pubPrefix' is the schema's pub prefix string and 'cs'
+ *    is a "const CertStore&" reference to the DCT model's cert store.
+ *
  *  - where some identity's thumbPrint needs to be checked to
  *    see if it has been granted the capability do:
  *      if (m_fooChk(tp).first) {
@@ -47,21 +51,38 @@
  *  You should have received a copy of the GNU Lesser General Public License
  *  along with this program; if not, see <https://www.gnu.org/licenses/>.
  *  You may contact Pollere LLC at info@pollere.net.
- *
- *  capability is not intended as production code.
  */
 
 #include <functional>
 
 #include <dct/schema/certstore.hpp>
-#include <dct/schema/rpacket.hpp>
+#include <dct/schema/crpacket.hpp>
 
 struct Cap {
     using capChk = std::function<std::pair<bool,rData>(const thumbPrint&)>;
-    static inline auto checker(const char* cap, const std::string& prefix, const certStore& cs) {
-        return [&cs = cs, p = crPrefix{syncps::Name{prefix + "/CAP/" + cap}}]
-                (const thumbPrint& tp) -> std::pair<bool,rData> {
+    using compVal = tlvParser;
+    using capVal = std::function<tlvParser(const thumbPrint&)>;
+    using sv = std::string_view;
+
+    static inline auto checker(const char* cap, const crName& prefix, const certStore& cs) {
+        return [&cs = cs, p = crPrefix{prefix / "CAP" / cap}] (const thumbPrint& tp) -> std::pair<bool,rData> {
                     return cs.chainMatch(tp, [&p](rData c){ return p.isPrefix(c.name()); }); };
+    }
+    static inline auto checker(const char* cap, const std::string& prefix, const certStore& cs) {
+        return checker(cap, crName(prefix), cs);
+    }
+
+    static inline auto getval(const char* c, const crName& p, const certStore& cs) {
+        return [&cs = cs, pre = crPrefix{p/"CAP"/c}] (const thumbPrint& tp) -> compVal {
+                // if the capability cert isn't found in tp's chain or doesn't have
+                // a value return an empty span. Otherwise return a span covering the value.
+                auto [found, cert] = cs.chainMatch(tp, [&pre](rData c){ return pre.isPrefix(c.name()); });
+                try {
+                    // cap value must be the name component immediately after the prefix
+                    if (found) return cert.name().nextAfter(pre.size());
+                } catch (const runtime_error& e) { }
+                return compVal{};
+            };
     }
 };
 
