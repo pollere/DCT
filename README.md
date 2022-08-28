@@ -37,13 +37,12 @@ Bug reports are welcome.
 
 ### Installing and building the pieces
 
-As of 8/2/2022, we suggest you delay installation till 8/8/2022 when you will no longer need the ndn-ind library.
-
 All the modules are header-only C++ 'libraries' so the `DCT/include` tree has to be made available to programs using it via a `-I` c++ compiler flag or installed in a standard include path like `/usr/local/include`. The code requires c++20 and compiles with the current xcode compiler or clang-11 on MacOS and Linux and gcc-9 on Linux. It uses the new c++20 formatted output model which, unfortunately, is not yet in either compiler's standard library. To fill that gap we suggest using the excellent implementation available at https://fmt.dev/latest/index.html. This should be installed somewhere on your system and its `include/fmt` directory symlinked from `DCT/include`. (This distribution has a copy of the current 8.0.1 `fmt` dist in DCT/include/fmt; that should be removed and replaced with the symlink.) 
 
 The included versec compiler is required to compile new schemas but pre-compiled schemas for the examples are available as a \*.scm file in the example source directory. To compile and run an example using the pre-compiled schema, for example, mbps:
 
-- (one time) install libsodium from https://doc.libsodium.org/
+- (one time) install libsodium from https://doc.libsodium.org/ if not already installed
+- (one time) install boost includes (boost.org) if not already installed
 - `cd DCT/examples/<*>`  then `make` to build the example. If the make is successful, follow the readme to create 'identity bundles' and run it.
 
 ### References and related work
