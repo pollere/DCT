@@ -24,10 +24,14 @@
 
 #include <array>
 #include <bitset>
-#include <boost/dynamic_bitset.hpp>
 #include <iostream>
 #include <set>
 #include <utility>
+
+// boost 1.80 bug workaround for deprecated std::unary_function removal in c++17
+#define BOOST_NO_CXX98_FUNCTION_BASE 0
+#include <boost/dynamic_bitset.hpp>
+
 #include "dct/format.hpp"
 #include "dct/schema/bschema.hpp"
 #include "dag.hpp"

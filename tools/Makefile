@@ -1,11 +1,11 @@
-CXXFLAGS = -Wall -Wextra -g -O0 -std=c++20 -I../include
+CXXFLAGS = -g -O0 -std=c++20 -I../include
+#CXXFLAGS += -Wall -Wextra
 CXXFLAGS += -fsanitize=address,undefined
-CXXFLAGS += -ferror-limit=3
 #CXXFLAGS = -Wall -Wextra -g -O3 -std=c++20 -I../include
 
 ifeq ($(shell uname -s),Linux)
-#CXX = clang++
-CXX = c++
+CXX = clang++
+#CXX = c++
 #CXXFLAGS += -fno-omit-frame-pointer
 else
 CXX = clang++
@@ -17,7 +17,6 @@ endif
 
 CXXFLAGS += -I/usr/local/include
 LDFLAGS += -L/usr/local/lib
-#LIBS =  -lndn-ind -llog4cxx -lsodium -lcrypto
 LIBS =  -lsodium
 
 .DEFAULT_GOAL = all

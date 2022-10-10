@@ -299,8 +299,8 @@ template<> struct std::hash<tlvParser> {
 // a parser is only instantiated when that component is accessed.
 // The state of the outer tlv is not modified.
 struct tlvVec {
-    tlvParser b_;
-    std::vector<uint16_t> o_{};
+    tlvParser b_;   // copy of (outer) tlv being indexed
+    std::vector<uint16_t> o_{}; // offset to start of each tlv contained in b_
 
     tlvVec(const tlvParser& b) : b_{b} {
         size_t off;
@@ -316,7 +316,7 @@ struct tlvVec {
         if (off < 0) off += size();
         return b_.nextAt(o_[off]);
     }
-    constexpr auto& tlv() { b_.skipTo(o_[0]); return b_; }
+    auto& tlv() { b_.skipTo(o_[0]); return b_; }
 };
 
 #endif // TLVPARSER_HPP

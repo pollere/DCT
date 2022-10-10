@@ -42,6 +42,7 @@
  * signed, does not appear in "wire" packets and should not be otherwise used.
  */
 
+#include <functional>
 #include <span>
 
 

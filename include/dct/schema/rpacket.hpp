@@ -53,52 +53,61 @@ struct rName : tlvParser {
 
     auto last() const { return lastBlk(); }
 
-    // A name prefix is the body of a name. I.e., the list of component
-    // tlv's without the leading tlv::name and length. Because of the leading
-    // (variable length) length, names can't be easily longest-match ordered
-    // but prefixes can.
-    struct rPrefix : tlvParser {
-        constexpr rPrefix() = default;
-        rPrefix(const rPrefix&) = default;
-        rPrefix(rPrefix&&) = default;
-        rPrefix& operator=(const rPrefix&) = default;
-        rPrefix& operator=(rPrefix&&) = default;
+    //XXX should be constexpr once https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/p1944r1.pdf
+    // and/or https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0202r1.html adopted.
+    auto operator<=>(const rName& rhs) const noexcept;
 
-        rPrefix(rName n) : tlvParser(n.rest(), 0) { }
-        rPrefix(rPrefix p, size_t sz) : tlvParser(tlvParser::Blk{p.data(), sz}, 0) { }
+    auto operator==(const rName& rhs) const noexcept {
+        if (size() != rhs.size()) return false;
+        return std::memcmp(data(), rhs.data(), size()) == 0;
+    }
 
-        using ordering = std::strong_ordering;
-        auto operator<=>(const rPrefix& rhs) const noexcept {
-            auto tsz = size();
-            auto rsz = rhs.size();
-            // binary compare using the length of the shorter name. if one name
-            // is a prefix of the other the shorter is 'less'
-            auto res = std::memcmp(data(), rhs.data(), tsz <= rsz? tsz : rsz);
-            if (res == 0) return tsz <=> rsz;
-            return res < 0? ordering::less : ordering::greater;
-        }
-        constexpr auto operator==(const rPrefix& rhs) const noexcept {
-            if (size() != rhs.size()) return false;
-            return std::memcmp(data(), rhs.data(), size()) == 0;
-        }
-
-        // 'true' if this prefix is a prefix of 'p'
-        constexpr bool isPrefix(const rPrefix& p) const noexcept {
-            auto tsz = size();
-            auto psz = p.size();
-            if (psz < tsz) return false;
-            return std::memcmp(data(), p.data(), tsz) == 0;
-        }
-        constexpr bool isPrefix(const rName& n) const noexcept { return isPrefix(rPrefix{n}); }
-    };
-
-    auto operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
-    auto operator==(const rName& rhs) const noexcept { return rPrefix(*this) == rPrefix(rhs); }
-
-    // 'true' if this name is a prefix of 'nm'
-    bool isPrefix(const rName& nm) const { return rPrefix(*this).isPrefix(rPrefix(nm)); }
+    bool isPrefix(const rName& nm) const noexcept;
 };
-using rPrefix = rName::rPrefix;
+
+// A name prefix is the body of a name. I.e., the list of component
+// tlv's without the leading tlv::name and length. Because of the leading
+// (variable length) length, names can't easily be longest-match ordered
+// but prefixes can.
+struct rPrefix : tlvParser {
+    constexpr rPrefix() = default;
+    rPrefix(const rPrefix&) = default;
+    rPrefix(rPrefix&&) = default;
+    rPrefix& operator=(const rPrefix&) = default;
+    rPrefix& operator=(rPrefix&&) = default;
+
+    constexpr rPrefix(rName n) : tlvParser(n.rest(), 0) { }
+    constexpr rPrefix(rPrefix p, size_t sz) : tlvParser(tlvParser::Blk{p.data(), sz}, 0) { }
+
+    using ordering = std::strong_ordering;
+    //XXX constexpr as per comment above
+    auto operator<=>(const rPrefix& rhs) const noexcept {
+        auto tsz = size();
+        auto rsz = rhs.size();
+        // binary compare using the length of the shorter name. if one name
+        // is a prefix of the other the shorter is 'less'
+        auto res = std::memcmp(data(), rhs.data(), tsz <= rsz? tsz : rsz);
+        if (res == 0) return tsz <=> rsz;
+        return res < 0? ordering::less : ordering::greater;
+    }
+    auto operator==(const rPrefix& rhs) const noexcept {
+        if (size() != rhs.size()) return false;
+        return std::memcmp(data(), rhs.data(), size()) == 0;
+    }
+
+    // 'true' if this prefix is a prefix of 'p'
+    bool isPrefix(const rPrefix& p) const noexcept {
+        auto tsz = size();
+        auto psz = p.size();
+        if (psz < tsz) return false;
+        return std::memcmp(data(), p.data(), tsz) == 0;
+    }
+    constexpr bool isPrefix(const rName& n) const noexcept { return isPrefix(rPrefix{n}); }
+};
+
+// name ordering is lexicographic
+auto rName::operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
+bool rName::isPrefix(const rName& nm) const noexcept { return rPrefix(*this).isPrefix(rPrefix(nm)); }
 
 template<> struct std::hash<rName> {
     size_t operator()(const rName& c) const noexcept { return std::hash<tlvParser>{}(c); }

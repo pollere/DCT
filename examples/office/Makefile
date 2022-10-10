@@ -2,24 +2,22 @@
 # the code *requires* C++ 20 or later
 
 INCLUDES = ../../include
+#CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 CXXFLAGS = -g -O0 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=address,undefined
-#CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 HDRS = 
 DEPS = $(HDRS)
 BINS = phone room
 JUNK = 
 
 # OS dependent definitions
-ifeq ($(shell uname -s),Darwin)
 CXX=clang++
+ifeq ($(shell uname -s),Darwin)
 LIBS += -L/opt/local/lib -lsodium
 JUNK += $(addsuffix .dSYM,$(BINS))
 else
-# ubuntu packages are compiled with gcc and its sanitizer doesn't cooperate with clang's
-CXX=c++
-LIBS += -lpthread -lsodium
+LIBS += -lsodium
 endif
 
 #all: $(BINS)

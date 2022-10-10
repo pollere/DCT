@@ -211,16 +211,16 @@ class is_tuple_formattable_ {
   static constexpr const bool value = false;
 };
 template <typename T, typename C> class is_tuple_formattable_<T, C, true> {
-  template <std::size_t... I>
-  static std::true_type check2(index_sequence<I...>,
-                               integer_sequence<bool, (I == I)...>);
+  template <std::size_t... Is>
+  static std::true_type check2(index_sequence<Is...>,
+                               integer_sequence<bool, (Is == Is)...>);
   static std::false_type check2(...);
-  template <std::size_t... I>
+  template <std::size_t... Is>
   static decltype(check2(
-      index_sequence<I...>{},
+      index_sequence<Is...>{},
       integer_sequence<
-          bool, (is_formattable<typename std::tuple_element<I, T>::type,
-                                C>::value)...>{})) check(index_sequence<I...>);
+          bool, (is_formattable<typename std::tuple_element<Is, T>::type,
+                                C>::value)...>{})) check(index_sequence<Is...>);
 
  public:
   static constexpr const bool value =
@@ -270,8 +270,8 @@ template <typename Range>
 using uncvref_type = remove_cvref_t<range_reference_type<Range>>;
 
 template <typename Range>
-using uncvref_first_type = remove_cvref_t<
-    decltype(std::declval<range_reference_type<Range>>().first)>;
+using uncvref_first_type =
+    remove_cvref_t<decltype(std::declval<range_reference_type<Range>>().first)>;
 
 template <typename Range>
 using uncvref_second_type = remove_cvref_t<
@@ -377,7 +377,7 @@ template <typename T, typename Char> struct is_range {
   static constexpr const bool value =
       detail::is_range_<T>::value && !detail::is_std_string_like<T>::value &&
       !std::is_convertible<T, std::basic_string<Char>>::value &&
-      !std::is_constructible<detail::std_string_view<Char>, T>::value;
+      !std::is_convertible<T, detail::std_string_view<Char>>::value;
 };
 
 namespace detail {

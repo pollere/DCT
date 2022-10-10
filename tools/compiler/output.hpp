@@ -223,7 +223,7 @@ struct schemaOut {
         // strings are inserted at the beginning of the stab to minimize
         // the token offset encoding length.
         int n = 0, u = 0, b = 0;
-        for (const auto [len, str] : lm) {
+        for (const auto& [len, str] : lm) {
             b += len;
             if (stab_.find(str) == std::string::npos) {
                 ++u;

@@ -54,7 +54,7 @@ int main(int argc, const char* argv[]) {
         std::unordered_map<thumbPrint,int> tpmap{};
         int c{0};
         for (const auto& [cert, key] : rdCertBundle(buf)) {
-            const auto& ttp = cert.computeThumbPrint();
+            auto ttp = cert.computeThumbPrint();
             if (tpmap.contains(ttp)) print("** duplicate thumbprints: cert {} and {}.\n", tpmap[ttp], c);
             tpmap[ttp] = c++;
         }
@@ -68,7 +68,10 @@ int main(int argc, const char* argv[]) {
             } else {
                 print("{} <= {}", c, tpmap[stp]);
             }
-            if (verbose) print(" {:02x} ", fmt::join(std::span(cert.computeThumbPrint()).first(4),""));
+            if (verbose) {
+                auto ttp = cert.computeThumbPrint();
+                print(" {:02x} ", fmt::join(std::span(ttp).first(4),""));
+            }
             print(": {}", rData(cert).name());
             if (key.size()) print(" key '{:x}...", fmt::join(std::span{key}.first(4), ""));
             print("\n");

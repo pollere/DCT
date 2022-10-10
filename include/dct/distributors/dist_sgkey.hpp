@@ -327,7 +327,8 @@ struct DistSGKey {
     // Publish the subscriber group key list from thumbpring tpl to thumbprint tph
    // kr names <m_pubPrefix><epoch><low tpId><high tpId><timestamp>
     void publishKeyRange(auto& tpl, auto& tph, auto ts, auto& c) {
-        auto TP = [](auto tp){ return std::span(tp).first(4); };    //constant 4 can be determined dynamically later
+        //constant 4 can be determined dynamically later
+        const auto TP = [](const auto& tp){ return std::span(tp).first(4); };
         crData p(m_pubPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
         p.content(c);
         m_keySM.sign(p);
@@ -350,7 +351,7 @@ struct DistSGKey {
         for (auto& [k,v]: m_mbrList) {
             encSGK egKey;
             crypto_box_seal(egKey.data(), m_sgSK.data(), m_sgSK.size(), v.data());
-            pubPairs.push_back(egkr(k,egKey));
+            pubPairs.emplace_back(k,egKey);
         }
 
         auto s = m_mbrList.size();

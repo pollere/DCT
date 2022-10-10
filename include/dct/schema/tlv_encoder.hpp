@@ -86,9 +86,18 @@ struct tlvEncoder {
 
     // Add the contents of container C. (For non-contiguous containers like maps or sets
     // use the 3 argument call that adds item-by-item.)
-    template <typename C> requires std::is_trivially_copyable_v<typename C::value_type>
-                                    && std::contiguous_iterator<typename C::iterator>
+    template <typename C> requires std::contiguous_iterator<typename C::iterator> &&
+                                   std::is_trivially_copyable_v<typename C::value_type>
     void addArray(uint8_t typ, const C& c) {
+        auto len = c.size() * sizeof(c.front());
+        std::span s((const uint8_t*)c.data(), len);
+        addArrayTlvHeader(typ, len);
+        m_blk.insert(m_blk.end(), s.begin(), s.end());
+        m_off = m_blk.size();
+    }
+    template <typename T1, typename T2> requires std::is_trivially_copyable_v<T1> &&
+                                                 std::is_trivially_copyable_v<T2>
+    void addArray(uint8_t typ, const std::vector<std::pair<T1,T2>>& c) {
         auto len = c.size() * sizeof(c.front());
         std::span s((const uint8_t*)c.data(), len);
         addArrayTlvHeader(typ, len);

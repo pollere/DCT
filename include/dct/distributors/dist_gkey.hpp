@@ -290,8 +290,9 @@ struct DistGKey {
 
    // Publish the group key list from thumbpring tpl to thumbprint tph
    // gk names <m_pubPrefix><epoch><low tpId><high tpId><timestamp>
-    void publishKeyRange(auto& tpl, auto& tph, auto ts, auto& c) {
-        auto TP = [](auto tp){ return std::span(tp).first(4); };    //constant 4 can be determined dynamically later
+    void publishKeyRange(const auto& tpl, const auto& tph, auto ts, auto& c) {
+        //constant 4 may be determined dynamically later
+        const auto TP = [](const auto& tp){ return std::span(tp).first(4); };
         crData p(m_pubPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
         p.content(c);
         m_keySM.sign(p);
@@ -309,11 +310,11 @@ struct DistGKey {
 
         //encrypt the new group key for all the group members in a sealed box
         // that can only opened by the secret key associated with converted public key in mbrList
-        std::vector<gkr> pubPairs;
-        for (auto& [k,v]: m_mbrList) {
+        std::vector<gkr> pubPairs{};
+        for (const auto& [k,v]: m_mbrList) {
             encGK egKey;
             crypto_box_seal(egKey.data(), m_curKey.data(), m_curKey.size(), v.data());
-            pubPairs.push_back(gkr(k,egKey));
+            pubPairs.emplace_back(k, egKey);
         }
 
         auto s = m_mbrList.size();
@@ -375,7 +376,7 @@ struct DistGKey {
         if (!m_init) {   //publish the group key for this new peer
             encGK egKey;
             crypto_box_seal(egKey.data(), m_curKey.data(), m_curKey.size(), m_mbrList[tp].data());
-            std::vector<gkr> ek {{tp,egKey}};
+            std::vector<gkr> ek{ {tp, egKey} };
             tlvEncoder gkrEnc{};    //tlv encoded content
             gkrEnc.addNumber(36, m_curKeyCT);
             gkrEnc.addArray(130, ek);
