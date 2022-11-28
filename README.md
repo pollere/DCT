@@ -47,7 +47,7 @@ The included versec compiler is required to compile new schemas but pre-compiled
 
 ### References and related work
 
-We have created an internet draft to describe DeftT (currently in version 00): https://www.ietf.org/archive/id/draft-nichols-tsv-defined-trust-transport-00.html with overview talk at: https://youtu.be/YSmxis1puuE?t=2170 slides at: http://pollere.net/Pdfdocs/slides-114-iotops-defined-trust-transport-00.pdf
+DeftT is described in an internet draft: https://www.ietf.org/archive/id/draft-nichols-iotops-defined-trust-transport-00.html with overview talk at: https://youtu.be/YSmxis1puuE?t=2170 slides at: http://pollere.net/Pdfdocs/slides-114-iotops-defined-trust-transport-00.pdf
 
 Some concepts here may be better understood by referencing earlier Pollere work: 
 
