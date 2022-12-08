@@ -35,4 +35,4 @@ PPAEAD has the possible vulnerability that a SG member can create the encryption
 
 Currently, publisher privacy can only be applied on the cAdd transport PDUs (and not on the Publications). This is temporary until some minor changes are made in syncps.hpp. Applying publisher privacy on the Publication packet may be a better strategy for most applications.
 
-Copyright (C) 2022 Pollere LLC :q
+Copyright (C) 2022 Pollere LLC

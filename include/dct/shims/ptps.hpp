@@ -70,7 +70,6 @@ struct DCTmodelPT final : DCTmodel {
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(pub));
             auto valid = pubval.matchTmplt(bs_, pub.name());
-            //if (!valid) print("invalid str {}\n", pub.getName().toUri());
             return valid;
         } catch (std::exception&) {}
         return false;
@@ -88,7 +87,7 @@ struct DCTmodelPT final : DCTmodel {
                             ckd.publishCert(cert);
                             if(!wasRelayed(cert.computeThumbPrint())) {
                                 m_rlyCertCb(cert);
-                                if (isSigningCert(cert)) gkd.addGroupMem(cert);
+                                if (isSigningCert(cert)) gkd.addGroupMem(cert); //privacy is per local subnet
                             }
                          };
         } else if (m_sgkd) {    //sg is currently on possible on wire prefix
@@ -228,6 +227,7 @@ struct ptps
             publish(std::move(p));
             return true;
         } else {
+            //print("publishValid failed to validate {}\n", p.name());
             return false;
         }
     }
@@ -265,7 +265,8 @@ struct ptps
      * less general and not "belt and suspenders"
      */
     void addRelayedCert(const rData c) {
-        auto tp = c.thumbprint();
+        auto tp = c.computeTP();
+        if(m_pb.certs().contains(tp)) return;
         if(!m_pb.wasRelayed(tp)) {
             m_pb.addRelayed(tp);    //put on list of certs that were relayed to this BT
             m_pb.addCert(c);

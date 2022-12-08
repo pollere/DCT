@@ -50,6 +50,9 @@ roleCert:    _network/_role/_roleId/_keyinfo <= netCert
 capCert: _net/"CAP"/_capId/_capArg/_keyinfo
 
 // The relay remote bundle needs to have the key maker capability
+//  could limit the possible device types to frontdoor to keep from
+//  relaying unusued certs
+// devCert: roleCert & { _role: "device" } & {_roleId: "frontdoor" } <= netCert
 
 kmCap:   capCert & { _capId: "KM" } <= netCert
 opCert:  roleCert & { _role: "operator" } <= netCert

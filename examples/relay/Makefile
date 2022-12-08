@@ -18,9 +18,9 @@ CXX=clang++
 LIBS += -L/opt/local/lib -lsodium
 JUNK += $(addsuffix .dSYM,$(BINS))
 else
-# ubuntu packages are compiled with gcc and its sanitizer doesn't cooperate with clang's
-CXX=c++
-LIBS += -lpthread -lsodium
+#CXX=c++
+CXX=clang++
+LIBS += -lsodium
 endif
 
 #all: $(BINS)

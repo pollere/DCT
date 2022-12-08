@@ -2,8 +2,8 @@
 # starts up the IoT entities and a relay
 # do "killall app2" to terminate 
 
-DCT_DEFAULT_IF=lo0
-export DCT_DEFAULT_IF
+DCT_LOCALHOST_MULTICAST=1
+export DCT_LOCALHOST_MULTICAST
 
 # ids=(frontdoor bob gate alice backdoor patio)
 ids=(frontdoor gate)
