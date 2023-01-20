@@ -106,8 +106,8 @@ struct rPrefix : tlvParser {
 };
 
 // name ordering is lexicographic
-auto rName::operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
-bool rName::isPrefix(const rName& nm) const noexcept { return rPrefix(*this).isPrefix(rPrefix(nm)); }
+inline auto rName::operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
+inline bool rName::isPrefix(const rName& nm) const noexcept { return rPrefix(*this).isPrefix(rPrefix(nm)); }
 
 template<> struct std::hash<rName> {
     size_t operator()(const rName& c) const noexcept { return std::hash<tlvParser>{}(c); }
