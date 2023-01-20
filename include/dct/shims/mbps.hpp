@@ -97,6 +97,7 @@ struct mbps
     mbps(std::string_view bootstrap) : mbps(bootstrap, "")  { }
 
     void run() { m_pb.run(); }
+    void stop() { m_pb.stop(); }
     const auto& pubPrefix() const noexcept { return m_pubpre; }
 
     /* relies on trust schema using mbps conventions of collecting all the signing chain

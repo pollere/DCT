@@ -234,6 +234,7 @@ struct DCTmodel {
     // export the syncps API
  
     auto run() { m_sync.run(); };
+    auto stop() { m_sync.stop(); }
 
     auto& subscribe(const Name& topic, SubCb&& cb) {
         m_sync.subscribe(crPrefix{topic}, std::move(cb));

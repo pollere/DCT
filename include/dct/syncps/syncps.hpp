@@ -496,9 +496,14 @@ struct SyncPS {
     auto& autoStart(bool yesNo) { autoStart_ = yesNo; return *this; }
 
     /**
-     * @brief start running the event manager main loop (usually doesn't return)
+     * @brief start running the event manager main loop (use stop() to return)
      */
     void run() { getDefaultIoContext().run(); }
+
+    /**
+     * @brief stop the running the event manager main loop
+     */
+    void stop() { getDefaultIoContext().stop(); }
 
     /**
      * @brief methods to change callbacks
