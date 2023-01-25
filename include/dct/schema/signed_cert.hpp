@@ -55,9 +55,11 @@ static inline std::pair<keyVal,keyVal> createKeypair() {
  *
  *  @returns a pair consisting of the signed cert and its signing key
  */
-static inline std::pair<dctCert,keyVal> signedCert(crName&& nm, SigMgr& sm) {
+static inline std::pair<dctCert,keyVal> signedCert(crName&& nm, SigMgr& sm,
+        std::chrono::seconds lifetime = std::chrono::days(365),
+        std::chrono::system_clock::time_point strt = std::chrono::system_clock::now()) {
     auto [pk, sk] = createKeypair();
-    return {dctCert(std::move(nm), pk, sm), sk};
+    return {dctCert(std::move(nm), pk, sm, strt, lifetime), sk};
 }
 
 /**

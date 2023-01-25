@@ -73,10 +73,14 @@ using IsExpiredCb = std::function<bool(const rPub&)>;
 using GetLifetimeCb = std::function<std::chrono::milliseconds(const rPub&)>;
 /**
  * @brief app callback to filter peer publication requests
+ *
+ * Changed the Cb to return a bool in order to indicate if new local pubs
+ * are on the ordered vector. This value will be set to true in the default
+ * so it has same behavior as before.
  */
 using PubPtr = rPub;
 using PubVec = std::vector<PubPtr>;
-using OrderPubCb = std::function<void(PubVec&)>;
+using OrderPubCb = std::function<bool(PubVec&,PubVec&)>;
 
 /**
  * @brief sync a collection of publications between an arbitrary set of nodes.
@@ -167,7 +171,8 @@ struct SyncPS {
     std::chrono::milliseconds pubLifetime_{maxPubLifetime};
     std::chrono::milliseconds pubExpirationGB_{maxPubLifetime};
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
-    std::uniform_int_distribution<unsigned short> randInt_{1u, 13u}; // cstate publish delay interval
+    pTimer scheduledCAddId_{std::make_shared<Timer>(getDefaultIoContext())};
+    std::uniform_int_distribution<unsigned short> randInt_{7u, 23u}; // cstate publish delay interval
     Nonce  nonce_{};                // nonce of current cState
     uint32_t publications_{};       // # local publications
     bool delivering_{false};        // currently processing a cAdd
@@ -179,11 +184,12 @@ struct SyncPS {
         // if the time from publication to now is >= the pub lifetime
         [this](const auto& p) { auto dt = std::chrono::system_clock::now() - p.name().last().toTimestamp();
                          return dt >= getLifetime_(p) + maxClockSkew || dt <= -maxClockSkew; } };
-    OrderPubCb orderPub_{[](PubVec& pv){
+    OrderPubCb orderPub_{[](PubVec& pv, PubVec&){   //default doesn't send others pubs
             // can't use modern c++ on a mac
             //std::ranges::sort(pOurs, {}, [](const auto& p) { return p.name().last().toTimestamp(); });
             std::sort(pv.begin(), pv.end(), [](const auto& p1, const auto& p2){
                     return p1.name().last().toTimestamp() > p2.name().last().toTimestamp(); });
+            return true;    //to keep same behavior as before adding resending
         }
     };
 
@@ -266,23 +272,40 @@ struct SyncPS {
     }
 
     /**
+     * @brief deliver a publication to a subscription's callback
+     *
+     * Since pub content may be encrypted, handles decrypting a copy
+     * of the pub before presenting it to the subscriber then deleting
+     * the copy (plaintext versions of encrypted objects must be ephemeral).
+     */
+    void deliver(const rPub& pub, const SubCb& cb) {
+        // print("syncps delivering: {}\n", pub.name());
+        if (pubSigmgr_.encryptsContent() && pub.content().size() > 0) {
+            Publication pcpy{pub};
+            if (pubSigmgr_.decrypt(pcpy)) cb(pcpy);
+            return;
+        }
+        cb(pub);
+    }
+
+    /**
      * @brief subscribe to a topic
      *
      * Calls 'cb' on each new publication to 'topic' arriving
      * from some external source.
      */
     auto& subscribe(crPrefix&& topic, SubCb&& cb) {
-        //print("subscribe {}\n", (rPrefix)topic);
+        // print("syncps::subscribe called for {}\n", (rPrefix)topic);
         // add to subscription dispatch table. If subscription is new,
         // 'cb' will be called with each matching item in the active
         // publication list. Otherwise subscription will be
-        // only be changed to the new callback.
+        // changed to the new callback.
         if (auto t = subscriptions_.find(topic); t != subscriptions_.end()) {
             t->second = std::move(cb);
             return *this;
         }
         // deliver all active pubs matching this subscription
-        for (const auto& [h, pe] : pubs_) if (pe.fromNet() && topic.isPrefix(pe.i_.name())) cb(pe.i_);
+        for (const auto& [h, pe] : pubs_) if (pe.fromNet() && topic.isPrefix(pe.i_.name())) deliver(pe.i_, cb);
 
         subscriptions_.add(std::move(topic), std::move(cb));
         return *this;
@@ -308,7 +331,7 @@ struct SyncPS {
      * Creates & sends cState of the form: /<sync-prefix>/<own-IBF>
      */
     void sendCState() {
-        // if n cState is sent before the initial register is done the reply can't
+        // if a cState is sent before the initial register is done the reply can't
         // reach us. don't send now since the register callback will do it.
         if (registering_) return;
 
@@ -316,7 +339,9 @@ struct SyncPS {
         nonce_ = rand32();
         face_.express(crInterest(collName_/pubs_.iblt().rlEncode(), cStateLifetime_, nonce_),
                         [this](auto ri, auto rd) { // cAdd response to interest
+                            // print("syncps received cAdd: {}\n", rd.name());
                             if (! pktSigmgr_.validateDecrypt(rd)) {
+                                // print("syncps invalid cAdd: {}\n", rd.name());
                                 // Got an invalid cAdd so ignore the pubs it contains.  Need to reissue
                                 // our pending cState but delay a bit or we'll get the same thing again.
                                 // XXX may want to track & filter out bad actors to avoid DoS potential here.
@@ -355,6 +380,9 @@ struct SyncPS {
     }
 
     bool handleCState(const rName& name) {
+        //if a scheduleCAddId_ is set, cancel it
+        scheduledCAddId_->cancel(); // (should I only do this for a network cState?)
+
         // The last component of 'name' is the peer's iblt. 'Peeling'
         // the difference between the peer's iblt & ours gives two sets:
         //   have - (hashes of) items we have that they don't
@@ -370,28 +398,44 @@ struct SyncPS {
         auto [have, need] = (pubs_.iblt() - iblt).peel();
         if (have.size() == 0) return false;
 
-        PubVec pv{};
+        PubVec pv{}, pvOth{};    //vectors of publications I have, local or others
         for (const auto hash : have) {
-            if (const auto& p = pubs_.find(hash); p != pubs_.end() && p->second.local()) pv.emplace_back(p->second.i_);
+            //if (const auto& p = pubs_.find(hash); p != pubs_.end()) pv.emplace_back(p->second.i_);
+            if (const auto& p = pubs_.find(hash); p != pubs_.end() ) {
+                if(p->second.local()) pv.emplace_back(p->second.i_);
+                else pvOth.emplace_back(p->second.i_);
+            }
         }
-        if (pv.empty()) return false;
+        if (pv.empty() && pvOth.empty()) return false;
 
-        // if both have & need are non-zero, peer may need our current cState to reply
+        // if both have & need are non-zero, peer may need our current cState to generate a cAdd
         if (need.size() != 0 && !delivering_) sendCStateSoon();
 
+        auto newPubs = orderPub_(pv,pvOth);    //order priority returns all pubs to send in pv
+        if(pv.empty()) return false;
+        auto othPubs = false;
         // send all the pubs that will fit in a cAdd packet, always sending at least one.
         if (pv.size() > 1) {
-            orderPub_(pv);
             for (size_t i{}, psize{}; i < pv.size(); ++i) {
                 if (pv[i].size() > maxPubSize) {
-                    print("pub {} too large: {} {}\n", i, pv[i].size(), pv[i].name());
+                    // print("pub {} too large: {} {}\n", i, pv[i].size(), pv[i].name());
                     abort();
                 }
-                if ((psize += pv[i].size()) > maxPubSize) { pv.resize(i); break; }
+                if ((psize += pv[i].size()) > maxPubSize) {
+                    if(pubs_.at(hashPub(pv[i])).fromNet())
+                        othPubs = true;
+                    pv.resize(i); break; }
             }
         }
         auto cAdd = crData{name}.content(pv);
-        if (pktSigmgr_.sign(cAdd)) face_.send(cAdd);
+        // newPubs = true => there's a new local publication in this cAdd
+        // othPubs =  true => there are publications from others in this cAdd
+        if(newPubs | !othPubs) {   //both send and resend own with priority
+            if (pktSigmgr_.sign(cAdd)) face_.send(cAdd);
+        } else if (pktSigmgr_.sign(cAdd)) {   //delay sending others pubs (sign in lambda?)
+            // schedule to send after a delay (cancel sending if new cState shows up)
+            scheduledCAddId_ = schedule(std::chrono::milliseconds(randInt()), [this,cAdd]{ face_.send(cAdd); });
+        }
         return true;
     }
 
@@ -422,27 +466,24 @@ struct SyncPS {
             if (! c.isType(tlv::Data)) continue;
             rData d(c);
             if (! d.valid() || pubs_.contains(d)) {
-                //print("pub invalid or dup: {}\n", d.name());
+                // print("syncps: pub invalid or dup: {}\n", d.name());
                 continue;
             }
             if (isExpired_(d) || ! pubSigmgr_.validate(d)) {
-                //print("pub {}: {}\n", isExpired_(d)? "expired":"failed validation", d.name());
+                // print("pub {}: {}\n", isExpired_(d)? "expired":"failed validation", d.name());
                 // unwanted pubs have to go in our iblt or we'll keep getting them
                 ignorePub(d);
                 continue;
             }
 
-            // we don't already have this publication so deliver it
-            // to the longest match subscription.
+            // we don't already have this publication so add it to the
+            // collection then deliver it to the longest match subscription.
             if (addToActive(crData(d), false) == 0) {
-                //print("addToActive failed: {}\n", d.name());
+                // print("addToActive failed: {}\n", d.name());
                 continue;
             }
-            if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) {
-                //print("delivering: {}\n", d.name());
-                s->second(d);
-            //} else { print("no subscription for {}\n", d.name());
-            }
+            if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) deliver(d, s->second);
+            // else print("syncps::onCAdd: no subscription for {}\n", d.name());
         }
 
         // We've delivered all the publications in the cAdd.  There may be
@@ -496,9 +537,14 @@ struct SyncPS {
     auto& autoStart(bool yesNo) { autoStart_ = yesNo; return *this; }
 
     /**
-     * @brief start running the event manager main loop (usually doesn't return)
+     * @brief start running the event manager main loop (use stop() to return)
      */
     void run() { getDefaultIoContext().run(); }
+
+    /**
+     * @brief stop the running the event manager main loop
+     */
+    void stop() { getDefaultIoContext().stop(); }
 
     /**
      * @brief methods to change callbacks

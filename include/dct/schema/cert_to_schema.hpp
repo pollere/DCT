@@ -32,7 +32,7 @@
 // return the binary schema associated with certificate 'cert'
 // It's assumed that the cert signature has been validated and
 // the cert name checked for conformance to schema conventions.
-bSchema certToSchema(const dctCert& cert, thumbPrint& tp) {
+static inline bSchema certToSchema(const dctCert& cert, thumbPrint& tp) {
     std::istringstream is(std::string(cert.content().toSv()), std::ios::binary);
     auto bs = rdSchema(is).read();
     bs.schemaTP_.insert(bs.schemaTP_.begin(), tp.begin(), tp.end());

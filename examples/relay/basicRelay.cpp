@@ -50,6 +50,7 @@
 #include <chrono>
 
 #include <dct/shims/ptps.hpp>
+#include "../util/identity_access.hpp"
 
 using namespace std::literals;
 using namespace dct;
@@ -76,7 +77,7 @@ static void help(const char* cname)
 /* Globals */
 
 static std::vector<ptps*> dtList{};
-bool skipValidatePubs;      //skip validate on publish if DeftTs have the same trust schema
+bool skipValidatePubs = false;      // if set true, may skip validate on publish if DeftTs have the same trust schema
 uint32_t failThresh = 0;   //defaults to not set
 using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
 
@@ -91,17 +92,17 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  * that are defined in the sub-TSs. Otherwise publishValid() is recommended.
  */
 static void pubRecv(ptps* s, const Publication& p) {
-    auto now = std::chrono::system_clock::now();
-    print("{:%M:%S} {}:{}:{}\trcvd pub {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-          (s->label().size()? s->label() : "default"), p.name());
+    // auto now = std::chrono::system_clock::now();
+    // print("{:%M:%S} {}:{}:{}\trcvd pub {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
+    //      (s->label().size()? s->label() : "default"), p.name());
     try {
         for (auto sp : dtList)  
-            if (sp != s) { 
+            if (sp != s) {
                 if(skipValidatePubs) {
-                    print("\trelayed w/o validate to interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
+                    // print("\trelayed w/o validate to interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
                     sp->publish(Publication(p));
                 } else {
-                    print("\trelayed to validate for interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
+                   // print("\trelayed to validate for interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
                     sp->publishValid(Publication(p));
                 }
             }
@@ -109,25 +110,25 @@ static void pubRecv(ptps* s, const Publication& p) {
 }
 
 /*
- * certRecv is set as callback when each ptps is constructed. It is invoked upon reception of a crypto validated
- * cert by DeftT s. The cert is then relayed to all the (other) DeftTs for validation and publication
+ * chainRecv is callback set when each ptps is constructed.
+ *  It is invoked upon reception of a crypto validated signing cert by DeftT s which constains its validated chain
+ *  The chain's signging cert and pointer to the arrival cert store  is then relayed to all the (other) DeftTs
+ *  for validation and publication
  *
- * As written, a relay will forward its own identity cert from its other DeftTs which should be superfluous. It's
- * possible to filter on the role of "relay" but not clear if this is desirable. It seems that any cert that does
- * not appear as an "is signed by" for a publication in a DeftT's trust schema should not be forwarded, but this
- * needs further investigation as more subscription restrictions are added. Also it may be more costly to filter
- * the cert than to forward it.
+ *  Any cert that does not appear as an "is signed by" for a publication in a DeftT's trust schema should probably
+ *  not be forwarded, but this needs further investigation as more subscription restrictions are added.
+ *  Also it may be more costly to filter the cert chain than to forward it.
  */
-static void certRecv(ptps* s, const rData c) {
-    auto now = std::chrono::system_clock::now();
-    print("{:%M:%S} {}:{}:{}\trcvd cert {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-          (s->label().size()? s->label() : "default"), c.name());
+static void chainRecv(ptps* s, const rData c, const certStore& cs) {
+    //auto now = std::chrono::system_clock::now();
+    // print("{:%M:%S} {}:{}:{}\trcvd signing cert {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
+    //      (s->label().size()? s->label() : "default"), c.name());
 
     try {
         for (auto sp : dtList)
         if (sp != s) {
-            print("\trelayed to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
-            sp->addRelayedCert(c);
+            // print("\trelaying its chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
+            sp->addRelayedChain(c, cs);
         }
     } catch (const std::exception& e) { }
 }
@@ -196,7 +197,7 @@ int main(int argc, char* argv[])
         start = ++end;  //skip over comma
     }
     dtLabel.push_back(ccList.substr(start,ccList.size()-start));
-    //for each entry on list, create a ptps api with its bundle and label
+    //for each entry on list, create a ptps
     // (for failovers, might consider only creating a bt when it is needed, depends on application)
     dtList.reserve(dtLabel.size());
     for (const auto& l : dtLabel) {
@@ -204,17 +205,23 @@ int main(int argc, char* argv[])
         if(m == std::string::npos) {
             std::cerr << "basicRelay main: command line list of labels and id bundles misformatted" << std::endl;
         }
+        auto s_id = dtList.size();
+        readBootstrap(l.substr(m+1));    // parse the bootstrap file for this DeftT shim
         try {
-            if(!deliveryConfirmation)
-                dtList.push_back(new ptps{l.substr(m+1), l.substr(0u,m), certRecv});
-            else
-                dtList.push_back(new ptps{l.substr(m+1), l.substr(0u,m), certRecv, pubFailure});
+            if(!deliveryConfirmation) {
+                dtList.push_back( new ptps{rootCert, [i=s_id](){ return schemaCert(i); }, [i=s_id](){ return identityChain(i); },
+                                               [i=s_id](){ return currentSigningPair(i); }, l.substr(0u,m), chainRecv} );
+            } else {
+                dtList.push_back( new ptps{rootCert, [i=s_id](){ return schemaCert(i); }, [i=s_id](){ return identityChain(i); },
+                                               [i=s_id](){ return currentSigningPair(i); }, l.substr(0u,m), chainRecv, pubFailure} );
+            }
         } catch (const std::exception& e) {
             std::cerr << "basicRelay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;
             exit(1);
         }
         auto& s = *dtList.back();
-        //role must be "relay" (could change this)
+
+        //role must be "relay" (could remove this)
         if(s.attribute("_role") != "relay") {
                 print("basicRelay app got role {} for interFace {} instead of relay\n",
                       s.attribute("_role"), s.label());
@@ -237,8 +244,12 @@ int main(int argc, char* argv[])
             exit(1);
         }
     }
-    //check if a "sub" trust schema is in use on a DeftT
+    //check if a "sub" trust schema is in use on a DeftT (thumbprint will differ)
     const auto& tp = dtList.front()->schemaTP();
-    skipValidatePubs = std::all_of(dtList.begin(), dtList.end(), [&tp](const auto i){ return i->schemaTP() == tp;});
+    // this could be more complex with different DeftT shims checked for pub compatiblity before passing pubs
+    // between them, but the trust schema will take care of this, silently discarding non-conforming pubs
+    // This test is only done if skipValidatePubs is set true initially. Offered as a non-recommended option.
+    if (skipValidatePubs)
+        skipValidatePubs = std::all_of(dtList.begin(), dtList.end(), [&tp](const auto i){ return i->schemaTP() == tp;});
     dtList[0]->run();
 }

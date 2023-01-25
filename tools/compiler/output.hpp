@@ -42,16 +42,14 @@ using namespace bschema;
 // Lengths >= 64K are not allowed.
 static inline void encodeLen(std::ostream& os, int len) {
     if (len < 0 || len >= (1 << 16)) {
-        print("-error: invalid length {}\n", len);
+        print("-error: invalid tlv length {}\n", len);
         abort();
     }
-    if (len < 253) {
-        os.put(char(len));
-    } else {
+    if (len >= 253) {
         os.put(char(253));
         os.put(char(len >> 8));
-        os.put(char(len));
     }
+    os.put(char(len));
 }
 
 // helper to write encoded length & data of vec/string/span/etc. item
@@ -323,30 +321,26 @@ struct schemaOut {
             dprint("cor {}: {}\n", cor_[i], fmt::join(cor_[cor_[i]],","));
         }
     }
-    // map a set of cert chain indices to a bitmap
-    chainBM chainSet(const certSet& chains) const {
-        chainBM cbm{};
-        for (const auto cindx : chains) {
-            auto c = chain_[cindx];
-            if (c > sizeof(cbm)*8) {
-                print("error: chain index too large ({} when max is {})\n", c, sizeof(cbm)*8);
-                abort();
-            }
-            cbm |= 1 << chain_[cindx];
-        }
-        return cbm;
-    }
     // set of 'discrimnator' values for some parameter. Since most of
     // these sets contain one value, multi-value sets are indicated by
     // setting the high bit of the return value with the remaining bits
     // giving the index of set in discVals_. Otherwise the entry is the
     // token index of value to compare with.
     bVLidx dValList(const compSet& vs) {
+        if (vs.none()) return 0;
         if (vs.count() == 1) return rawTok(vs.find_first());
 
         bName vals{};
         vs.for_each([this,&vals](auto v){ vals.emplace_back(rawTok(v));});
         return discVals_.add(vs, vals) | 0x80;
+    }
+    // add one discrim entry to output schema
+    auto addDiscrim(auto cbm, auto tmplt, auto par, auto val, auto lcor) {
+        dprint("tmplt {}: {:02x}, cor {}, chainBM {:02x}, ", tmplt,
+                fmt::join(template_[tmplt],"/"), lcor, cbm);
+        auto d = discrim_.add(tDiscrim{cbm, tmplt, par, val, lcor});
+        dprint("discrim {}: {}\n", d, discrim_[d]);
+        return d;
     }
     discBM addPubDiscrim(sComp pub, parmBM param) {
         discBM discbm{};
@@ -360,17 +354,28 @@ struct schemaOut {
                 if ((param & (1 << i)) == 0 || nm[i].isLit() || (nm[i].isStr() && !drv_.isParam(nm[i]))) continue;
                 template_.v_[tmplt][i] = i | SC_PARAM;
             }
-            //XXX following assumes all chains for this template have
-            // the same correspondences. This may not hold in the future.
-            auto cs = chainSet(cer);
-            coridx cor = (cs == 0)? 0 : cor_[*cer.cbegin()];
-            dprint("tmplt {}: {:02x}, cor {}, chainBM {:02x} ({}), ", tmplt,
-                    fmt::join(template_[tmplt],"/"), cor, cs, cer);
-
-            bVLidx vidx = vals.none()? 0 : dValList(vals);
-            auto d = discrim_.add(tDiscrim{cs, tmplt, par, vidx, cor});
-            discbm |= 1ul << d;
-            dprint("discrim {}: {}\n", d, discrim_[d]);
+            // 'cer' is a set of indices of the cert chains that can sign this template.
+            // collect chains with the same cors into chain set bitmap 'cs' then output
+            // a discrim for each.
+            chainBM cbm{};
+            coridx lcor{0xff};
+            for (auto ch : cer) {
+                if (cor_[ch] != lcor) {
+                    // different cors for this chain. If discrim in progress output it then
+                    // start accumulating chains with new cor.
+                    if (lcor != 0xff) discbm |= 1ul << addDiscrim(cbm, tmplt, par, dValList(vals), lcor);
+                    lcor = cor_[ch];
+                    cbm = 0;
+                }
+                auto c = chain_[ch];
+                if (c > sizeof(cbm)*8) {
+                    print("error: chain index too large ({} when max is {})\n", c, sizeof(cbm)*8);
+                    abort();
+                }
+                cbm |= 1 << c;
+            }
+            if (lcor == 0xff) lcor = 0;
+            discbm |= 1ul << addDiscrim(cbm, tmplt, par, dValList(vals), lcor);
         }
         return discbm;
     }

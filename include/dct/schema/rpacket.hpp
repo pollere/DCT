@@ -34,13 +34,13 @@ extern "C" {
 // return a parser for a Name object.
 struct rName : tlvParser {
     constexpr rName() = default;
-    rName(const rName&) = default;
-    rName(rName&&) = default;
-    rName& operator=(const rName&) = default;
-    rName& operator=(rName&&) = default;
+    constexpr rName(const rName&) = default;
+    constexpr rName(rName&&) = default;
+    constexpr rName& operator=(const rName&) = default;
+    constexpr rName& operator=(rName&&) = default;
 
-    rName(tlvParser n) : tlvParser(n) { }
-    rName(const std::vector<uint8_t>& v) : tlvParser(v) { }
+    constexpr rName(tlvParser n) : tlvParser(n) { }
+    constexpr rName(const std::vector<uint8_t>& v) : tlvParser(v) { }
 
     // a name is valid if its length exactly covers its contained TLVs.
     bool valid() const {
@@ -53,16 +53,22 @@ struct rName : tlvParser {
 
     auto last() const { return lastBlk(); }
 
-    //XXX should be constexpr once https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/p1944r1.pdf
-    // and/or https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0202r1.html adopted.
-    auto operator<=>(const rName& rhs) const noexcept;
+    constexpr auto operator<=>(const rName& rhs) const noexcept;
 
-    auto operator==(const rName& rhs) const noexcept {
+    constexpr auto operator==(const rName& rhs) const noexcept {
         if (size() != rhs.size()) return false;
         return std::memcmp(data(), rhs.data(), size()) == 0;
     }
 
-    bool isPrefix(const rName& nm) const noexcept;
+    // return a tlvParser for component 'comp' of this. If 'comp' is negative,
+    // the component is -comp from the end.
+    auto operator[](int comp) const {
+        if (comp < 0) comp += nBlks();
+        return nthBlk(comp);
+    }
+
+    constexpr bool isPrefix(const rName& nm) const noexcept;
+    constexpr auto first(int comp) const;
 };
 
 // A name prefix is the body of a name. I.e., the list of component
@@ -71,43 +77,65 @@ struct rName : tlvParser {
 // but prefixes can.
 struct rPrefix : tlvParser {
     constexpr rPrefix() = default;
-    rPrefix(const rPrefix&) = default;
-    rPrefix(rPrefix&&) = default;
-    rPrefix& operator=(const rPrefix&) = default;
-    rPrefix& operator=(rPrefix&&) = default;
+    constexpr rPrefix(const rPrefix&) = default;
+    constexpr rPrefix(rPrefix&&) = default;
+    constexpr rPrefix& operator=(const rPrefix&) = default;
+    constexpr rPrefix& operator=(rPrefix&&) = default;
 
     constexpr rPrefix(rName n) : tlvParser(n.rest(), 0) { }
     constexpr rPrefix(rPrefix p, size_t sz) : tlvParser(tlvParser::Blk{p.data(), sz}, 0) { }
 
     using ordering = std::strong_ordering;
-    //XXX constexpr as per comment above
-    auto operator<=>(const rPrefix& rhs) const noexcept {
+
+    constexpr auto operator<=>(const rPrefix& rhs) const noexcept {
         auto tsz = size();
         auto rsz = rhs.size();
+        auto msz = tsz <= rsz? tsz : rsz;
+        if (msz == 0) return tsz <=> rsz;
         // binary compare using the length of the shorter name. if one name
         // is a prefix of the other the shorter is 'less'
-        auto res = std::memcmp(data(), rhs.data(), tsz <= rsz? tsz : rsz);
+        auto res = std::memcmp(data(), rhs.data(), msz);
         if (res == 0) return tsz <=> rsz;
         return res < 0? ordering::less : ordering::greater;
     }
-    auto operator==(const rPrefix& rhs) const noexcept {
+    constexpr auto operator==(const rPrefix& rhs) const noexcept {
         if (size() != rhs.size()) return false;
         return std::memcmp(data(), rhs.data(), size()) == 0;
     }
 
     // 'true' if this prefix is a prefix of 'p'
-    bool isPrefix(const rPrefix& p) const noexcept {
+    constexpr bool isPrefix(const rPrefix& p) const noexcept {
         auto tsz = size();
         auto psz = p.size();
         if (psz < tsz) return false;
         return std::memcmp(data(), p.data(), tsz) == 0;
     }
     constexpr bool isPrefix(const rName& n) const noexcept { return isPrefix(rPrefix{n}); }
+
+    // return a tlvParser for component 'comp' of this. If 'comp' is negative,
+    // the component is -comp from the end.
+    auto operator[](int comp) const {
+        if (comp < 0) comp += nBlks();
+        return nthBlk(comp);
+    }
+
+    // return an rprefix for the first 'comp' components of this. If 'comp' is negative,
+    // the parser contains all components up to -comp from the end.
+    constexpr auto first(int comp) const {
+        auto n = nBlks();
+        if (comp < 0) comp += n;
+        if (comp == 0) throw runtime_error("rPrefix::first: zero length prefix requested");
+        if (std::cmp_greater(comp, n)) throw runtime_error("rPrefix::first: component index too large");
+        if (std::cmp_equal(comp, n)) return rPrefix{*this};
+        return rPrefix(*this, nthBlk(comp).data() - data());
+    }
 };
 
-// name ordering is lexicographic
-auto rName::operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
-bool rName::isPrefix(const rName& nm) const noexcept { return rPrefix(*this).isPrefix(rPrefix(nm)); }
+// name ordering is lexicographic, not shortest first
+constexpr auto rName::operator<=>(const rName& rhs) const noexcept { return rPrefix(*this) <=> rPrefix(rhs); }
+
+constexpr bool rName::isPrefix(const rName& nm) const noexcept { return rPrefix(*this).isPrefix(rPrefix(nm)); }
+constexpr auto rName::first(int comp) const { return rPrefix(*this).first(comp); }
 
 template<> struct std::hash<rName> {
     size_t operator()(const rName& c) const noexcept { return std::hash<tlvParser>{}(c); }

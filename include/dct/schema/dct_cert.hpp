@@ -83,6 +83,7 @@ struct dctCert : crCert {
     using seconds = std::chrono::seconds;
     using days = std::chrono::days;
 
+    constexpr dctCert() = default;
     dctCert(rCert d) : crCert(d) { }
 
     static constexpr auto keyId(keyRef pk) {

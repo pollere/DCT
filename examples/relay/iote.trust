@@ -7,8 +7,8 @@
 // will be used for the "home" multicast DeftT  of the relay.
 // This uses AEAD so that external packets would be encrypted
 
-// trust anchor name associated with this schema
-_network:    "iot"
+// trust anchor name associated with this domain
+_domain:    "iot"
 
 // MBPS Publication definition
 // target, topic, topicArgs are set using application parameters
@@ -16,23 +16,31 @@ _network:    "iot"
 // In addition, all trust schemas for mbps-based applications must include a #chainInfo
 // which lists all the signing chain tags so schemaLib can access them
 // A particular application process can make its subscription more
-// specific by using a subscription list with specific subset (designated
+// specific by using a subscription list with specific subcollection (designated
 // by targets) and related callback functions.
 
-#iotPub: _network/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
     _origin:   sysId()
 }
 
 lockReport: #iotPub & { target: "lock", topic: "event"|"status"
     trgtLoc: "frontdoor"
     topicArgs: "locked" | "unlocked"
-} <= devCert 
+} <= devSign 
 
 lockCommand: #iotPub & { target: "lock", topic: "command" } &
     { trgtLoc: "frontdoor" } &
-    { topicArgs:  "lock"|"unlock"|"report" } <= opCert
+    { topicArgs:  "lock"|"unlock"|"report" } <= opSign
 
-roleCert:    _network/_role/_roleId/_keyinfo <= netCert
+roleCert:    _domain/_role/_roleId/_keyinfo
+signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
+
+opSign:  signCert & { _role: "operator" } <= mbrCert
+devSign: signCert & { _role: "device" } <= mbrCert
+rlySign: signCert & { _role: "relay" } <= rlyCert
+
+rlyCert: roleCert <= domCert | kmCap
+mbrCert: roleCert <= domCert
 
 // There are different signing chains for opCert & devCerts.
 // "key makers" (authorized by the KM capability, kmCap) are
@@ -47,25 +55,22 @@ roleCert:    _network/_role/_roleId/_keyinfo <= netCert
 // capability certs format (for capabilities granted to roles)
 // This is only for AEAD cAdd signing
 
-capCert: _net/"CAP"/_capId/_capArg/_keyinfo
+capCert: _domain/"CAP"/capId/capArg/_keyinfo
 
 // The relay remote bundle needs to have the key maker capability
 //  could limit the possible device types to frontdoor to keep from
 //  relaying unusued certs
-// devCert: roleCert & { _role: "device" } & {_roleId: "frontdoor" } <= netCert
+// devSign: signCert & { _role: "device" } & {_roleId: "frontdoor" } <= mbrCert
 
-kmCap:   capCert & { _capId: "KM" } <= netCert
-opCert:  roleCert & { _role: "operator" } <= netCert
-devCert: roleCert & { _role: "device" } <= netCert
-rlyCert: roleCert & { _role: "relay" } <= netCert |kmCap
+kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert
 
-netCert: _network/_keyinfo
+domCert: _domain/_keyinfo
 
 // information about signing chain
-#chainInfo: /_role/_roleId <= roleCert
+#chainInfo: /_role/_roleId <= signCert
 
 // schema's Publication prefix and validator type
-#pubPrefix:    _network
+#pubPrefix:    _domain
 #pubValidator: "EdDSA"
 
 // for cAdds

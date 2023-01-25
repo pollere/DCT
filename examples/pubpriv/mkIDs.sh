@@ -14,6 +14,7 @@ Schema=${Schema%.trust}
 Bschema=$Schema.scm
 RootCert=$Schema.root
 SchemaCert=$Schema.schema
+KMCapCert=
 SGCapCert=
 
 schemaCompile -o $Bschema $1
@@ -27,18 +28,26 @@ make_cert -s $PubValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
 
 # PPAEAD and PPSIGN require a subscription group capability cert.
-# At least one member of the SG must have a non-zero capability argument
+# There must be at least one SG member (SG capability)
 # in this cert so that there is at least on key maker
 # Here, just setting all SG members to be potential key makers.
-if [ -z $(schema_info -c $Bschema "SG") ]; then
-    echo
-    echo "- error: PPAEAD/PPSIGN require entity(s) with a SG (subscription group) Capability"
-    echo "         but schema $1 doesn't have any."
-    exit 1;
-fi;
+# if [ -z $(schema_info -c $Bschema "SG") ]; then
+#     echo
+#     echo "- error: PPAEAD/PPSIGN require entity(s) with a SG (subscription group) Capability"
+#     echo "         but schema $1 doesn't have any."
+#     exit 1;
+# fi;
+# if [ -z $(schema_info -c $Bschema "KM") ]; then
+#     echo
+#     echo "- error: PPAEAD/PPSIGN require entity(s) with a KM (KeyMaker) Capability"
+#     echo "         but schema $1 doesn't have any."
+#     exit 1;
+# fi;
+KMCapCert=km.cap
+make_cert -s $PubValidator -o $KMCapCert $PubPrefix/CAP/KM/1 $RootCert
 # make the 'subscriber group' capability cert (with ability to be a key maker)
 SGCapCert=sg.cap
-make_cert -s $PubValidator -o $SGCapCert $PubPrefix/CAP/SG/1 $RootCert
+make_cert -s $PubValidator -o $SGCapCert $PubPrefix/CAP/SG/pdus $KMCapCert
 
 # make the location reporter certs
 for (( n=1; n <= $numLR; ++n )); do
@@ -69,7 +78,7 @@ done
 
 for (( n=1; n <= $numMon; ++n )); do
     if [ -n $SGCapCert ]; then
-	    make_bundle -v -o monitor$n.bundle $RootCert $SchemaCert $SGCapCert +mon$n.cert
+	    make_bundle -v -o monitor$n.bundle $RootCert $SchemaCert $KMCapCert $SGCapCert +mon$n.cert
     else
 	    make_bundle -v -o monitor$n.bundle $RootCert $SchemaCert +mon$n.cert
     fi;

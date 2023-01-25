@@ -155,6 +155,17 @@ struct certStore {
         return cv;
     }
 
+    // invoke 'Op' on every element of the cert chain starting with 'tp'
+    template<typename Op>
+    auto chain_for_each(const thumbPrint& tp, Op&& op) const {
+        const thumbPrint* t = &tp;
+        while (*t != ztp_) {
+            const auto& c = get(*t);
+            op(c);
+            t = &c.thumbprint();
+        }
+    }
+
     auto signingChain() const { return chains_.empty()? certVec{} : chainNames(get(chains_[0])); } //XXX
 
     // return the trust anchor thumbprint of signing chain 'idx'.

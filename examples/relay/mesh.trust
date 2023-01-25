@@ -14,29 +14,33 @@ _domain:    "rlygrp"
 
 #Pub: _domain/target/topic/args/msgID/sCnt/mts
 
-sensRprt: #Pub & { target: "sens", topic: "rpt" } <= sensCert
-sensCmd: #Pub & { target: "sens", topic: "cmd" } <= cntrlCert
-// sensAck: #Pub & { target: "sens", topic: "ack" } <= sensCert
+sensRprt: #Pub & { target: "sens", topic: "rpt" } <= sensSign
+sensCmd: #Pub & { target: "sens", topic: "cmd", args: "read" | "reset" } <= cntrlSign
+// sensAck: #Pub & { target: "sens", topic: "ack" } <= signCert & ( _role: "sensor" }
 
-roleCert:    _domain/_role/_roleId/_keyinfo
+roleCert:   _domain/_role/_roleId/_keyinfo
+signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 
-// There are different signing chains for aggrCert & cntrlCerts.
+// There are different signing chains for sensCert & cntrlCerts.
 // "key makers" (authorized by the KM capability, kmCap) are
 // responsible for creating and distributing the nonce
 // symmetric encryption keys.
-// Giving aggrCert that capability if AEAD is selected
-sensCert:  roleCert & { _role: "sensor" } <= netCert
-cntrlCert: roleCert & { _role: "controller" } <= kmCap | netCert
-rlyCert:  roleCert & { _role: "relay" } <= kmCap | netCert
+// Giving relay Cert that capability if AEAD is selected
+
+sensSign:   signCert & { _role: "sensor" }  <= sensCert
+cntrlSign:  signCert & { _role: "controller" } <= mbrCert
+rlySign:    signCert & { _role: "relay" } <= mbrCert
+sensCert:   roleCert & { _role: "sensor" } <= domCert
+mbrCert:    roleCert <= domCert | kmCap
 
 // capability certs (capabilities granted to roles)
-capCert: _domain/"CAP"/_capId/_capArg/_keyinfo
-kmCap:   capCert & { _capId: "KM" } <= netCert    // allowed to be a key maker (capArg is priority)
+capCert: _domain/"CAP"/capId/capArg/_keyinfo
+kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert    // allowed to be a key maker (capArg is priority)
 
-netCert: _domain/_keyinfo
+domCert: _domain/_keyinfo
 
 // information about signing chain
-#chainInfo: /_role/_roleId <= roleCert
+#chainInfo: /_role/_roleId <= signCert
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain

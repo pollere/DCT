@@ -48,13 +48,13 @@
  * or if such potential forging is not of concern).
  *
  * References:
- * https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/ietf_chacha20-poly1305_construction
+ * https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/ietf_xchacha20-poly1305_construction
  * https://doc.libsodium.org/key_exchange
  * https://doc.libsodium.org/advanced/ed25519-curve25519
  * Encrypts message with key and nonce. Returns resulting ciphertext
  * whose lenth is equal to the message length. Also computes a tag that
  * authenticates the ciphertext plus the ad of adlen and puts the tag
- * into mac of length of crypto_aead_chacha20poly1305_IETF_ABYTES bytes
+ * into mac of length of crypto_aead_xchacha20poly1305_IETF_ABYTES bytes
 
  */
 
@@ -75,9 +75,9 @@
 #include "sigmgr.hpp"
 
 struct SigMgrPPAEAD final : SigMgr {
-    static constexpr uint32_t aeadkeySize = crypto_aead_chacha20poly1305_IETF_KEYBYTES;
-    static constexpr uint32_t nonceSize = crypto_aead_chacha20poly1305_IETF_NPUBBYTES;
-    static constexpr uint32_t macSize = crypto_aead_chacha20poly1305_IETF_ABYTES;
+    static constexpr uint32_t aeadkeySize = crypto_aead_xchacha20poly1305_IETF_KEYBYTES;
+    static constexpr uint32_t nonceSize = crypto_aead_xchacha20poly1305_IETF_NPUBBYTES;
+    static constexpr uint32_t macSize = crypto_aead_xchacha20poly1305_IETF_ABYTES;
     static constexpr uint32_t sigSize = nonceSize + macSize;
 
     struct kpInfo { //holds information about a key pair for a subscription group
@@ -205,10 +205,10 @@ struct SigMgrPPAEAD final : SigMgr {
 
         std::vector<uint8_t> ctext(content.size(),0);
         unsigned long long maclen;
-        crypto_aead_chacha20poly1305_ietf_encrypt_detached(ctext.data(), mac.data(), &maclen,
+        crypto_aead_xchacha20poly1305_ietf_encrypt_detached(ctext.data(), mac.data(), &maclen,
                              content.data(), content.size(), ad.data(), ad.size(),
                              NULL, sig.data(), curKey.data());
-        std::memcpy((uint8_t*)content.data(), ctext.data(), content.size());
+            if (content.size())  std::memcpy((uint8_t*)content.data(), ctext.data(), content.size());
         return true;
     }
 
@@ -241,11 +241,11 @@ struct SigMgrPPAEAD final : SigMgr {
         std::vector<uint8_t> decrypted(content.size(),0);
         auto i = m_decryptIndex;            //start with last successful key
         do {
-            if(crypto_aead_chacha20poly1305_ietf_decrypt_detached(decrypted.data(),
+            if(crypto_aead_xchacha20poly1305_ietf_decrypt_detached(decrypted.data(),
                              NULL, content.data(), content.size(), sig.data() + nonceSize,
                              ad.data(), ad.size(), sig.data(), curKey.data()) == 0) {
                 // copy decrypted content back into packet
-                std::memcpy((uint8_t*)content.data(), decrypted.data(), content.size());
+                if (content.size())  std::memcpy((uint8_t*)content.data(), decrypted.data(), content.size());
                 m_decryptIndex = i; //successful key index
                 return true;
              }

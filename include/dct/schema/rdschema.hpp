@@ -318,12 +318,19 @@ struct rdSchema {
                 return n;
             });
     }
+    // Validate the cor item <c, cert, cor> then return a reference to the bName it's in.
+    // If cert==0, the cor item is in 'tmplt' otherwise it's the cert indexed by the
+    // cert-1 entry in chain_[c].
     const bName& corName(const bName& tmplt, chainidx c, certidx cert, compidx comp) {
         const auto& chain = bs_.chain_[c];
         const auto& n = (cert == 0)? tmplt : bs_.cert_[chain[cert - 1]];
         if (comp >= n.size()) throw schema_error("cor component index too big");
+        if (!isCor(n[comp]) && !isLit(n[comp])) throw schema_error("cor component must be type cor or lit");
+        if (isCor(n[comp]) && typeValue(n[comp]) != comp) throw schema_error("cor component index mismatch");
         return n;
     }
+    // validity check all the cor items in chnCor against template tmplt and all the cert chains
+    // indicated in chainbm.
     void chkCor(chainBM chainbm, const bName& tmplt, const chainCor& chnCor) {
         while (chainbm != 0) {
             auto c = std::countr_zero(chainbm);
@@ -332,10 +339,8 @@ struct rdSchema {
                 if (cert1 >= cert2) throw schema_error("cor cert indices error");
                 auto c1 = corName(tmplt, c, cert1, comp1);
                 auto c2 = corName(tmplt, c, cert2, comp2);
-                // first cert comp must be a cor. second cert can be a cor or a lit but must match first if a cor.
-                if (!isCor(c1[comp1])) throw schema_error("template cor not marked as cor");
-                if (typeValue(c1[comp1]) != comp1) throw schema_error("template cor index mismatch");
-                if (isCor(c2[comp2]) && typeValue(c2[comp2]) != comp2) throw schema_error("cert cor index mismatch");
+                if (isLit(c1[comp1]) && isLit(c2[comp2]) && c1[comp1] != c2[comp2]) 
+                    throw schema_error("literal cor items don't match");
             }
         }
     }

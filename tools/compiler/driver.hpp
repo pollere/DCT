@@ -28,8 +28,11 @@
 #include <set>
 #include <utility>
 
+#include <boost/version.hpp>
+#if BOOST_VERSION < 108100
 // boost 1.80 bug workaround for deprecated std::unary_function removal in c++17
 #define BOOST_NO_CXX98_FUNCTION_BASE 0
+#endif
 #include <boost/dynamic_bitset.hpp>
 
 #include "dct/format.hpp"

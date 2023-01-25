@@ -29,11 +29,18 @@
 
 #include <getopt.h>
 #include <charconv>
+#include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
-#include <chrono>
+#include <random>
 
 #include <dct/shims/mbps.hpp>
+#include "../util/identity_access.hpp"
+
+using namespace std::literals;
+
+static constexpr bool deliveryConfirmation = false; // get per-message delivery confirmation
 
 // handles command line
 static struct option opts[] = {
@@ -68,44 +75,42 @@ static bool Persist = false;
 static std::string capability{"lock"};
 static std::string location{"all"};
 
+using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
+
 /*
  * msgPubr passes messages to publish to mbps. A simple lambda
  * is used if "qos" is desired. A more complex callback (messageConfirmation)
  * is included in this file.
  */
-
-void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
+static void msgPubr(mbps &cm) {
+    // make a message to publish
+    std::string s = format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
+    std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
 
     if(role == "operator") {
-        mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",location},{"topicArgs", "unlock"s}};
+        mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc","all"s},{"topicArgs", "unlock"s}};
     } else {
-        mp = msgParms{{"target", capability},{"topic", "status"s},{"trgtLoc",myId},{"topicArgs", "unlocked"s}};
+        mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", "unlocked"s}};
     }
-    /*
-    cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
-    */
-    cm.publish(std::move(mp), toSend, [](bool s, uint32_t mId) {
-        if(s){
-            std::cout << role << ":" << myId << "-" << myPID << " published message number " << Cnt-1 << " identifier " << mId
-                  << " to Collection." << std::endl;
-        } else {
-            std::cout << role << ":" << myId << "-" << myPID << " message number " << Cnt-1
-                   << " timed out without reaching Collection." << std::endl;
-        }
-        });
+    if constexpr (deliveryConfirmation) {
+        cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
+                    auto now = std::chrono::system_clock::now();
+                    auto dt = ticks(now - ts).count() / 1000.;
+                    print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
+                            tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
+                    });
+    } else {
+        cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
+    }
 
-    if(++Cnt < Done) {  // wait then publish another message
-        cm.oneTime(pubWait, [&cm](){
-            std::string s = "Message number " + std::to_string(Cnt)
-                            + " from " + role + ":" + myId + "-" + myPID;
-            std::vector<uint8_t> m(s.begin(), s.end());
-            msgPubr(cm, m);
-        });
+     if(Cnt < Done) {  // wait then publish another message
+        cm.oneTime(pubWait, [&cm](){ msgPubr(cm); });
     } else {
         if(!Persist) {
             cm.oneTime(2*pubWait, [](){
-                    std::cout << myPID << " is done publishing messages." << std::endl;
+                    print("{}:{}-{} published {} messages and exits\n", role, myId, myPID, Cnt);
                     exit(0);
             });
         }
@@ -124,13 +129,12 @@ void msgPubr(mbps &cm, std::vector<uint8_t>& toSend) {
 
 void msgRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
+    auto now = tp2d(std::chrono::system_clock::now());
+    auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
 
-    std::cout << "Entity " << myPID << " received message:"
-        << "\tcapability = " << mt["target"] << std::endl << "\ttopic = " << mt["target"] << std::endl
-        << "\tlocation = " << mt["trgtLoc"] << std::endl << "\targuments = " << mt["topicArgs"] << std::endl
-        << "\tmessage creation time = " << mt.time("mts").time_since_epoch().count() << std::endl;
-    auto content = std::string(msgPayload.begin(), msgPayload.end());
-    std::cout << "\tmessage body: " << content << std::endl;
+    print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit): {} {}: {} {} | {}\n",
+            now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
+            std::string(msgPayload.begin(), msgPayload.end()));
 
     // further action can be conditional upon msgArgs and msgPayload
 }
@@ -173,10 +177,10 @@ int main(int argc, char* argv[])
                 exit(1);
     }
     for (int c;
-        (c = getopt_long(argc, argv, "nc:pdhl", opts, nullptr)) != -1;) {
+        (c = getopt_long(argc, argv, "n:c:pdhl:", opts, nullptr)) != -1;) { 
         switch (c) {
                 case 'n':
-                    Done = std::stoi(optarg);    //number of times to publish
+                    Done = std::stoi(std::string(optarg));    //number of times to publish
                     break;
                 case 'c':
                     capability = optarg;
@@ -199,27 +203,37 @@ int main(int argc, char* argv[])
         usage(argv[0]);
         exit(1);
     }
-    myPID = std::to_string(getpid());        //process id useful for debugging
-    mbps cm(argv[optind]);     //Create mbps
+
+       /*
+     *  These are useful in developing DeftT-based applications and/or in learning about Defined-trust Communications and DeftT.
+     *  The process id is useful for identifying trust domain members in dctwatch, doubtful usage in a deployment.
+     *  Application command lines pass a "bootstrap" identity file that would be (at least partially) securely configured in a
+     *  deployment. "readBootstrap" is in the identity_access.hpp utility file and parses the file. The rootCert, schemaCert,
+     *  identityChain, and currentSigningPair methods access that parsed data and serve as examples for the functions that
+     *  MUST be provided for an application, preferable securing at least the secret key and the integrity of the trust root.
+     */
+    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch, doubtful usage in a deployment
+    readBootstrap(argv[optind]);
+
+    // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
+    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
+    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
 
+    if (role == "operator") {
+        cm.subscribe(msgRecv);   //single callback for all messages
+    } else {
+        //here devices just subscribe to command topic
+        cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
+        cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
+    }
+
     // Connect and pass in the handler
     try {
-        cm.connect(    /* main task for this entity */
-            [&cm]() {
-                if (role == "operator") {
-                    cm.subscribe(msgRecv);   //single callback for all messages
-                } else {
-                    //here devices just subscribe to command topic
-                    cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
-                    cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
-                }
-                // construct message to send
-                std::string s("Message number 0 from " + role + ":" + myId + "-" + myPID);
-                std::vector<uint8_t> toSend(s.begin(), s.end());
-                msgPubr(cm, toSend);    //send initial message
-            });
+        // send initial msg when connected. msgPubr schedules next send each time its called
+        cm.connect( [&cm]() { msgPubr(cm); });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: "
                  << e.what() << std::endl;

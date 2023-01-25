@@ -1,5 +1,5 @@
-#ifndef SIGMGRAEAD_HPP
-#define SIGMGRAEAD_HPP
+#ifndef SIGMGRAEADSGN_HPP
+#define SIGMGRAEADSGN_HPP
 /*
  * AEAD Signature Manager
  *
@@ -45,13 +45,15 @@
  * whose lenth is equal to the message length. Also computes a tag that
  * authenticates the ciphertext plus the ad of adlen and puts the tag
  * into mac of length of crypto_aead_xchacha20poly1305_IETF_ABYTES bytes
+ * Following this, the message is signed by the publisher (as in sigmgr_eddsa.hpp)
+ * and that signature is appended to the signature field
  */
 
 /*
  * The SignatureInfo content is fixed 5 bytes for this signing method:
  *  0x16 (SigInfo) <number of bytes to follow in SigInfo>
  *  0x1b (SignatureType) <number of bytes to follow that give signatureType>
- *  0x07 (signed by AEAD key)
+ *  0x0d (encrypted with AEAD key, signed using EdDSA)
  *  Followed by:
  *  0x17 (SignatureValueType) <number of bytes in signature> <signature bytes>
  */
@@ -61,9 +63,7 @@
 #include <ranges>
 #include "sigmgr.hpp"
 
-
-
-struct SigMgrAEAD final : SigMgr {
+struct SigMgrAEADSGN final : SigMgr {
     struct keyRecord {
         keyVal key;
         keyVal iv;
@@ -71,21 +71,36 @@ struct SigMgrAEAD final : SigMgr {
         keyRecord(keyRef k, uint64_t kts) {
             key.assign(k.begin(),k.end());
             //convert key timestamp to array of uint8_t
-                for(int i=0; i<8; ++i) iv.push_back((unsigned char) (kts >> (i*8)));
+            for(int i=0; i<8; ++i) iv.push_back((unsigned char) (kts >> (i*8)));
         }
     };
     static constexpr uint32_t aeadkeySize = crypto_aead_xchacha20poly1305_IETF_KEYBYTES;
     static constexpr uint32_t nonceSize = crypto_aead_xchacha20poly1305_IETF_NPUBBYTES;
     static constexpr uint32_t macSize = crypto_aead_xchacha20poly1305_IETF_ABYTES;
-    static constexpr uint32_t sigSize = nonceSize + macSize;;
+    static constexpr uint32_t sigSize = nonceSize + macSize + crypto_sign_BYTES;
 
     std::array<uint8_t,nonceSize>  m_nonce;
     std::vector<keyRecord> m_keyList;
     size_t m_decryptIndex;
 
-    SigMgrAEAD() : SigMgr(stAEAD) {
+    SigMgrAEADSGN() : SigMgr(stAEAD) {
         randombytes_buf(m_nonce.data(), m_nonce.size()); //always done - set unique part of nonce (12 bytes)
     }
+
+        /*
+     * Called by parent when there is a new signing key.
+     * Need to set m_sigInfo (should only need to do key Id part for reset...)
+     * Use the pubcert tp to set up m_sigInfo
+     */
+    void updateSigningKey(keyRef sk, const rData& c) override final {
+        // update private signing key then compute thumbprint of cert and put it at end of sigInfo
+        m_signingKey.assign(sk.begin(), sk.end());
+        auto tp = c.computeTP();   // to reset thumbPrint in sigInfo
+        auto k = c.content().rest();
+        m_signingKey.assign(k.data(), k.data()+crypto_sign_PUBLICKEYBYTES);
+        const auto off = m_sigInfo.size() - sizeof(tp);
+        std::copy(tp.begin(), tp.end(), m_sigInfo.begin() + off);
+        }
 
     // update to signing keyList with these values. New key goes
     // at the front of keyList and no more than two keys are kept.
@@ -125,29 +140,29 @@ struct SigMgrAEAD final : SigMgr {
 
         std::vector<uint8_t> ctext(content.size(),0);
         unsigned long long maclen;
-        if (crypto_aead_xchacha20poly1305_ietf_encrypt_detached(ctext.data(), mac.data(), &maclen,
+        crypto_aead_xchacha20poly1305_ietf_encrypt_detached(ctext.data(), mac.data(), &maclen,
                              content.data(), content.size(), ad.data(), ad.size(),
-                             NULL, sig.data(), curKey.data()) != 0 )    return false;
+                             NULL, sig.data(), curKey.data());
         if (content.size()) std::memcpy((uint8_t*)content.data(), ctext.data(), content.size());
+
+        //sign the data up through nonce|mac and put signature after nonce and mac
+        unsigned long long sigLen;
+        auto s = d.rest();
+        s = s.first(s.size() - crypto_sign_BYTES);
+        crypto_sign_detached(sig.data() + nonceSize + macSize, &sigLen, s.data(), s.size(), m_signingKey.data());
         return true;
     }
-
     /*
-     * returns true if success, false if failure. On success, the content of 'd' will have been decrypted.
+     * Decrypts rData d's content and replaces d's content with the decrypted data
+     * This is used on rData that have already been validated
      */
-    bool validateDecrypt(rData d) override final {
-        //can't decrypt without a key
-        if(!keyListSize()) return false;
- 
-        // signature holds nonce followed by computed MAC for this Data
-        auto sig = d.signature().rest();
-        if (sig.size() != sigSize) {
-            // print("aead bad sig size {} expected {}\n", sig.size(), sigSize);
-            return false;
-        }
+
+    bool decrypt(rData d) override final {
+       if(!keyListSize()) return false;    //can't decrypt without a key
         auto content = d.content().rest();
         auto ad = d.rest();
         ad = ad.first(content.data() - ad.data());
+        auto sig = d.signature().rest();
         std::vector<uint8_t> decrypted(content.size(),0);
         auto i = m_decryptIndex;    //start with last successful key
         do {
@@ -161,14 +176,46 @@ struct SigMgrAEAD final : SigMgr {
              }
              i = (i + 1) % keyListSize();
         } while (i != m_decryptIndex);
-        print("aead decrypt failed on {}\n", d.name());
+        // print("aeadsgn decrypt failed on {}\n", d.name());
         return false;
+    }
+
+    /*
+     * Validate the signature that follows the nonce and computed MAC in the Signature value
+     * The signed region goes from the start of the name through the Signature tlv and includes
+     * the nonce and MAC.
+     * The key locator is the thumbprint of the signer and EdDSA is used
+     */
+    bool validate(rData d) override final {
+        auto sig = d.signature().rest();
+        if (sig.size() != sigSize) { return false; }
+
+        keyRef ppk;                         // for publisher public key
+        try {
+            ppk = m_keyCb(d);
+        } catch(...) {
+            return false;   // no public cert for key locator in the rData
+        }
+
+        auto o = nonceSize + macSize;
+        auto strt = d.name().data();
+        if(crypto_sign_verify_detached(sig.data() + o, strt, sig.data() + o - strt, ppk.data()) != 0)
+            return false;   //eddsa provenance and integrity verify failed
+        return true;
+    }
+
+    /*
+     * returns true if success, false if failure. On success, the content of 'd' will have been decrypted.
+     */
+    bool validateDecrypt(rData d) override final {       
+        if(! validate(d))    return false;
+        return decrypt(d);
     }
 
     inline size_t keyListSize() const { return m_keyList.size(); }
 };
 
-#endif // SIGMGRAEAD_HPP
+#endif // SIGMGRAEADSGN_HPP
 
 
 

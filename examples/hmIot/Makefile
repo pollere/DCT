@@ -13,7 +13,7 @@ CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -ferror-limit=4
 #CXXFLAGS += -fsanitize=leak
 DEPS = $(HDRS)
-BINS = app1 app2 app3 app4
+BINS = app1 app2 app4
 JUNK = 
 
 # OS dependent definitions
@@ -30,7 +30,7 @@ LIBS += -lsodium
 endif
 
 #all: $(BINS)
-all: app1 app2 app3 app4
+all: app1 app2 app4
 
 .PHONY: clean distclean tags
 

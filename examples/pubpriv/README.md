@@ -1,6 +1,10 @@
-# Location Reporter Example to show Publisher Privacy
+# Location Reporter Example with Publisher Privacy
 
 This example is to illustrate the use of the publisher privacy signature managers *sigmgr_ppaead.hpp* and *sigmgr_ppsigned.hpp*. There are two types of applications: a location reporter that periodically publishes pseudo coordinates and a monitor that subscribes to these location reports. To keep locations private from other location reporters, the loc.trust schema adds privacy by encrypting cAdds using a "publisher privacy" version of AEAD where subscribers must have a specific *capability* in their signing chain in order to decrypt Publications of the Collection. The automatically deployed group key distributor, *dist_sgkey.hpp* creates a public/private key pair. In the key distribution publication, the public key is in the clear while the private key is encrypted for each entity with the *Subscriber Group* (SG) capability. Each publisher computes an encryption key using its own private key and the SG public key. SG entities use the SG private key with the publisher public key to compute the same symmetric key and decrypt.  Any entity whose role (from its signing identity) both puts it in the SG and permits it to create and distribute group keys attempts to become the key maker for the domain. The PPAEAD signature manager is used to encrypt/decrypt cAdds while the Publications use EdDSA.
+
+Using sketchviz.com's visualization of loc.trust's certDag:
+
+![](./loc.png)
 
 #### Running the example
 
@@ -15,11 +19,11 @@ cd ..
 
 In a terminal window:
 
-`mon monitor1.bundle`
+`mon bundles/monitor1.bundle`
 
 Optionally, in another terminal window:
 
-`mon monitor2.bundle`
+`mon bundles/monitor2.bundle`
 
 In another terminal window:
 

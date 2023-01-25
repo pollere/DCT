@@ -42,6 +42,8 @@ static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferenc
 
 using namespace dct;
 
+using addChnCb = std::function<void(const rData, const certStore&)>;
+
 /* 
  * ptps (pass-through publish/subscribe) provides a DeftT pub/sub
  * API where the information unit is the same as that used by the
@@ -59,7 +61,7 @@ using namespace dct;
 
 struct DCTmodelPT final : DCTmodel {
     std::unordered_map<thumbPrint,bool> m_rlyCerts {};
-    addCertCb m_rlyCertCb{}; //used to relay validated certs to shim
+    addChnCb m_rlyCertCb{}; //used to relay validated cert chain to shim
 
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
     void addRelayed(thumbPrint tp) { m_rlyCerts[tp] = true;}
@@ -69,43 +71,24 @@ struct DCTmodelPT final : DCTmodel {
         // structurally validate 'pub'
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(pub));
-            auto valid = pubval.matchTmplt(bs_, pub.name());
-            return valid;
+            return pubval.matchTmplt(bs_, pub.name());
         } catch (std::exception&) {}
+        // print("isValidPub pub {} doesn't validate\n", pub.name());
         return false;
     }
 
   // create a DCTmodelPT instance using the certs in the bootstrap bundle file 'bootstrap'
   // optional string for face name
-    DCTmodelPT(std::string_view bootstrap, DirectFace& face,
-               addCertCb&& rcb = nullptr) : DCTmodel(bootstrap, face)
+    DCTmodelPT(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, DirectFace& face,
+               addChnCb&& rcb = nullptr) : DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, face)
     {
-        //this changes the cert store's callback upon adding a valid cert so that it will relay the cert
+        //this changes the cert store's callback upon adding a valid cert so that it will relay the chain of a signing cert
         m_rlyCertCb = std::move(rcb);
-        if (m_gkd) {
-            cs_.addCb_ = [this, &ckd=m_ckd, &gkd=*m_gkd] (const dctCert& cert) {
-                            ckd.publishCert(cert);
-                            if(!wasRelayed(cert.computeThumbPrint())) {
-                                m_rlyCertCb(cert);
-                                if (isSigningCert(cert)) gkd.addGroupMem(cert); //privacy is per local subnet
-                            }
-                         };
-        } else if (m_sgkd) {    //sg is currently on possible on wire prefix
-            cs_.addCb_ = [this, &ckd=m_ckd, &sgkd=*m_sgkd] (const dctCert& cert) {
-                            ckd.publishCert(cert);
-                            if(!wasRelayed(cert.computeThumbPrint())) {
-                                m_rlyCertCb(cert);
-                                if (isSigningCert(cert)) sgkd.addGroupMem(cert);
-                            }
-                         };
-
-        } else {
-            cs_.addCb_ = [this, &ckd=m_ckd] (const dctCert& cert) {
+        cs_.addCb_ = [this, &ckd=m_ckd] (const dctCert& cert) {
                                                    ckd.publishCert(cert);
-                                                   if(!wasRelayed(cert.computeThumbPrint()))
-                                                       m_rlyCertCb(cert);
+                                                   if (isSigningCert(cert) && !wasRelayed(cert.computeThumbPrint()))
+                                                       m_rlyCertCb(cert, certs());   //pass the signing cert and the cert store containing its chain
                                                    };
-        }
     }
 };
 
@@ -114,7 +97,7 @@ struct ptps;
 using ptPub = DCTmodel::sPub;
 using connectCb = std::function<void()>;
 using pubCb = std::function<void(ptps*, const Publication&)>;
-using certCb = std::function<void(ptps*, const rData)>;
+using chnCb = std::function<void(ptps*, const rData, const certStore&)>;
 
 using error = std::runtime_error;
 
@@ -125,7 +108,7 @@ struct ptps
     DCTmodelPT m_pb;
     crName m_pubpre{};        // full prefix for Publications
     Timer* m_timer;
-    certCb m_ch;        // call back to app when this DefTT's cert distributor gets a cert from its syncps
+    chnCb m_ch;        // call back to app when this DefTT's cert distributor gets a fully validated signing cert that arrived from its syncps
     pubCb m_failCb;     // call back to app when publication fails if confirmation was requested on publication
     std::string m_label;    //label for the transport to be used by this face
     uint64_t m_success{};
@@ -134,10 +117,10 @@ struct ptps
     bool isConnected() const { return m_connected; }
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
 
-    ptps(std::string_view bootstrap, const std::string& fl, const certCb& certHndlr = {}, const pubCb& failCb={}) :
+    ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
+             const std::string& fl, const chnCb& certHndlr = {}, const pubCb& failCb={}) :
         m_face{fl},
-        m_pb(bootstrap, m_face,
-             [this](const rData c){ m_ch(this, c);}),   //to track if certs were NOT relayed, set m_rlyCerts entry false in this lambda
+        m_pb{rootCb, schemaCb, idChainCb, signIdCb, m_face, [this](const rData c, const certStore& cs){ m_ch(this, c, cs); }},   // tracks if certs were NOT relayed, set m_rlyCerts entry false in this lambda
         m_pubpre{m_pb.pubPrefix()},
         m_ch{certHndlr},
         m_failCb{failCb},
@@ -248,29 +231,31 @@ struct ptps
         }
     }
     /*
-     * Add a cert relayed from another DefTT of the relay
+     * Add a cert chain relayed from another DefTT's cert store (cs)  to mine. Traverses the chain and adds each cert.
+     *
      * Calls the dct model's checker m_pb.addCert(&c) just like is done on reception from wire
      * which will check the cert for validity against this DefTT's trust schema.
      * In smart "trust-based" pass through, the cert gets checked against the
      * trust schema before it is published to this DefTT's cert collection
      * rather than simply moving any cryptographically valid cert to other attached transports.
-     * The thumbprint of the cert is added to the DCT model's relayed cert list so it can both
-     * be distinguished from certs that arrived via this DefTT's cert distributor and tested to
-     * see if this DefTT already was relayed this cert. (Note the relayed cert list could hold
-     * all certs and have 0 or "false" for container element, but currently that is tested in
-     * the application by not calling this method for certs that arrive through this DefTT
+     * The thumbprint of the signing cert is added to the DCT model's relayed chain list so it can both
+     * be distinguished from chains that arrived via this DefTT's cert distributor and tested to
+     * see if this DefTT already was relayed this chain. (Local relayed chain list could hold tps of
+     * all signing certs and have 0 or "false" if locally received, but currently that is tested in
+     * basicRelay by not calling this method for chains that arrive locally
      *
-     * Although the passed in cert should be valid against the trust schema of the originating DefTT,
+     * Although the passed in cert should be valid against the trust schema of the originating DeftT,
      * this is only useful for the case of identical trust schema for all DefTTs so is both
-     * less general and not "belt and suspenders"
+     * less general and not "belt and suspenders" security
      */
-    void addRelayedCert(const rData c) {
+    void addRelayedChain(const rData c, const auto& cs) {
         auto tp = c.computeTP();
-        if(m_pb.certs().contains(tp)) return;
-        if(!m_pb.wasRelayed(tp)) {
-            m_pb.addRelayed(tp);    //put on list of certs that were relayed to this BT
-            m_pb.addCert(c);
-        }
+        if (m_pb.certs().contains(tp)) return;   //already have this signing chain
+
+        m_pb.addRelayed(tp);    // add to list of signing chains that were relayed to this DeftT
+        // for each cert on signing chain
+        cs.chain_for_each(tp, [this](const auto &c) { m_pb.addCert(c);  }  );
+        // m_pb.certs().dumpcerts();
     }
 
     // Can be used by application to schedule a cancelable timer. Note that

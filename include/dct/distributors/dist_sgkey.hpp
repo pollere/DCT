@@ -14,8 +14,12 @@
  * If a new subscribing member joins between rekeying, it is added to the member
  * list and a Publication with a secret key encrypted for it is published.
  * The group key pair is used by sigmgr_ppaead.hpp and sigmgr_ppsigned.hp
+ *
+ * Any entity with a valid certificate for this trust schema (i.e., any entity that belongs to
+ * this trust domain) can publish but must have the appropriate SG (denoted by the
+ * SG cert's capability argument) in order to subscribe.
  * 
- * Copyright (C) 2020-2 Pollere LLC
+ * Copyright (C) 2020-3 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -62,6 +66,7 @@ struct DistSGKey {
     using xmpk = std::array<uint8_t, crypto_scalarmult_curve25519_BYTES>;
     using addKeyCb = std::function<void(keyRef, keyRef, uint64_t)>;
     using kmpriCB = ofats::any_invocable<int32_t(thumbPrint)>;
+    using sgmCB = ofats::any_invocable<bool(thumbPrint)>;
 
     /*
      * DistSGKey Publications contain the creation time of the group key pair (an 8 byte
@@ -76,7 +81,9 @@ struct DistSGKey {
     static constexpr int maxKR = (maxPubSize - kxpkKeySz - 8 - 96) / (sizeof(thumbPrint) + encSGKeySz);
 
     const crName m_prefix;     // prefix for pubs in this distributor's collection
-    const crName m_pubPrefix;     // prefix for subscriber group key pair records publications
+    const crName m_krPrefix;     // prefix for subscriber group key pair records publications
+    const crName m_mrPrefix;     // prefix for subscriber group membership request publications
+    const std::string m_keyColl;    // the key subCollection handled by this distributor
     SigMgrAny m_syncSM{sigMgrByType("EdDSA")};  // to sign/validate SyncData packets
     SigMgrAny m_keySM{sigMgrByType("EdDSA")};   // to sign/validate Publications in key Collection
     SyncPS m_sync;
@@ -84,6 +91,7 @@ struct DistSGKey {
     addKeyCb m_newKeyCb;   // called when subscriber group key pair rcvd
     connectedCb m_connCb{[](auto) {}};
     kmpriCB m_kmpri;   // to check a signing chain for key maker capability
+    sgmCB m_sgMem;    //to check signing chain for sub group capability for this keys subcollection
     Cap::capChk m_sgCap;   // routine to check a signing chain for subscriber capability
     thumbPrint m_tp{};
     keyVal m_pDecKey{}; //local public signing key converted to X and
@@ -100,21 +108,24 @@ struct DistSGKey {
     bool m_keyMaker{false};     // true if this entity is a key maker
     bool m_subr{false};         // set if this identity has the subscriber capability
     bool m_init{true};          // key maker status unknown while in initialization
+    pTimer m_mrRefresh{std::make_shared<Timer>(getDefaultIoContext())}; // to refresh timed out member request
 
-    DistSGKey(DirectFace& face, const Name& pPre, const Name& wPre, addKeyCb&& sgkeyCb, const certStore& cs,
+    DistSGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& sgkeyCb, const certStore& cs,
              std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
              std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
              std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
-             m_prefix{pPre}, m_pubPrefix{pPre/"kr"}, m_sync(face, wPre, m_syncSM.ref(), m_keySM.ref()),
-             m_certs{cs}, m_newKeyCb{std::move(sgkeyCb)}, //called when a (new) group key arrives or is created
+             m_prefix{pPre}, m_krPrefix{pPre/"kr"}, m_mrPrefix{pPre/"mr"}, m_keyColl{dPre.lastBlk().toSv()},
+             m_sync(face, dPre, m_syncSM.ref(), m_keySM.ref()),
+             m_certs{cs}, m_newKeyCb{std::move(sgkeyCb)}, //called when a (new) group key arrives or is created      
              m_sgCap{Cap::checker("SG", pPre, cs)},
              m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
              m_keyLifetime(m_reKeyInt + m_keyRand) {
         m_sync.cStateLifetime(253ms);
         m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
-        m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"KM"/"cand")](const auto& p) {
-            return cand.isPrefix(p.name())? 100ms : m_keyLifetime;
-        });
+        m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),mreq=crPrefix(m_mrPrefix)](const auto& p) {
+                if (mreq.isPrefix(p.name())) return m_keyLifetime; //0ms;
+                return cand.isPrefix(p.name())? 100ms : m_keyLifetime;
+            });
 #if 0
         // Order publications by ours first then most recent first
         m_sync.filterPubsCb([](auto& pOurs, auto& pOthers) {
@@ -133,7 +144,28 @@ struct DistSGKey {
         // get our identity thumbprint, check if we're allowed to make keys, check if we
         // are in subscriber group, then set up our public and private signing keys.
         m_tp = m_certs.Chains()[0];
+        // build function to get the subscriber group id from a signing chain then
+        // use it to see if I can joing this subscriber group
+        auto sgId = Cap::getval("SG", m_prefix, m_certs);
+                                // return 0 if cap wasn't found or has wrong content
+                         //checks if SG cap is present and, if so, returns its argument
+        m_sgMem = [this,sgId](const thumbPrint& tp) { return sgId(tp).toSv() == m_keyColl; };
+
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
+    }
+
+    // publish my membership request with updated key: name <m_mrPrefix><timestamp>
+    // requests don't have epoch since the keymaker sets the epoch, member learns from key list
+    // XXX future: publish with a confirmation callback and republish if not confirmed
+    void publishMembershipReq() {
+        m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
+        if(!m_subr) return;     //ensures I have permission to be a member
+        crData p(m_mrPrefix/std::chrono::system_clock::now());
+        p.content(std::vector<uint8_t>{});
+        // print("member request {} published from {}\n", p.name(), m_certs[m_tp].name());
+        m_keySM.sign(p);    // will put my thumbprint into Publication
+        m_sync.publish(std::move(p));
+        m_mrRefresh = m_sync.schedule(m_keyLifetime, [this](){ publishMembershipReq(); });
     }
 
     /*
@@ -146,14 +178,15 @@ struct DistSGKey {
      */
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
 
-        m_subr = m_sgCap(m_tp).first;   //checks if SG cap is present
-
         // sigmgrs need to get the new signing keys and public key lookup callbacks
         m_syncSM.updateSigningKey(sk, pubCert);
         m_keySM.updateSigningKey(sk, pubCert);
         m_syncSM.setKeyCb([&cs=m_certs](rData d) -> keyRef { return cs.signingKey(d); });
         m_keySM.setKeyCb([&cs=m_certs](rData d) -> keyRef { return cs.signingKey(d); });
-        if(!m_subr)  return;
+
+        m_tp = m_certs.Chains()[0];
+        m_subr = m_sgMem(m_tp);
+        if (! m_subr)  return;       //this identity is publish only
 
         // convert the new key to form needed for group key encrypt/decrypt
         //only need first 32 bytes of sk (rest is appended pk)
@@ -167,6 +200,9 @@ struct DistSGKey {
         if(crypto_sign_ed25519_pk_to_curve25519(m_pDecKey.data(), pk.data()) != 0) {
             std::runtime_error("DistSGKey::updateSigningKey unable to convert signing pk to sealed box pk");
         }
+        if(! m_init && ! m_keyMaker) {
+             publishMembershipReq();
+        }
     }
 
     void initDone() {
@@ -178,12 +214,12 @@ struct DistSGKey {
     }
 
     /*
-     * Called when a new Publication is received in the key record collection
+     * Called when a new Publication is received in the Key Record topic
      * If have subr capability, look for the group key record with *my* key thumbprint
      * Using first 4 bytes of thumbPrints as identifiers. In the unlikely event that the first and last
      * thumbPrint identifiers are the same, doesn't really matter since we look through for our full
      * thumbPrint and just return if don't find it
-     * kr names <m_pubPrefix><epoch><low tpId><high tpId><timestamp>
+     * kr names <m_krPrefix><epoch><low tpId><high tpId><timestamp>
      */
     void receiveSGKeyRecords(const rPub& p)
     {
@@ -195,13 +231,14 @@ struct DistSGKey {
             print("ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
             return;
         }
+
         /*
          * Parse the name and make checks to determine if this key record publication should be used.
          * if this msg was from an earlier Key Maker epoch, ignore it. If from a later
          * epoch, wrongEpoch will cancel any in-progress election and update our epoch.
          */
         auto n = p.name();
-        auto epoch = n.nextAt(m_pubPrefix.size()).toNumber();
+        auto epoch = n.nextAt(m_krPrefix.size()).toNumber();
         if (epoch != m_KMepoch) {
             if (epoch > 1) { // XXX change this when re-elections supported
                 print("keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
@@ -210,6 +247,7 @@ struct DistSGKey {
             //assert(m_KMepoch == 0);
             m_KMepoch = epoch;
         }
+
         // if I'm a subscriber, check if I'm included in this pub
         static constexpr auto less = [](const auto& a, const auto& b) -> bool {
             auto asz = a.size();
@@ -283,11 +321,13 @@ struct DistSGKey {
      * after some initial signing certs have been exchanged so it's known
      * there are active peers. It is passed a callback, 'ccb', to be
      * invoked when a group key has been received (i.e., when this entity is
-     * able to encrypt/decrypt wirepacket content). There may also be a
+     * able to encrypt/decrypt packet content). There may also be a
      * kmCap capability cert in this entity's signing chain which allows
      * it to participate in keyMaker elections.  The value of the
      * capability influences the probability of this entity being elected
      * with larger values giving higher priority.
+     * A trust schema using subscription groups should ensure key maker
+     * capability is only given with subscription group capability.
      */
 
     void setup(connectedCb&& ccb) {
@@ -295,7 +335,7 @@ struct DistSGKey {
 
         // build function to get the key maker priority from a signing chain then
         // use it to see if we should join the key maker election
-        auto kmval = Cap::getval("SG", m_prefix, m_certs);  //a non-zero SG value indicate a keymaker
+        auto kmval = Cap::getval("KM", m_prefix, m_certs);
         auto kmpri = [kmval](const thumbPrint& tp) {
                           // return 0 if cap wasn't found or has wrong content
                           // XXX value currently has to be a single digit
@@ -306,30 +346,36 @@ struct DistSGKey {
                           return c - '0';
                       };
         m_kmpri = kmpri;
-        // subscribe to key collection and wait for a group key list
-        m_sync.subscribe(m_pubPrefix, [this](const auto& p){ receiveSGKeyRecords(p); });
+        // subscribe to key record topic
+        m_sync.subscribe(m_krPrefix, [this](const auto& p){ receiveSGKeyRecords(p); });
 
-        if(m_kmpri(m_tp) > 0) {
+        if(m_subr && m_kmpri(m_tp) > 0) {
             auto eDone = [this](auto elected, auto epoch) {
                             m_keyMaker = elected;
                             m_KMepoch = epoch;
-                            if (! elected) return;
-                            m_sync.unsubscribe(m_pubPrefix);
+                            if (! elected) {
+                                publishMembershipReq();
+                                return;
+                            }
+                            m_sync.unsubscribe(m_krPrefix);
+                            m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); });
                             sgkeyTimeout();  //create a group key, publish it, callback parent with key
                             initDone();
                           };
             m_kme = new kmElection(m_prefix/"km", m_keySM.ref(), m_sync, std::move(eDone), std::move(kmpri), m_tp);
+        } else if (m_subr) {
+            publishMembershipReq();
         }
     }
 
     /*** Following methods are used by the keymaker to distribute and maintain the group key records ***/
 
     // Publish the subscriber group key list from thumbpring tpl to thumbprint tph
-   // kr names <m_pubPrefix><epoch><low tpId><high tpId><timestamp>
+   // kr names <m_krPrefix><epoch><low tpId><high tpId><timestamp>
     void publishKeyRange(auto& tpl, auto& tph, auto ts, auto& c) {
         //constant 4 can be determined dynamically later
         const auto TP = [](const auto& tp){ return std::span(tp).first(4); };
-        crData p(m_pubPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
+        crData p(m_krPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
         p.content(c);
         m_keySM.sign(p);
         m_sync.publish(std::move(p));
@@ -383,31 +429,34 @@ struct DistSGKey {
     // Periodically refresh the group key. This routine should only be called *once*
     // since each call will result in an additional refresh cycle running.
     void sgkeyTimeout() {
+        if (!m_keyMaker) return;    // since not a cancelable timer, need to stop if I lose a future election
         makeSGKey();
         m_sync.oneTime(m_reKeyInt, [this](){ sgkeyTimeout();});  //next re-keying event
     }
 
     /*
-     * This called when there is a new valid peer signing cert.
-     * This indicates to the keyMaker there is a new peer that needs the group key
-     * Ignore if not a keyMaker. If initialization, go ahead and add to list in case
-     * this becomes the keyMaker, but don't try to publish.
-     * Shouldn't have to republish the entire keylist, so this version publishes the
+     * This called when there is a new valid peer member request to join the subscriber group.
+     * This indicates to the keyMaker there is a new peer that needs the group secret key
+     * Ignore if not a keyMaker. If received during initialization, go ahead and add to list in case
+     * this becomes the keyMaker, but don't try to publish. (This should not happen.)
+     * Shouldn't have to republish the entire list of key records, so this version publishes the
      * new encrypted secret key separately.
-     * Might also want to check if this peer is de-listed (blacklisted)
-     * A publish-only member can get the public key from any sgk Publication
+     * Might also want to check if this peer is de-listed (e.g., blacklisted) but for now assuming
+     * this is handled in validation of cAdd PDU and of Publications
+     * A publish-only member can get the public key from any kr Publication
      */
-    void addGroupMem(const rData& c) {
+    void addGroupMem(const rData& p) {
         if (!m_init && !m_keyMaker) return;  //this entity is not a keymaker
-        auto tp = dctCert::computeThumbPrint(c);
-        if(!m_sgCap(tp).first) return;  //this signing cert doesn't have SG capability.
 
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
         // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members. 
         // Future: return some indication of this
         if (m_mbrList.size() == 80*maxKR)   return;
 
-        auto pk = c.content().toVector();   //extract the public key
+        auto tp = p.thumbprint();
+        if(! m_sgMem(tp)) return;  //this signing cert doesn't have SG capability.
+
+        auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
         // convert pk to form that can be used to encrypt and add to member list
         if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0)
             return;     //unable to convert member's pk to sealed box pk
@@ -426,7 +475,7 @@ struct DistSGKey {
 
     /*
      *  won't encrypt a group key for this thumbPrint in future
-     * if this becomes a subscription callback for blacklist publications, should
+     * if this becomes a subscription callback for delisted publications, should
      * probably mark mbrList entries rather than delete
      * if reKey is set, change the group key now to exclude the removed member
      */

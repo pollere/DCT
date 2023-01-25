@@ -38,6 +38,7 @@
  *  0x0a NULL
  *  0x0b PPAEAD
  *  0x0c PPSIGN
+ *  0x0d AEADSGN
  */
 #include <string>
 #include <string_view>
@@ -49,7 +50,8 @@
 #include "sigmgr_rfc7693.hpp"
 #include "sigmgr_sha256.hpp"
 #include "sigmgr_ppaead.hpp"
-#include "sigmgr_ppsigned.hpp"
+#include "sigmgr_ppaeadsgn.hpp"
+#include "sigmgr_aeadsgn.hpp"
 #include "sigmgr_null.hpp"
 
 using namespace std::string_literals;
@@ -57,7 +59,7 @@ using namespace std::string_literals;
 template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
 template<class... Ts> overload(Ts...) -> overload<Ts...>;
 
-using Variants = std::variant<SigMgrSHA256,SigMgrAEAD,SigMgrRFC7693,SigMgrNULL,SigMgrEdDSA,SigMgrPPAEAD,SigMgrPPSIGN>;
+using Variants = std::variant<SigMgrSHA256,SigMgrAEAD,SigMgrRFC7693,SigMgrNULL,SigMgrEdDSA,SigMgrPPAEAD,SigMgrPPSIGN,SigMgrAEADSGN>;
 
 struct SigMgrAny : Variants {
     using Variants::Variants;
@@ -89,7 +91,8 @@ static inline const std::unordered_map<std::string,uint8_t> sigmgr_name_to_type 
     {"RFC7693"s, SigMgr::stRFC7693},
     {"NULL"s,    SigMgr::stNULL},
     {"PPAEAD"s,     SigMgr::stPPAEAD},
-    {"PPSIGN"s,     SigMgr::stPPSIGN}
+    {"PPSIGN"s,     SigMgr::stPPSIGN},
+    {"AEADSGN"s, SigMgr::stAEADSGN}
 };
 
 static inline SigMgrAny sigMgrByType(uint8_t type) {
@@ -101,6 +104,7 @@ static inline SigMgrAny sigMgrByType(uint8_t type) {
         case SigMgr::stNULL:    return SigMgrNULL();
         case SigMgr::stPPAEAD:  return SigMgrPPAEAD();
         case SigMgr::stPPSIGN:    return SigMgrPPSIGN();
+        case SigMgr::stAEADSGN: return SigMgrAEADSGN();
     }
     throw std::runtime_error(format("sigMgrByType: unknown signer type {}", type));
 }

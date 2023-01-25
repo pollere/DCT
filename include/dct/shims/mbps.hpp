@@ -90,13 +90,15 @@ struct mbps
     MsgCache m_reassemble{}; //reassembly of received message segments
     Timer* m_timer;
 
+    mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr)
+        : m_face{addr}, m_pb{rootCb, schemaCb, idChainCb, signIdCb, m_face},
+          m_pubpre{m_pb.pubPrefix()}  { }
 
-    mbps(std::string_view bootstrap, std::string_view addr)
-        : m_face{addr}, m_pb{bootstrap, m_face}, m_pubpre{m_pb.pubPrefix()}  { }
-
-    mbps(std::string_view bootstrap) : mbps(bootstrap, "")  { }
+    mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb)
+        : mbps(rootCb, schemaCb, idChainCb, signIdCb, "")  { }
 
     void run() { m_pb.run(); }
+    void stop() { m_pb.stop(); }
     const auto& pubPrefix() const noexcept { return m_pubpre; }
 
     /* relies on trust schema using mbps conventions of collecting all the signing chain
@@ -149,10 +151,13 @@ struct mbps
         m_pb.subscribe(pubPrefix(), [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
+
     // distinguish subscriptions further by topic or topic/location
-    mbps& subscribe(const std::string& suffix, const msgHndlr& mh)    {
+    // Slashes ("/") in suffix are component separators; there is no way to embed a slash in a component
+    mbps& subscribe(std::string_view suffix, const msgHndlr& mh)    {
         //XXX 'format' is a hack - need to split suffix on slashes but want c++ ranges for that
-        m_pb.subscribe(crName{format("{}/{}", rName{pubPrefix()}, suffix)}, [this,mh](auto p) {receivePub(p, mh);});
+//        m_pb.subscribe(crName{format("{}/{}", rName{pubPrefix()}, suffix)}, [this,mh](auto p) {receivePub(p, mh);});
+        m_pb.subscribe(appendToName(pubPrefix(), suffix), [this,mh](auto p) {receivePub(p, mh);});
         return *this;
     }
 
@@ -336,6 +341,36 @@ struct mbps
 
     // schedule a call to 'cb' in 'd' microseconds (cannot be canceled)
     void oneTime(std::chrono::microseconds d, TimerCb&& cb) { m_pb.oneTime(d, std::move(cb)); }
+
+    //setting non-default orderPubCb in shim (for now)
+    // For commented code, add "ov" for second arg
+    bool robustPub(PubVec& pv, PubVec&){
+        //first do same as default and sort locally produced pubs
+        std::sort(pv.begin(), pv.end(), [](const auto& p1, const auto& p2){
+                return p1.name().last().toTimestamp() > p2.name().last().toTimestamp(); });
+        auto newPubs = false;   //indicate new publications on list
+ /*      auto now = std::chrono::system_clock::now();
+          for(const auto& p : pv) {
+            if(p.reqSrv == 0) newPubs = true;
+            p.reqSrv = now;  // next time through, won't be new
+        }
+        if(ov.size() == 0) return newPubs;
+
+        //process others' pubs to see if I should resend
+        auto resendRst = now - 10 * cStateRegenInterval;
+        auto sendAt = now + 0.9*cStateRegenInterval;
+         for(const auto& p : ov) {
+            if(p.reqSrv < now && p.reqSrv > resendRst) {
+                pv.emplace_back(p);
+                p.reqSrv = now;
+            } else if(p.reqSrv == 0 || p.reqSrv < resendRst) p.reqSrv = sendAt;
+         }
+*/
+         return newPubs;
+    }
+    void setOrderPub() {
+    //    m_pb.orderPub([this](auto& pv1, auto& pv2) {return robustPub(pv1, pv2);});
+    }
 };
 
 #endif

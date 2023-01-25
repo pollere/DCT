@@ -9,10 +9,18 @@
  * be making group keys and will rekey at periodic intervals to distribute
  * a new key, encrypting each key with the public key of each peer (see
  * https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519). If a new
- * member joins between rekeying, it is added to the list of encrypted keys
- * which is republished.  The group key is currently used by sigmgr_aead.hpp
+ * member joins between rekeying, it is added to the list of encrypted keys and
+ * a key list publication is issued with just the new encrypted key.
+ * The group key is currently used by sigmgr_aead.hpp
+ *
+ * This distributor puts three separate subtopics into use: <pubprefix>/keys/{KM,mr,gk}
+ * where <pubprefix> is passed in as the topic for all publications and
+ * subtopic KM is used by the key maker election code,
+ * subtopic mr is used by members of the group to request a copy of the encryption key, and
+ * subtopic gk is used by the key maker to publish key records where the symmetric key is encrypted
+ * for each valid member of the group.
  * 
- * Copyright (C) 2020-2 Pollere LLC
+ * Copyright (C) 2020-3 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -52,7 +60,7 @@ namespace dct {
 struct DistGKey {
     using connectedCb = std::function<void(bool)>;
 
-    static constexpr uint32_t aeadKeySz = crypto_aead_chacha20poly1305_IETF_KEYBYTES;
+    static constexpr uint32_t aeadKeySz = crypto_aead_xchacha20poly1305_IETF_KEYBYTES;
     static constexpr size_t encGKeySz = crypto_box_SEALBYTES + aeadKeySz;
     using encGK = std::array<uint8_t, crypto_box_SEALBYTES + aeadKeySz>;
     using xmpk = std::array<uint8_t, crypto_scalarmult_curve25519_BYTES>;
@@ -70,9 +78,10 @@ struct DistGKey {
     static constexpr int maxKR = (maxPubSize - 96) / (sizeof(thumbPrint) + encGKeySz);
 
     const crName m_prefix;        // prefix for pubs in this distributor's collection
-    const crName m_pubPrefix;     // prefix for group symmetric key list publications
+    const crName m_gkPrefix;     // prefix for group symmetric key list publications
+    const crName m_mrPrefix;    // prefix for member request publications
     SigMgrAny m_syncSM{sigMgrByType("EdDSA")};  // to sign/validate SyncData packets
-    SigMgrAny m_keySM{sigMgrByType("EdDSA")};   // to sign/validate key list Publications
+    SigMgrAny m_keySM{sigMgrByType("EdDSA")};   // to sign/validate Publications: keyList for keymaker, member request all others
     SyncPS m_sync;
     const certStore& m_certs;
     addKeyCb m_newKeyCb;   // called when group key rcvd
@@ -92,20 +101,22 @@ struct DistGKey {
     uint32_t m_KMepoch{};       // current election epoch
     bool m_keyMaker{false};     // true if this entity is a key maker
     bool m_init{true};          // key maker status unknown while in initialization
+    pTimer m_mrRefresh{std::make_shared<Timer>(getDefaultIoContext())};
 
-    DistGKey(DirectFace& face, const Name& pPre, const Name& wPre, addKeyCb&& gkeyCb, const certStore& cs,
+    DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& gkeyCb, const certStore& cs,
              std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600), //XXX make methods
              std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
              std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
-             m_prefix{pPre}, m_pubPrefix{pPre/"gk"}, m_sync(face, wPre, m_syncSM.ref(), m_keySM.ref()),
+             m_prefix{pPre}, m_gkPrefix{pPre/"gk"}, m_mrPrefix{pPre/"mr"}, m_sync(face, dPre, m_syncSM.ref(), m_keySM.ref()),
              m_certs{cs}, m_newKeyCb{std::move(gkeyCb)}, //called when a (new) group key arrives or is created
              m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
              m_keyLifetime(m_reKeyInt + m_keyRand) {
-        m_sync.cStateLifetime(253ms);
-        m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
-        m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"KM"/"cand")](const auto& p) {
+       m_sync.cStateLifetime(253ms);
+       m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
+       m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),mreq=crPrefix(m_mrPrefix)](const auto& p) {
+            if (mreq.isPrefix(p.name())) return m_keyLifetime; //0ms;
             return cand.isPrefix(p.name())? 100ms : m_keyLifetime;
-        });
+            });
 #if 0
         // Order publications by ours first then most recent first
         m_sync.filterPubsCb([](auto& pOurs, auto& pOthers) {
@@ -124,6 +135,18 @@ struct DistGKey {
         // then set up our public and private signing keys.
         m_tp = m_certs.Chains()[0];
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
+    }
+
+    // publish my membership request with updated key: name <m_mrPrefix><timestamp>
+    // requests don't have epoch since the keymaker sets the epoch, member learns from key list
+    // XXX publish with a confirmation callback and republish if not confirmed
+    void publishMembershipReq() {
+        m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
+        crData p(m_mrPrefix/std::chrono::system_clock::now());
+        p.content(std::vector<uint8_t>{});
+        m_keySM.sign(p);    // will put my thumbprint into Publication
+        m_sync.publish(std::move(p));
+        m_mrRefresh = m_sync.schedule(m_keyLifetime, [this](){ publishMembershipReq(); });
     }
 
     /*
@@ -148,6 +171,9 @@ struct DistGKey {
         if(crypto_sign_ed25519_pk_to_curve25519(m_pDecKey.data(), pk.data()) != 0) {
             std::runtime_error("DistGKey::updateSigningKey unable to convert signing pk to sealed box pk");
         }
+        if(!m_init && !m_keyMaker) {
+             publishMembershipReq();
+        }
     }
 
     void initDone() {
@@ -161,13 +187,13 @@ struct DistGKey {
     /*
      * Called when a new Publication is received in the key collection
      * Look for the group key record with *my* key thumbprint
-     *      * Using first 4 bytes of thumbPrints as identifiers. In the unlikely event that the first and last
+     * Using first 4 bytes of thumbPrints as identifiers. In the event that the first and last
      * thumbPrint identifiers are the same, doesn't really matter since we look through for our full
      * thumbPrint and just return if don't find it
-     * gk names <m_pubPrefix><epoch><low tpId><high tpId><timestamp>
+     * gk names <m_gkPrefix><epoch><low tpId><high tpId><timestamp>
      */
     void receiveGKeyList(const rPub& p)
-    {
+    {      
         if (m_keyMaker) {
             print("keymaker got keylist from {}\n", m_certs[p].name());
             return;
@@ -183,7 +209,7 @@ struct DistGKey {
          */
 
         auto n = p.name();
-        auto epoch = n.nextAt(m_pubPrefix.size()).toNumber();
+        auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
         if (epoch != m_KMepoch) {
             if (epoch > 1) { // XXX change this when re-elections supported
                 print("keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
@@ -270,30 +296,36 @@ struct DistGKey {
                           return c - '0';
                       };
         m_kmpri = kmpri;
-        // subscribe to key collection and wait for a group key list
-        m_sync.subscribe(m_pubPrefix, [this](const auto& p){ receiveGKeyList(p); });
+        // subscribe to group key subcollection
+        m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
 
         if(m_kmpri(m_tp) > 0) {
             auto eDone = [this](auto elected, auto epoch) {
                             m_keyMaker = elected;
                             m_KMepoch = epoch;
-                            if (! elected) return;
-                            m_sync.unsubscribe(m_pubPrefix);
+                            if (! elected) {
+                                publishMembershipReq();
+                                return;
+                            }
+                            m_sync.unsubscribe(m_gkPrefix);
+                            m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); });
                             gkeyTimeout();  //create a group key, publish it, callback parent with key
                             initDone();
                           };
             m_kme = new kmElection(m_prefix/"km", m_keySM.ref(), m_sync, std::move(eDone), std::move(kmpri), m_tp);
+        } else {
+            publishMembershipReq();
         }
     }
 
     /*** Following methods are used by the keymaker to distribute and maintain the group key list ***/
 
    // Publish the group key list from thumbpring tpl to thumbprint tph
-   // gk names <m_pubPrefix><epoch><low tpId><high tpId><timestamp>
+   // gk names <m_gkPrefix><epoch><low tpId><high tpId><timestamp>
     void publishKeyRange(const auto& tpl, const auto& tph, auto ts, auto& c) {
         //constant 4 may be determined dynamically later
         const auto TP = [](const auto& tp){ return std::span(tp).first(4); };
-        crData p(m_pubPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
+        crData p(m_gkPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
         p.content(c);
         m_keySM.sign(p);
         m_sync.publish(std::move(p));
@@ -302,8 +334,8 @@ struct DistGKey {
     // Make a new group key, publish it, and locally switch to using the new key.
     void makeGKey() {
         //make a new key
-        m_curKey.resize(aeadKeySz); // crypto_aead_chacha20poly1305_IETF_KEYBYTES
-        crypto_aead_chacha20poly1305_ietf_keygen(m_curKey.data());
+        m_curKey.resize(aeadKeySz); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
+        crypto_aead_xchacha20poly1305_ietf_keygen(m_curKey.data());
         //set the key's creation time
         m_curKeyCT = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -342,33 +374,35 @@ struct DistGKey {
         // parent calls the application publication sigmgr's addKey()
     }
 
-
     // Periodically refresh the group key. This routine should only be called *once*
     // since each call will result in an additional refresh cycle running.
     void gkeyTimeout() {
+        if (!m_keyMaker) return;    // since not a cancelable timer, need to stop if I lose a future election
         makeGKey();
         m_sync.oneTime(m_reKeyInt, [this](){ gkeyTimeout();});  //next re-keying event
     }
 
     /*
-     * This called when there is a new valid peer signing cert.
-     * This indicates to the keyMaker there is a new peer that needs the group key
-     * Ignore if not a keyMaker. If initialization, go ahead and add to list in case
+     * This called when there is a new valid peer member request to join the distribution group.
+     * This indicates to the keyMaker there is a new peer that needs the group key.
+     * Ignore if not a keyMaker. If received during initialization, add to list in case
      * this becomes the keyMaker, but don't try to publish.
-     * Shouldn't have to republish the entire keylist, so this version publishes the
-     * new encrypted group key separately.
-     * Might also want to check if this peer is de-listed (blacklisted)
+     * Shouldn't have to republish the entire keylist, so  publishes the
+     * new encrypted group key separately for members joining after initialization
+     * .
+     * Might also want to check if this peer is de-listed (e.g., blacklisted) but for now assuming this
+     * would be handled in validation of cAdd PDU and of Publication.
      */
 
-    void addGroupMem(const rData& c) {
+    void addGroupMem(const rData& p) {
         if (!m_init && !m_keyMaker) return;
-        auto tp = dctCert::computeThumbPrint(c);
 
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
         // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members. 
         if (m_mbrList.size() == 80*maxKR) return;
 
-        auto pk = c.content().toVector();   //extract the public key
+        auto tp = p.thumbprint();
+        auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
         // convert pk to form that can be used to encrypt and add to member list
         if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0)
             return;     //unable to convert member's pk to sealed box pk

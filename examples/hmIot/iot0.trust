@@ -3,7 +3,7 @@
 // Each process has an identity associated with a particular type of
 // certificate that is signed and validatable.
 
-// trust anchor name associated with this schema
+// trust anchor name associated with this trust domain
 _domain:    "iot0"
 
 // MBPS Publication definition
@@ -17,20 +17,21 @@ _domain:    "iot0"
 
 #iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
     _origin:   sysId()
-} <= roleCert
+} <= signCert
 
-roleCert:    _domain/_role/_roleId/_keyinfo <= netCert
+roleCert:    _domain/_role/_roleId/_keyinfo <= domainCert
+signCert:    _domain/_role/_roleId/"sgn"/_keyinfo <= roleCert
 
-netCert: _domain/_keyinfo
+domainCert: _domain/_keyinfo
 
 // information about signing chain
-#chainInfo: /_role/_roleId <= roleCert
+#chainInfo: /_role/_roleId <= signCert
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain
 #pubValidator: "EdDSA"
 
-// The signature manager for this collection. Change to AEAD for data privacy
+// The signature manager for cAdds. Change to AEAD for data privacy
 #wireValidator: "EdDSA"
 
 // Certs use NDN certificate format v2 suffix

@@ -33,6 +33,7 @@
 #include <random>
 
 #include <dct/shims/mbps.hpp>
+#include "../util/identity_access.hpp"
 
 using namespace std::literals;
 
@@ -121,10 +122,15 @@ int main(int argc, char* argv[])
         usage(argv[0]);
         exit(1);
     }
-    mbps cm(argv[optind]);     //Create mbps
+    readBootstrap(argv[optind]);
+
+    // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
+    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
+    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-    cm.subscribe("/sens/rpt"s, rprtRecv);     // if collection command acks, need to subscribe to that
+    cm.subscribe("sens/rpt", rprtRecv);     // if collection command acks, need to subscribe to that
 
     // Connect and pass in the handler
     try {

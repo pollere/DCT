@@ -66,19 +66,27 @@ time_signing: time_signing.cpp
 	#rm -rf $@.dSYM
 
 tst_cert: tst_cert.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
+tst_certstore: tst_certstore.cpp 
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_encoder: tst_encoder.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
+tst_crname: tst_crname.cpp 
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_crpack: tst_crpack.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_rpacket: tst_rpacket.cpp 
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_transport: tst_transport.cpp 

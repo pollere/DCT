@@ -1,5 +1,10 @@
 # on a mac need to set PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
 # the code *requires* C++ 20 or later
+#
+# Clang rather than gcc is used on linux because current version
+# of gcc makes it difficult to follow c++ core guidelines. E.g.,
+# core guidelines suggest 'constexpr whenever possible' but
+# almost all uses of 'constexpr' give fatal errors in g++-12.
 
 INCLUDES = ../../include
 CXXFLAGS = -g -O0 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
@@ -7,18 +12,15 @@ CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=address,undefined
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 DEPS = $(HDRS)
-BINS = basicRelay
+BINS = basicRelay sens cntrl
 JUNK = 
 
 # OS dependent definitions
 ifeq ($(shell uname -s),Darwin)
 CXX=clang++
-# we can't fix boost warnings so suppress them
-#CXXFLAGS += --system-header-prefix=boost/
 LIBS += -L/opt/local/lib -lsodium
 JUNK += $(addsuffix .dSYM,$(BINS))
 else
-#CXX=c++
 CXX=clang++
 LIBS += -lsodium
 endif

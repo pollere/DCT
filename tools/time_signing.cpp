@@ -45,11 +45,7 @@ static auto makeAEADkey() {
     return key;
 }
 
-static auto enc(const DCTmodel::sPub& p) { return *p.wireEncode(); }
-
-static auto timeSM(SigMgr& sm, const auto& rdat, const auto niter) {
-    ndn::Data pub{ndn::Name("/test/sigmgr/timing/padMult32.").appendTimestamp(std::chrono::system_clock::now())};
-
+static auto timeSM(SigMgr& sm, auto rdat, const auto niter) {
     if (sm.type() == SigMgr::stAEAD) {
         // To handle encrypting/decrypting sigmgr which changes pubs
         // have to copy the pub in the loop and account for the copy cost.
@@ -60,30 +56,32 @@ static auto timeSM(SigMgr& sm, const auto& rdat, const auto niter) {
     if (incr < 1) incr = 1;
     //XXX start sz at 'incr' since AEAD doesn't currently accept 0 length content
     for (auto sz = incr; sz <= rdat.size(); sz += incr) {
-        pub.setContent((const uint8_t*)rdat.data(), sz*sizeof(rdat[0]));
+        crData pub{crName{"/test/sigmgr/timing/padMult32."}/std::chrono::system_clock::now()};
+        auto ss = rdat.first(sz);
         auto strt = std::chrono::system_clock::now();
-        for (auto i = 0u; i < niter; i++) { decltype(pub) p2(pub); enc(p2); }
+        for (auto i = 0u; i < niter; i++) { auto p2 = pub; p2.content(ss); }
         auto cpy = std::chrono::system_clock::now();
-        for (auto i = 0u; i < niter; i++) { decltype(pub) p2(pub); enc(p2); sm.sign(p2); }
+        for (auto i = 0u; i < niter; i++) { auto p2 = pub; p2.content(ss); sm.sign(p2); }
+        pub.content(ss);
         sm.sign(pub);
         auto fins = std::chrono::system_clock::now();
-        for (auto i = 0u; i < niter; i++) { decltype(pub) p2(pub); enc(p2); sm.validateDecrypt(p2); }
+        for (auto i = 0u; i < niter; i++) { auto p2 = pub; sm.validateDecrypt(p2); }
         auto finv = std::chrono::system_clock::now();
         auto cc = cpy - strt;
         using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-        print("{} : {} {} {}\n", pub.wireEncode()->size(), ticks(fins - cpy - cc)/double(niter),
+        print("{} : {} {} {}\n", pub.size(), ticks(fins - cpy - cc)/double(niter),
                 ticks(finv - fins - cc)/double(niter), ticks(cc)/double(niter));
     }
 }
 
 int main(int argc, char* const* argv) {
     size_t niter{1024*128};
-    size_t maxsize{syncps::maxPubSize};
+    size_t maxsize{dct::maxPubSize};
 
     if (argc < 3) usage(argv[0]);
 
-    DCTmodel* dm{};
-    SigMgrAny sm;
+    dct::DCTmodel* dm{};
+    SigMgrAny* sm;
     for (int c; (c = getopt_long(argc, argv, "n:p:s:t:w:", opts, nullptr)) != -1; ) {
         switch (c) {
             case 'm':
@@ -95,15 +93,15 @@ int main(int argc, char* const* argv) {
                 if (niter <= 0) usage(argv[0]);
                 break;
             case 'p':
-                if (! dm) dm = new DCTmodel(optarg);
-                sm = dm->psm_;
+                if (! dm) dm = new dct::DCTmodel(optarg);
+                sm = &dm->psm_;
                 break;
             case 'w':
-                if (! dm) dm = new DCTmodel(optarg);
-                sm = dm->wsm_;
+                if (! dm) dm = new dct::DCTmodel(optarg);
+                sm = &dm->wsm_;
                 break;
             case 't':
-                sm = sigMgrByType(optarg);
+                sm = new SigMgrAny{sigMgrByType(optarg)};
                 break;
         }
     }
@@ -119,7 +117,7 @@ int main(int argc, char* const* argv) {
     std::generate(rdat.begin(), rdat.end(), [&m_randDist,&m_randGen]{return m_randDist(m_randGen);});
 
     try {
-        timeSM(sm.ref(), rdat, niter);
+        timeSM(sm->ref(), std::span{(const uint8_t*)rdat.data(), rdat.size()*sizeof(*rdat.data())}, niter);
     } catch (const std::runtime_error& se) { print("error: {}\n", se.what()); }
 
     exit(0);

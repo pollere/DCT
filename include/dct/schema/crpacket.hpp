@@ -27,6 +27,7 @@
 #include <bit>
 #include <cassert>
 #include <cstring>
+//#include <ranges> ...waiting for clang to catch up
 
 #include "rand32.hpp"
 #include "rpacket.hpp"
@@ -270,7 +271,14 @@ struct crName : crTLV<rName,tlv::Name> {
     constexpr crName() = default;
 
     crName(rName n) { append(n.asSpan()); initBlk(); }
+    crName(rPrefix n) { append(n.asSpan()); done(); }
     crName(std::string_view s) { strToName(s).done(); }
+
+    // return a tlvParser for name component 'comp'
+    auto operator[](int comp) const { return rName(*this)[comp]; }
+
+    // return a crname consisting of the first 'ncomp' components of this name
+    auto first(int ncomp) const { return crName{rPrefix(*this).first(ncomp)}; }
 };
 
 template <typename C> requires requires(C&& c) { c.begin(); }
@@ -285,6 +293,21 @@ static inline crName operator/(crName p, std::chrono::microseconds t) {
 }
 static inline crName operator/(crName p, std::chrono::system_clock::time_point t) {
        return p / std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch());
+}
+
+// this routine appends a multi-component name (e.g., "foo/bar/baz"). '/' is always a
+// component separator. Leading and trailing slashes and empty components are ignored.
+static inline crName appendToName(crName p, std::string_view nm) {
+    //for (const auto comp: std::ranges::lazy_split_view(nm, "/")) if (comp) p /= comp;
+    // without ranges we do it the hard way...
+    size_t pos{};
+    size_t l;
+    while ((l = nm.find('/', pos)) != std::string_view::npos) {
+        if (l - pos > 0) p = p / nm.substr(pos, l - pos);
+        pos = ++l;
+    }
+    if (pos < nm.size() - 1) p = p / nm.substr(pos);
+    return p;
 }
 
 struct crPrefix : crTLV<rPrefix,tlv::Name> {

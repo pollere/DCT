@@ -164,10 +164,11 @@ struct DCTmodel {
     }
 
 
-    // create a new DCTmodel instance using the certs in the bootstrap bundle file 'bootstrap'
+    // create a new DCTmodel instance and pass the callbacks to access required certs to
+    // "bootstrap" this new transport instance
     // optional string for face name
-    DCTmodel(std::string_view bootstrap, DirectFace& face = defaultFace()) :
-            bs_{validateBootstrap(bootstrap, cs_)},
+    DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, DirectFace& face = defaultFace()) :
+            bs_{validateBootstrap(rootCb, schemaCb, idChainCb, signIdCb, cs_)},
             bld_{pubBldr(bs_, cs_, bs_.pubName(0))},
             psm_{getSigMgr(bs_)},
             wsm_{getWireSigMgr(bs_)},
@@ -183,39 +184,25 @@ struct DCTmodel {
                 // schema doesn't contain a "KeyMaker" capability cert so AEAD won't work
                 throw schema_error("AEAD requires that some entity(s) have KeyMaker capability");
             }
-            m_gkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys",
+            m_gkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
                              [this](auto gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
 #ifndef notdef
         } else if (wsm_.ref().type() == SigMgr::stPPAEAD || wsm_.ref().type() == SigMgr::stPPSIGN) {
-            if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
+            if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                 // schema doesn't contain a member with keymaker ability so PPAEAD won't work
+                throw schema_error("PPAEAD and PPSIGNED requires that some entity(s) have KeyMaker capability");
+            }
+            if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
+                // schema doesn't contain an SG member so PPAEAD won't work
                 throw schema_error("PPAEAD and PPSIGNED requires that some entity(s) have Subscriber capability");
             }
-            m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys",
+            m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
                              [this](auto gpk, auto gsk, auto ct){ wsm_.ref().addKey(gpk, gsk, ct);}, certs());
 #endif
         }
         // cert distributor needs a callback when cert added to certstore.
-        // when it's set up, push all the certs that went in prior to the
-        // callback to the distributor (all the bootstrap info).
-        // If using AEAD wireSigMgr, the group key distributor needs an update for new members
-        //  (but shouldn't call with its own signing key)
-        // NOTE: should possibly change this to use thumbPrint in future
-        if (m_gkd) {
-            cs_.addCb_ = [this, &ckd=m_ckd, &gkd=*m_gkd] (const dctCert& cert) {
-                            ckd.publishCert(cert);
-                            if (isSigningCert(cert)) gkd.addGroupMem(cert);
-                         };
-#ifndef notdef
-        } else if (m_sgkd) {    //sg is currently on possible on wire prefix
-            cs_.addCb_ = [this, &ckd=m_ckd, &sgkd=*m_sgkd] (const dctCert& cert) {
-                            ckd.publishCert(cert);
-                            if (isSigningCert(cert)) sgkd.addGroupMem(cert);
-                         };
-#endif
-        } else {
-            cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
-        }
+        cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
+
         for (const auto& [tp, cert] : cs_) m_ckd.initialPub(cert);
 
         // pub and wire sigmgrs each need its signing key setup and its validator needs
@@ -226,7 +213,6 @@ struct DCTmodel {
         pubSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
         wireSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
 
-
         // SPub need access to builder's 'index' function to translate component names to indices
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
     }
@@ -234,6 +220,7 @@ struct DCTmodel {
     // export the syncps API
  
     auto run() { m_sync.run(); };
+    auto stop() { m_sync.stop(); };
 
     auto& subscribe(const Name& topic, SubCb&& cb) {
         m_sync.subscribe(crPrefix{topic}, std::move(cb));
@@ -246,10 +233,10 @@ struct DCTmodel {
     auto publish(Publication&& pub) { return m_sync.publish(std::move(pub)); }
 
     auto publish(Publication&& pub, DelivCb&& cb) { return m_sync.publish(std::move(pub), std::move(cb)); }
-
+    auto orderPub(OrderPubCb&& cb) { return m_sync.orderPubCb(std::move(cb));}
     auto& pubLifetime(std::chrono::milliseconds t) {
         m_sync.pubLifetime(t);
-        return *this;
+        return *this;    
     }
 
     // Can be used by application to schedule a cancelable timer. Note that

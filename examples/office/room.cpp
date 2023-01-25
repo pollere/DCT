@@ -48,6 +48,7 @@
 #include <random>
 
 #include <dct/shims/mbps.hpp>
+#include "../util/identity_access.hpp"
 
 using namespace std::literals;
 
@@ -83,7 +84,13 @@ void cmdRecv(mbps &cm, const mbpsMsg& msg, std::vector<uint8_t>&)
 
 int main(int argc, char* argv[])
 {
-    mbps cm(argv[argc-1]);     //Create mbps
+    readBootstrap(argv[argc-1]);
+    // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
+    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
+   //Create the mbps DeftT
+    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, 
+        [](){ return currentSigningPair(); });
+
     cm.m_pb.pubLifetime(500ms); // want fresh status information
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");

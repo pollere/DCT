@@ -45,6 +45,7 @@
 #include <random>
 
 #include <dct/shims/mbps.hpp>
+#include "../util/identity_access.hpp"
 
 using namespace std::literals;
 
@@ -208,11 +209,26 @@ int main(int argc, char* argv[])
         usage(argv[0]);
         exit(1);
     }
-    myPID = std::to_string(getpid());
-    mbps cm(argv[optind]);
+
+    /*
+     *  These are useful in developing DeftT-based applications and/or in learning about Defined-trust Communications and DeftT.
+     *  The process id is useful for identifying trust domain members in dctwatch, doubtful usage in a deployment.
+     *  Application command lines pass a "bootstrap" identity file that would be (at least partially) securely configured in a
+     *  deployment. "readBootstrap" is in the identity_access.hpp utility file and parses the file. The rootCert, schemaCert,
+     *  identityChain, and currentSigningPair methods access that parsed data and serve as examples for the functions that
+     *  MUST be provided for an application, preferable securing at least the secret key and the integrity of the trust root.
+     */
+    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch, doubtful usage in a deployment
+    readBootstrap(argv[optind]);
+
+    // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
+    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
+    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+
+    // this example application needs information about some of its identity attributes which can now be returned by
+    // DeftT modules through the shim but this may not be needed in a deployed application
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-
     if (role == "operator") {
         cm.subscribe(msgRecv);  // single callback for all messages
     } else {

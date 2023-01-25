@@ -38,6 +38,7 @@
  *  0x0a NULL
  *  0x0b PPAEAD
  *  0x0c PPSIGN
+ *  0x0d AEADSIG
  * Note that NULL is used to bypass signing for dctCerts which are already
  * signed, does not appear in "wire" packets and should not be otherwise used.
  */
@@ -61,7 +62,7 @@ using SigType = uint8_t;
 using KeyCb = std::function<keyRef(rData)>;
 
 struct SigMgr {
-    // Signature types (must match equivalent NDN TLV when there is one)
+    // Signature types (must match equivalent NDN TLV if any) and be less than 64
     static constexpr SigType stSHA256 = 0;
     static constexpr SigType stAEAD = 7;
     static constexpr SigType stEdDSA = 8;
@@ -69,16 +70,20 @@ struct SigMgr {
     static constexpr SigType stNULL = 10;
     static constexpr SigType stPPAEAD = 11;
     static constexpr SigType stPPSIGN = 12;
+    static constexpr SigType stAEADSGN = 13;
 
     const SigType m_type;
     SigInfo m_sigInfo;
     keyVal m_signingKey{};
     KeyCb m_keyCb{};
 
-    // types that require a key locator in their sigInfo 
-    static constexpr uint16_t m_needsKeyLoc{(1 << stEdDSA) | (1 << stPPAEAD) | (1 << stPPSIGN)};
- 
-    static constexpr bool needsKey(SigType typ) noexcept { return (m_needsKeyLoc & (1 << typ)) != 0; };
+    // types that require a key locator in their sigInfo   
+    static constexpr uint64_t needsKey_{(1 << stEdDSA) | (1 << stPPAEAD) | (1 << stPPSIGN) | (1 << stAEADSGN)};
+    static constexpr bool needsKey(SigType typ) noexcept { return (needsKey_ & (1 << typ)) != 0; };
+
+    // types that encrypt content
+    static constexpr uint64_t encryptsContent_{(1 << stPPSIGN) | (1 << stAEADSGN)};
+    static constexpr bool encryptsContent(SigType typ) noexcept { return (encryptsContent_ & (1 << typ)) != 0; };
 
     // build a siginfo for signing key type 'typ'
     auto  mkSigInfo(SigType typ) {
@@ -102,12 +107,14 @@ struct SigMgr {
     virtual bool validate(rData, const rData&) { return false; };
     virtual bool validateDecrypt(rData d) { return validate(d); };
     virtual bool validateDecrypt(rData d, const rData&) { return validate(d); };
-    //sigmgrs make own copies
+    virtual bool decrypt(rData) { return true; };
+
     virtual void addKey(keyRef, uint64_t = 0) {};
     virtual void addKey(keyRef pk, keyRef, uint64_t = 0) { addKey(pk, 0); };
     virtual void updateSigningKey(keyRef, const rData&) {};
 
     constexpr bool needsKey() const noexcept { return needsKey(m_type); };
+    constexpr bool encryptsContent() const noexcept { return encryptsContent(m_type); };
 
     // if validate requires public keys of publishers, m_keyCb returns by keylocator
     void setKeyCb(KeyCb&& kcb) { m_keyCb = std::move(kcb);}

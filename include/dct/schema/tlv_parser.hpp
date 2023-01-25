@@ -25,6 +25,7 @@
 
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 #include "dct/format.hpp"
 #include "tlv.hpp"
@@ -72,28 +73,28 @@ struct tlvParser {
     }
 
     constexpr tlvParser() = default;
-    tlvParser(const tlvParser&) = default;
-    tlvParser(tlvParser&&) = default;
-    tlvParser& operator=(const tlvParser&) = default;
-    tlvParser& operator=(tlvParser&&) = default;
+    constexpr tlvParser(const tlvParser&) = default;
+    constexpr tlvParser(tlvParser&&) = default;
+    constexpr tlvParser& operator=(const tlvParser&) = default;
+    constexpr tlvParser& operator=(tlvParser&&) = default;
 
     constexpr tlvParser(Blk blk, size_t off) noexcept : m_blk{blk}, m_off{off} { }
 
     // a tlvParser is intended to parse something wrapped in a tlv (starting
     // with a type & a length). It assumes they type has been checked and skips
     // it but does check that the length matches the (externally supplied) size.
-    tlvParser(const uint8_t* p, size_t s, size_t off = 1) : tlvParser(Blk(p, s), off) {
+    constexpr tlvParser(const uint8_t* p, size_t s, size_t off = 1) : tlvParser(Blk(p, s), off) {
         // check that size agrees with encoded tlv length (this will leave the offset at first content byte)
         auto len = blkLen();
         if (len + m_off != size())
             throw runtime_error(format("len {} != size {}", len + m_off, size()));
     }
-    tlvParser(const std::vector<uint8_t>& v) : tlvParser(v.data(), v.size()) { }
+    constexpr tlvParser(const std::vector<uint8_t>& v) : tlvParser(v.data(), v.size()) { }
 
     // this tlvParser parses a vector of tlv's (like the vector returned by
     // data.getContent()) starting at an explicit offset (usually 0) and
     // doesn't look for a type or length.
-    tlvParser(const std::vector<uint8_t>& v, size_t off) : tlvParser(Blk(v.data(), v.size()), off) { }
+    constexpr tlvParser(const std::vector<uint8_t>& v, size_t off) : tlvParser(Blk(v.data(), v.size()), off) { }
 
     auto nextByte() {
         if (off() >= size()) throw runtime_error("read past end of tlv block");
@@ -311,11 +312,18 @@ struct tlvVec {
         }
         if (off != b_.size()) throw runtime_error("tlv larger than enclosing block");
     }
+    // return the number of TLVs in the container TLV
     constexpr auto size() const { return o_.size(); }
-    auto operator[](int off) {
-        if (off < 0) off += size();
-        return b_.nextAt(o_[off]);
+
+    // return a tlv parser for component 'comp' of container. If 'comp' is negative,
+    // the component returned is 'comp' back from the end.
+    auto operator[](int comp) {
+        if (comp < 0) comp += size();
+        if (std::cmp_greater_equal(comp, size())) throw runtime_error("tlvVec component index too large");
+        return b_.nextAt(o_[comp]);
     }
+
+    // return the container tlv with the offset set to the first component
     auto& tlv() { b_.skipTo(o_[0]); return b_; }
 };
 

@@ -51,6 +51,7 @@
 #include <random>
 
 #include <dct/shims/mbps.hpp>
+#include "../util/identity_access.hpp"
 
 using namespace std::literals;
 
@@ -84,6 +85,9 @@ static int Cnt = 0;
 static std::string capability{"lock"};
 static std::string myState{"unlocked"};       // simulated state (for devices)
 
+using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
+
 /*
  * msgPubr passes messages to publish to mbps. A simple lambda
  * is used if "qos" is desired. A more complex callback (messageConfirmation)
@@ -96,7 +100,7 @@ static void msgPubr(mbps &cm) {
     msgParms mp;
 
     if(role == "operator") {
-        std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested action
+        std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
         std::string l = (std::rand() & 2)? "gate" : "frontdoor"; // randomly toggle targeted location
         mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",l},{"topicArgs", a}};
         print("{}:{}-{} publishing msg {} targeted at {}\n", role, myId, myPID, Cnt, l);
@@ -136,12 +140,11 @@ static void msgPubr(mbps &cm) {
  * msgPrnt prints the message received in the subscription
  */
 static void msgPrnt(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload) {
-    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
     auto dt = ticks(now - mt.time("mts")).count() / 1000.;
 
     print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
-            ticks(now.time_since_epoch()), role, myId, myPID, dt, mt["target"],
+            tp2d(now), role, myId, myPID, dt, mt["target"],
                 mt["topic"], mt["trgtLoc"], mt["topicArgs"],
                 std::string(msgPayload.begin(), msgPayload.end()));
 }
@@ -209,8 +212,22 @@ int main(int argc, char* argv[])
         usage(argv[0]);
         exit(1);
     }
-    myPID = std::to_string(getpid());
-    mbps cm(argv[optind]);     //Create mbps
+
+    /*
+     *  These are useful in developing DeftT-based applications and/or in learning about Defined-trust Communications and DeftT.
+     *  The process id is useful for identifying trust domain members in dctwatch, doubtful usage in a deployment.
+     *  Application command lines pass a "bootstrap" identity file that would be (at least partially) securely configured in a
+     *  deployment. "readBootstrap" is in the identity_access.hpp utility file and parses the file. The rootCert, schemaCert,
+     *  identityChain, and currentSigningPair methods access that parsed data and serve as examples for the functions that
+     *  MUST be provided for an application, preferable securing at least the secret key and the integrity of the trust root.
+     */
+    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch, doubtful usage in a deployment
+    readBootstrap(argv[optind]);
+
+    // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
+    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
+    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
 

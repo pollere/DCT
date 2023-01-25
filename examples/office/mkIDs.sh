@@ -31,23 +31,29 @@ Pub=$(schema_info $Bschema);
 PubPrefix=$(schema_info $Bschema "#pubPrefix");
 PubValidator=$(schema_info -t $Bschema "#pubValidator");
 
-if [ $(schema_info -t $Bschema "#wireValidator") == AEAD ]; then
-    if [ -z $(schema_info -c $Bschema "KM") ]; then
-	echo
-	echo "- error: AEAD encryption requires entity(s) with a KM (KeyMaker) Capability"
-	echo "         but schema $1 doesn't have any."
-	exit 1;
-    fi;
-    # make the 'key maker' capability cert
-    KMCap=kmcap
-fi;
+echo
+echo "pub prefix is $PubPrefix"
+echo "pub validator is $PubValidator"
+echo
 
+# make root cert and schema cert
 make_cert -s $PubValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
 
-# make the config cert then room certs
-make_cert -s $PubValidator -o $ConfigCert $PubPrefix/config/ITwiz $RootCert
+if [ $(schema_info -t $Bschema "#wireValidator") == AEAD ]; then
+#    if [ -z $(schema_info -c $Bschema "KM") ]; then
+#	echo
+#	echo "- error: AEAD encryption requires entity(s) with a KM (KeyMaker) Capability"
+#	echo "         but schema $1 doesn't have any."
+#	exit 1;
+#    fi;
+    # set KMCap so makes the 'key maker' capability certs
+    KMCap=kmcap
+fi;
 
+# make the config cert
+make_cert -s $PubValidator -o $ConfigCert $PubPrefix/config/ITwiz $RootCert
+# make the room certs
 for nm in ${rooms[@]}; do
         make_cert -s $PubValidator -o $nm.cert $PubPrefix/room/$nm $ConfigCert
     if [ $nm != "all" ]; then

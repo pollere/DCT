@@ -1,5 +1,7 @@
 #! /bin/bash
 # starts up all the relays and sensors
+# sensors have trust schema compatible with the s<n> deftt of the relays
+# the m<n> side of the relays are compatible with the controller
 # do "killall sensors" to terminate the sensors
 
 relays=(1 2 3)

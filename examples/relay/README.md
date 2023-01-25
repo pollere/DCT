@@ -80,7 +80,7 @@ Relays can also be used to create meshes that require no specific configuration 
 
 ![relaymesh](relaymesh.jpg)
 
-This directory also contains a simplified example where sensors (sens.cpp), assumed to use a short-range wireless media, periodically publish reports of their measurements and subscribe to commands. Relays have one DeftT that uses the same media as the sensors and another that uses a longer-range broadcast media which a controller (cntrl.cpp) also uses. The directory contains a trust schema for the sensor media, sensor.trust, and a trust schema for the longer-range media where relays are meshed, mesh.trust.
+This directory also contains a simplified example where sensors (sens.cpp), assumed to use a short-range wireless media, periodically publish reports of their measurements and subscribe to commands. Relays have one DeftT that uses the same media as the sensors (those get role ids of s<relay #>) and another that uses a longer-range broadcast media which a controller (cntrl.cpp) also uses (those get role ids of m<relay #>). The directory contains a trust schema for the sensor media, sensor.trust, and a trust schema for the longer-range media where relays are meshed, mesh.trust.
 
 To run this example, create a subdirectory for the identity bundles under relay (here mesh), change to that directory and run
 
@@ -88,7 +88,7 @@ To run this example, create a subdirectory for the identity bundles under relay 
 ../mkMeshIDs.sh ../mesh.trust
 ```
 
-which creates the required identity bundles. To run from examples/relay, start:
+which creates the required identity bundles. Note the script is not set up to make a keymaker cert for the sensor net, so don't use AEAD in the sensor.trust schema. To run from examples/relay, start:
 
 ```
 cntrl mesh/cntrl.bundle

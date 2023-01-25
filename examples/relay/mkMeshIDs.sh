@@ -1,6 +1,5 @@
 #! /bin/bash
-# mkIDs schema - script to create id bundles needed to run an app with some iot mbps schema
-# and a "sub" schema, iote.trust for a relay's "external" connection
+# mkIDs schema - script to create id bundles needed to run the mesh with sensors
 #  'schema' is the filename of the schema's .trust file
 PATH=../../../tools:$PATH
 
@@ -56,6 +55,7 @@ fi;
 
 # make the relay external link certs and bundles
 # could use same signing cert for both relay ports if not using AEAD on mesh
+# this isn't set up to use AEAD on sensor side - doesn't give relay a KM cert
 for n in ${relay[@]}; do
     if [ -n $KMCapCert ]; then
     make_cert -s $PubValidator -o mesh$n.cert $PubPrefix/relay/m$n $KMCapCert

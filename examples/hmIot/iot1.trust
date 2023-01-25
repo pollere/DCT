@@ -3,8 +3,8 @@
 // Each process has an identity associated with a particular type of
 // certificate that is signed and validatable.
 
-// trust anchor name associated with this schema
-_network:    "iot1"
+// trust anchor name associated with this domain
+_domain:    "iot1"
 
 // MBPS Publication definition
 // target, topic, topicArgs are set using application parameters
@@ -15,30 +15,32 @@ _network:    "iot1"
 // specific by using a subscription list with specific subCollections (designated
 // by targets) and related callback functions.
 
-#iotPub: _network/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
     _origin:   sysId()
 }
 
 lockReport: #iotPub & { target: "lock", topic: "event"|"status"
     trgtLoc: _roleId
     topicArgs: "locked" | "unlocked" | "battery_low"
-} <= devCert 
+} <= devSign 
 
 lockCommand: #iotPub & { target: "lock", topic: "command" } &
     { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
-    { topicArgs:  "lock"|"unlock"|"report" } <= opCert
+    { topicArgs:  "lock"|"unlock"|"report" } <= opSign
 
-roleCert:    _network/_role/_roleId/_keyinfo <= netCert
-opCert:  roleCert & { _role: "operator" }
-devCert: roleCert & { _role: "device" }
+roleCert:    _domain/_role/_roleId/_keyinfo <= domainCert
+signCert:    _domain/_role/_roleId/"sgn"/_keyinfo
 
-netCert: _network/_keyinfo
+opSign: signCert & { _role: "operator" } <= roleCert
+devSign: signCert & { _role: "device" } <= roleCert
+
+domainCert: _domain/_keyinfo
 
 // information about signing chain
-#chainInfo: /_role/_roleId <= roleCert
+#chainInfo: /_role/_roleId <= signCert
 
 // schema's Publication prefix and validator type
-#pubPrefix:    _network
+#pubPrefix:    _domain
 #pubValidator: "EdDSA"
 
 // for cAdds
