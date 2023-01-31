@@ -37,9 +37,9 @@ signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 
 opSign:  signCert & { _role: "operator" } <= mbrCert
 devSign: signCert & { _role: "device" } <= mbrCert
-rlySign: signCert & { _role: "relay" } <= rlyCert
+rlySign: signCert <= rlyCert
 
-rlyCert: roleCert <= domCert | kmCap
+rlyCert: roleCert & { _role: "relay" } <= domCert | kmCap 
 mbrCert: roleCert <= domCert
 
 // There are different signing chains for opCert & devCerts.

@@ -68,6 +68,10 @@ static inline std::vector<dctCert> identityChain(int i=0) { return idChain[i]; }
 static inline void readBootstrap(std::string_view bootstrap) {
     // cb is made up of certItems - pair <dctCert,keyVal> where all keyVals are empty except last
     auto cb = rdCertBundle(fileToVec(bootstrap));
+    if(cb.size() < 3) {
+        print("readBootstrap for shim {} only has {} certs when at least 3 are needed\n", root.size(), cb.size());
+        exit(0);
+    }
     // first item must be a trust anchor - to be validated by the DeftT
     if (! root.size())
         root = cb[0].first;

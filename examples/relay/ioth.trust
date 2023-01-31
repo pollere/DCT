@@ -26,14 +26,17 @@ lockReport: #iotPub & { target: "lock", topic: "event"|"status"
 
 lockCommand: #iotPub & { target: "lock", topic: "command" } &
     { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
-    { topicArgs:  "lock"|"unlock"|"report" } <= opsign
+    { topicArgs:  "lock"|"unlock"|"report" } <= opSign
 
 roleCert:   _domain/_role/_roleId/_keyinfo <= domCert
 signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 
-opSign:  signCert & { _role: "operator" } <= roleCert
-devSign: signCert & { _role: "device" } <= roleCert
-rlySign: signCert & { _role: "relay" } <= roleCert
+opSign:  signCert & { _role: "operator" } <= mbrCert
+devSign: signCert & { _role: "device" } <= mbrCert
+rlySign: signCert <= rlyCert
+
+rlyCert: roleCert & { _role: "relay" } <= domCert | kmCap
+mbrCert: roleCert <= domCert
 
 domCert: _domain/_keyinfo
 
