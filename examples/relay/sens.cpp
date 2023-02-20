@@ -31,10 +31,7 @@
 #include <iostream>
 #include <random>
 
-#include <dct/shims/mbps.hpp>
-#include "../util/identity_access.hpp"
-
-using namespace std::literals;
+#include "../util/dct_example.hpp"
 
 // handles command line
 static struct option opts[] = {
@@ -59,9 +56,9 @@ static void help(const char* cname)
 
 /* Globals */
 static std::string myId, role, fullId;
-static std::chrono::microseconds pubWait = std::chrono::seconds(1);
+static std::chrono::microseconds pubWait = std::chrono::seconds(5);
 static int Cnt = 0;
-static int nMsgs = 10;
+static int nMsgs = 5;
 
 /*
  * reports environmental information periodically
@@ -149,17 +146,18 @@ int main(int argc, char* argv[])
 
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
 
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
     fullId = format("{}:{}", role, myId);
-    cm.subscribe("sens/cmd", cmdRecv);
 
     // Connect and pass in the handler
     try {
         /* main task for this entity */
-        cm.connect([&cm]{ sensRprtr(cm); });
+        cm.connect([&cm]{
+            cm.subscribe("sens/cmd", cmdRecv);
+            sensRprtr(cm); });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);

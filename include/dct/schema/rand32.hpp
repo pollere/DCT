@@ -1,5 +1,6 @@
 #ifndef RAND32_HPP
 #define RAND32_HPP
+#pragma once
 /*
  * DCT random number generator (for non-crypto use like Interest nonces)
  *
@@ -26,6 +27,8 @@
 #include <array>
 #include <random>
 
+namespace dct {
+
 static inline auto& randGen() noexcept {
     static std::minstd_rand randomGen{};
     static bool needInit{true};
@@ -34,5 +37,7 @@ static inline auto& randGen() noexcept {
 }
 
 static inline auto rand32() noexcept { return randGen()(); }
+
+} // namespace dct
 
 #endif  // RAND32_HPP

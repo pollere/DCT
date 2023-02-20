@@ -21,8 +21,12 @@ LIBS =  -lsodium
 
 .DEFAULT_GOAL = all
 
-TOOLS = schema_cert schema_info schema_dump make_cert make_bundle ls_bundle bld_dump schemaCompile bundle_info
-TESTS = tst_encodeer tst_rpacket tst_validate tst_transport time_signing
+TOOLS = schemaCompile bld_dump bundle_info default_interface ls_bundle \
+	make_bundle make_cert schema_cert schema_dump schema_info
+
+TESTS = time_hashing time_signing tst_cert tst_certstore tst_crname \
+	tst_crpack tst_encoder tst_rpacket tst_transport tst_transport \
+	tst_validate
 
 all: $(TOOLS)
 

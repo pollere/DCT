@@ -13,6 +13,9 @@
  * The identity bundle has a role of "relay" so the trust schema needs
  * a signing key definition for that role (because the wire packets must be signed).
  *
+ * Different relay DeftTs may use different "wire" validators but must all use the same
+ * publication validator, even if going to a "pure" relay link
+ *
  * After set up, basicRelay waits for a Publication to arrive from one of the transports.
  * Upon receipt, the Publication is published to all the attached DeftTs. If the DeftTs
  * do not have identical trust schemas, then pubRecv() must use publishValid() rather
@@ -22,6 +25,8 @@
  * basicRelay also supplies a callback for each transport to call when a new signing
  * cert is added to its cert store; the cert is passed to all the other DeftTs where they are
  * always validated before adding to their own cert stores (and publishing).
+ * basicRelay also passes through all publications of a publication distributor to extend the
+ * trust domain.
  *
  * basicRelay.cpp is not intended as production code.
  */
@@ -49,11 +54,26 @@
 #include <iostream>
 #include <chrono>
 
+// app interface to dct via ptps
 #include <dct/shims/ptps.hpp>
+using dct::ptps;
+using dct::parItem;
+using dct::Publication;
+using dct::rData;
+using dct::certStore;
+
+// DCT's secured identity bootstrap framework which, for development purposes,
+// is mapped onto (insecure) bundle files by identity_access.hpp.
 #include "../util/identity_access.hpp"
+using dct::readBootstrap;
+using dct::rootCert;
+using dct::schemaCert;
+using dct::identityChain;
+using dct::currentSigningPair;
 
 using namespace std::literals;
-using namespace dct;
+
+//using namespace dct;
 
 // handles command line
 static struct option opts[] = {
@@ -92,9 +112,9 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  * that are defined in the sub-TSs. Otherwise publishValid() is recommended.
  */
 static void pubRecv(ptps* s, const Publication& p) {
-    // auto now = std::chrono::system_clock::now();
-    // print("{:%M:%S} {}:{}:{}\trcvd pub {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-    //      (s->label().size()? s->label() : "default"), p.name());
+    /*  auto now = std::chrono::system_clock::now();
+     print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
+          (s->label().size()? s->label() : "default"), p.name()); */
     try {
         for (auto sp : dtList)  
             if (sp != s) {
@@ -102,7 +122,7 @@ static void pubRecv(ptps* s, const Publication& p) {
                     // print("\trelayed w/o validate to interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
                     sp->publish(Publication(p));
                 } else {
-                   // print("\trelayed to validate for interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
+                    // print("\trelayed to validate for interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
                     sp->publishValid(Publication(p));
                 }
             }
@@ -111,8 +131,8 @@ static void pubRecv(ptps* s, const Publication& p) {
 
 /*
  * chainRecv is callback set when each ptps is constructed.
- *  It is invoked upon reception of a crypto validated signing cert by DeftT s which constains its validated chain
- *  The chain's signging cert and pointer to the arrival cert store  is then relayed to all the (other) DeftTs
+ *  It is invoked upon reception of a crypto validated signing cert by DeftT s which contains its validated chain
+ *  The chain's signging cert and pointer to the arrival cert store is then relayed to all the (other) DeftTs
  *  for validation and publication
  *
  *  Any cert that does not appear as an "is signed by" for a publication in a DeftT's trust schema should probably
@@ -120,17 +140,38 @@ static void pubRecv(ptps* s, const Publication& p) {
  *  Also it may be more costly to filter the cert chain than to forward it.
  */
 static void chainRecv(ptps* s, const rData c, const certStore& cs) {
-    //auto now = std::chrono::system_clock::now();
-    // print("{:%M:%S} {}:{}:{}\trcvd signing cert {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-    //      (s->label().size()? s->label() : "default"), c.name());
-
+    /* auto now = std::chrono::system_clock::now();
+     print("{:%M:%S} {}:{}:{}\trcvd signing cert {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
+          (s->label().size()? s->label() : "default"), c.name()); */
     try {
         for (auto sp : dtList)
         if (sp != s) {
-            // print("\trelaying its chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
+            //print("\trelaying a signing chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
             sp->addRelayedChain(c, cs);
         }
     } catch (const std::exception& e) { }
+}
+
+/*
+ *  keyPubRecv is callback set when each ptps is constructed. If a publication key distributor
+ *  is in use, it is used as a subscription callback to relay the publications of its syncps
+ *  to other shims. Relays don't participate in pub encrypt/decrypt groups, merely
+ *  validate and relay the encrypted pubs, but must pass through the key distribution publications
+ *  (in PDU keys collection: <td_ID>/keys/pubs) to other shims.
+ *
+ *  Distributor publications do not currently appear in trust schemas, so instead, a test is made to
+ *  determine if a  pub's signer is known (in the cert store) to a shim before it is forwarded there.
+ */
+static void keyPubRecv(ptps* s, const Publication& p) {
+    /* auto now = std::chrono::system_clock::now();
+    print("{:%M:%S} {}:{}:{}\trcvd KEYS pub {}", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
+         (s->label().size()? s->label() : "default"), p.name()); */
+    try {
+        for (auto sp : dtList)
+            if (sp != s) {
+                sp->publishKnown(Publication(p));
+            }
+    } catch (const std::exception& e) {}
 }
 
 /*
@@ -198,7 +239,7 @@ int main(int argc, char* argv[])
     }
     dtLabel.push_back(ccList.substr(start,ccList.size()-start));
     //for each entry on list, create a ptps
-    // (for failovers, might consider only creating a bt when it is needed, depends on application)
+    // (for failovers, might consider only creating a deftt when it is needed, depends on application)
     dtList.reserve(dtLabel.size());
     for (const auto& l : dtLabel) {
         size_t m = l.find(" ", 0u);
@@ -209,11 +250,17 @@ int main(int argc, char* argv[])
         readBootstrap(l.substr(m+1));    // parse the bootstrap file for this DeftT shim
         try {
             if(!deliveryConfirmation) {
-                dtList.push_back( new ptps{rootCert, [i=s_id](){ return schemaCert(i); }, [i=s_id](){ return identityChain(i); },
-                                               [i=s_id](){ return currentSigningPair(i); }, l.substr(0u,m), chainRecv} );
+                dtList.push_back( new ptps{rootCert,
+                                           [i=s_id]{return schemaCert(i);},
+                                           [i=s_id]{return identityChain(i);},
+                                           [i=s_id]{return currentSigningPair(i);},
+                                           l.substr(0u,m), chainRecv, keyPubRecv} );
             } else {
-                dtList.push_back( new ptps{rootCert, [i=s_id](){ return schemaCert(i); }, [i=s_id](){ return identityChain(i); },
-                                               [i=s_id](){ return currentSigningPair(i); }, l.substr(0u,m), chainRecv, pubFailure} );
+                dtList.push_back( new ptps{rootCert,
+                                           [i=s_id]{return schemaCert(i);},
+                                           [i=s_id]{return identityChain(i);},
+                                           [i=s_id]{return currentSigningPair(i);},
+                                           l.substr(0u,m), chainRecv, keyPubRecv, pubFailure} );
             }
         } catch (const std::exception& e) {
             std::cerr << "basicRelay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;
@@ -227,12 +274,13 @@ int main(int argc, char* argv[])
                       s.attribute("_role"), s.label());
                 exit(1);
         }
-        //single callback for all Publications
-        s.subscribe(pubRecv);
+        //single callback for all Publications in pubs
+       // s.subscribe(pubRecv);
         // Connect and pass in the handler
         try {
-            s.connect([&s](){ print("basicRelay: DeftT connected on {}:{} interFace\n", s.label(), s.attribute("_roleId"));});
-
+            s.connect([&s](){
+                print("basicRelay: DeftT connected on {}:{} interFace\n", s.label(), s.attribute("_roleId"));
+                s.subscribe(pubRecv);} );
         } catch (const std::exception& e) {
             std::cerr << "main: encountered exception while trying to connect transport " << l << ": " << e.what() << std::endl;
             exit(1);

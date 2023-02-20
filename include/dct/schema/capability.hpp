@@ -1,5 +1,6 @@
 #ifndef SCHEMA_CAPABILITY_HPP
 #define SCHEMA_CAPABILITY_HPP
+#pragma once
 /*
  * Cap - method(s) to handle DCT schema "capability" certs
  *
@@ -58,6 +59,8 @@
 #include <dct/schema/certstore.hpp>
 #include <dct/schema/crpacket.hpp>
 
+namespace dct {
+
 struct Cap {
     using capChk = std::function<std::pair<bool,rData>(const thumbPrint&)>;
     using compVal = tlvParser;
@@ -85,5 +88,7 @@ struct Cap {
             };
     }
 };
+
+} // namespace dct
 
 #endif // SCHEMA_CAPABILITY_HPP

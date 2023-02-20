@@ -27,6 +27,8 @@
 #include "murmurHash3.hpp"
 #include "dct/format.hpp"
 
+using namespace dct;
+
 static struct option opts[] {
     {"niter", required_argument, nullptr, 'n'},
     {"maxsize", required_argument, nullptr, 'm'}

@@ -1,5 +1,6 @@
 #ifndef DISSECT_HPP
 #define DISSECT_HPP
+#pragma once
 /*
  * dissect - NDN packet dissector / printer
  *
@@ -30,6 +31,8 @@
 #include "dct/format.hpp"
 #include "dct/schema/tlv.hpp"
 #include "dct/schema/tlv_parser.hpp"
+
+namespace dct {
 
 struct Dissect {
     enum class cFmt { unknown, str, num, tstamp, bin };
@@ -346,4 +349,5 @@ struct Dissect {
     }
 };
 
+} // namespace dct
 #endif // DISSECT_HPP

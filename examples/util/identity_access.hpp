@@ -1,5 +1,6 @@
-#ifndef RELAY_IDENT_HPP
-#define RELAY_IDENT_HPP
+#ifndef IDENTITY_ACCESS_HPP
+#define IDENTITY_ACCESS_HPP
+#pragma once
 /*
  * Provides functions to parse a bootstrap file that contains the certs needed by a DeftT instance:
  *      0: the trust anchor
@@ -45,12 +46,13 @@
  *  More information on DCT is available from info@pollere.net
  */
 
-
 #include <string_view>
 #include "dct/schema/cert_bundle.hpp"
 #include "dct/schema/signed_cert.hpp"
 #include "dct/file_to_vec.hpp"
 #include "dct/format.hpp"
+
+namespace dct {
 
 std::vector<std::vector<dctCert>> idChain{};
 static inline dctCert root{};
@@ -118,5 +120,6 @@ static inline certItem currentSigningPair(int i=0) {
     return signingPair[i];
 }
 
-#endif // RELAY_IDENT_HPP
+} // namespace dct
 
+#endif // IDENTITY_ACCESS_HPP

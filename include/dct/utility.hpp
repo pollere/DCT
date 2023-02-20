@@ -1,5 +1,6 @@
 #ifndef DCT_UTILITY_HPP
 #define DCT_UTILITY_HPP
+#pragma once
 /*
  * misc utility routines used by DCT modules
  *
@@ -28,6 +29,9 @@ extern "C" {
     int gethostname(char*, size_t); //MacOS
     pid_t getpid(void);
 }
+
+namespace dct {
+
 #ifndef HOST_NAME_MAX
 static constexpr size_t HOST_NAME_MAX = 64;  //Linux limit
 #endif
@@ -43,5 +47,7 @@ inline static const std::string& sysID() noexcept {
     }
     return sysid;
 }
+
+} // namespace dct
 
 #endif // DCT_UTILITY_HPP

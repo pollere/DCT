@@ -1,3 +1,6 @@
+#ifndef FORMAT_HPP
+#define FORMAT_HPP
+#pragma once
 /*
  * Copyright (C) 2020 Pollere LLC
  *
@@ -18,8 +21,6 @@
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
  */
-#ifndef FORMAT_HPP
-#define FORMAT_HPP
 
 // use local version of c++20 formatted output until std library catches up.
 // Download fmt from https://fmt.dev/latest/index.html or https://github.com/fmtlib/fmt

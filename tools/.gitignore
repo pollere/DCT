@@ -1,5 +1,10 @@
 bundle_info
 default_interface
+experiments/
+time_hashing
 time_signing
 times/
+tst_cert
+tst_certstore
+tst_crname
 tst_transport

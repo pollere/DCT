@@ -26,6 +26,8 @@
 #include "dct/format.hpp"
 #include "dct/schema/dct_model.hpp"
 
+using namespace dct;
+
 static struct option opts[] {
     {"pub", required_argument, nullptr, 'p'},
     {"wire", required_argument, nullptr, 'w'},

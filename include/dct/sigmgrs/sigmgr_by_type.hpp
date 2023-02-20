@@ -1,5 +1,6 @@
 #ifndef SIGMGR_BY_TYPE_HPP
 #define SIGMGR_BY_TYPE_HPP
+#pragma once
 /*
  * Return a sigmgr given its signer type or name
  *
@@ -54,6 +55,8 @@
 #include "sigmgr_aeadsgn.hpp"
 #include "sigmgr_null.hpp"
 
+namespace dct {
+
 using namespace std::string_literals;
 
 template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
@@ -85,26 +88,26 @@ struct SigMgrAny : Variants {
 };
 
 static inline const std::unordered_map<std::string,uint8_t> sigmgr_name_to_type {
-    {"SHA256"s,  SigMgr::stSHA256},
-    {"AEAD"s,     SigMgr::stAEAD},
-    {"EdDSA"s,   SigMgr::stEdDSA},
-    {"RFC7693"s, SigMgr::stRFC7693},
-    {"NULL"s,    SigMgr::stNULL},
-    {"PPAEAD"s,     SigMgr::stPPAEAD},
-    {"PPSIGN"s,     SigMgr::stPPSIGN},
-    {"AEADSGN"s, SigMgr::stAEADSGN}
+    {"SHA256"s,  stSHA256},
+    {"AEAD"s,    stAEAD},
+    {"EdDSA"s,   stEdDSA},
+    {"RFC7693"s, stRFC7693},
+    {"NULL"s,    stNULL},
+    {"PPAEAD"s,  stPPAEAD},
+    {"PPSIGN"s,  stPPSIGN},
+    {"AEADSGN"s, stAEADSGN}
 };
 
 static inline SigMgrAny sigMgrByType(uint8_t type) {
     switch (type) {
-        case SigMgr::stSHA256:  return SigMgrSHA256();
-        case SigMgr::stAEAD:    return SigMgrAEAD();
-        case SigMgr::stEdDSA:   return SigMgrEdDSA();
-        case SigMgr::stRFC7693: return SigMgrRFC7693();
-        case SigMgr::stNULL:    return SigMgrNULL();
-        case SigMgr::stPPAEAD:  return SigMgrPPAEAD();
-        case SigMgr::stPPSIGN:    return SigMgrPPSIGN();
-        case SigMgr::stAEADSGN: return SigMgrAEADSGN();
+        case stSHA256:  return SigMgrSHA256();
+        case stAEAD:    return SigMgrAEAD();
+        case stEdDSA:   return SigMgrEdDSA();
+        case stRFC7693: return SigMgrRFC7693();
+        case stNULL:    return SigMgrNULL();
+        case stPPAEAD:  return SigMgrPPAEAD();
+        case stPPSIGN:    return SigMgrPPSIGN();
+        case stAEADSGN: return SigMgrAEADSGN();
     }
     throw std::runtime_error(format("sigMgrByType: unknown signer type {}", type));
 }
@@ -115,5 +118,7 @@ static inline SigMgrAny sigMgrByType(std::string_view sv) {
     if (! sigmgr_name_to_type.contains(s)) throw std::runtime_error(format("sigMgrByType: unknown signer type {}", s));
     return sigMgrByType(sigmgr_name_to_type.at(s));
 }
+
+} // namespace dct
 
 #endif //SIGMGR_BY_TYPE_HPP

@@ -1,5 +1,6 @@
 #ifndef SPAN_UTIL_HPP
 #define SPAN_UTIL_HPP
+#pragma once
 
 // methods that should be in std::span (from https://en.cppreference.com/w/cpp/container/span)
 

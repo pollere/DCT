@@ -35,10 +35,7 @@
 #include <iostream>
 #include <random>
 
-#include <dct/shims/mbps.hpp>
-#include "../util/identity_access.hpp"
-
-using namespace std::literals;
+#include "../util/dct_example.hpp"
 
 static constexpr bool deliveryConfirmation = false; // get per-message delivery confirmation
 
@@ -204,20 +201,26 @@ int main(int argc, char* argv[])
         exit(1);
     }
 
-       /*
-     *  These are useful in developing DeftT-based applications and/or in learning about Defined-trust Communications and DeftT.
-     *  The process id is useful for identifying trust domain members in dctwatch, doubtful usage in a deployment.
-     *  Application command lines pass a "bootstrap" identity file that would be (at least partially) securely configured in a
-     *  deployment. "readBootstrap" is in the identity_access.hpp utility file and parses the file. The rootCert, schemaCert,
-     *  identityChain, and currentSigningPair methods access that parsed data and serve as examples for the functions that
-     *  MUST be provided for an application, preferable securing at least the secret key and the integrity of the trust root.
+    /*
+     *  These are useful in developing DeftT-based applications and/or
+     *  learning about Defined-trust Communications and DeftT.  The rootCert,
+     *  schemaCert, identityChain and currentSigningPair callbacks are how
+     *  DeftT's internals request the four kinds of information needed to
+     *  bootstrap an app. In a real deployment these would be handled in
+     *  a Trusted Execution Environment. For expository purposes,
+     *  identity_access.hpp contains simple, unsecure, examples of these
+     *  callbacks implemented by routine readBootstrap which reads an identity
+     *  bundle file (whose name must be the final command line arg passed to the
+     *  app), splits it into the pieces needed by the callbacks, and supplies a
+     *  routine to locally generate the app identity cert and signing key.
      */
-    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch, doubtful usage in a deployment
+    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch,
+                                        // of doubtful usage in a deployment
     readBootstrap(argv[optind]);
 
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+    mbps cm(rootCert, []{ return schemaCert();}, []{ return identityChain();}, []{ return currentSigningPair();});
 
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");

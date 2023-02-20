@@ -1,3 +1,6 @@
+#ifndef DCT_FACE_DIRECT_HPP
+#define DCT_FACE_DIRECT_HPP
+#pragma once
 /*
  * Data Centric Transport 'direct face' abstraction (no NFD or forwarding agent)
  *
@@ -41,8 +44,6 @@
  * and attack surface (NFD + ndn-cxx is >50,000 lines of code vs. ~250 for Direct).
  */
 
-#ifndef DCT_FACE_DIRECT_HPP
-#define DCT_FACE_DIRECT_HPP
 
 #include <map>
 #include <set>
@@ -52,10 +53,10 @@
 #include "transport.hpp"
 #include "lpm_tables.hpp"
 
-using namespace std::literals;
-
 namespace dct {
-    using TimerCb = std::function<void()>;
+
+using namespace std::literals;
+using TimerCb = std::function<void()>;
 
 /**
  * A DirectFace implements a subset of the NDN application-level API used by both the ndn-cxx

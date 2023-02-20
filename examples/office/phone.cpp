@@ -43,10 +43,7 @@
 #include <iostream>
 #include <random>
 
-#include <dct/shims/mbps.hpp>
-#include "../util/identity_access.hpp"
-
-using namespace std::literals;
+#include "../util/dct_example.hpp"
 
 // command line start
 static struct option opts[] = {
@@ -57,7 +54,7 @@ static struct option opts[] = {
 static void usage(const char* cname) { print("- {} usage: id [-w ms] [loc] function args\n", cname); }
 
 /* Globals */
-static std::chrono::microseconds pubWait = std::chrono::seconds(1);
+static std::chrono::microseconds pubWait = std::chrono::seconds(5);
 
 // instance attributes from signing chain
 static std::string role{};
@@ -125,8 +122,7 @@ int main(int argc, char* argv[])
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
    //Create the mbps DeftT
-    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); },
-        [](){ return currentSigningPair(); });
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");
     room = cm.attribute("_roomId");
@@ -141,9 +137,11 @@ int main(int argc, char* argv[])
     }
 
     // Connect and pass in the handler
-    print("{} {}'s phone sending to {}\n", role, id, loc);
     try {
-        cm.connect([&cm]{ cmdPubr(cm); });
+        cm.connect([&cm]{
+            print("{} {}'s phone sending to {}\n", role, id, loc);
+            cmdPubr(cm);
+        });
         cm.run();
     } catch (const std::exception& e) {
         std::cerr << "{} got exception: " << e.what() << std::endl;

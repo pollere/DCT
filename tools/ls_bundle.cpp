@@ -32,6 +32,7 @@
 #include "dct/schema/cert_bundle.hpp"
 #include "dct/schema/rpacket.hpp"
 
+using namespace dct;
 
 int main(int argc, const char* argv[]) {
     using namespace std::literals;

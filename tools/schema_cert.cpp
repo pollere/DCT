@@ -30,6 +30,8 @@
 #include "dct/schema/rdschema.hpp"
 #include "dct/schema/schema_cert.hpp"
 
+using namespace dct;
+
 static void usage(const char** argv) {
     print("- usage: {} [-o outfile] schemaFile [signer]\n", argv[0]);
     exit(1);
@@ -51,7 +53,8 @@ int main(int argc, const char* argv[]) {
         auto bs = rs.read();
 
         // schema must be signed the same way as its pubs
-        auto valtype = bs.pubVal("#pubValidator").substr(1);
+//        auto valtype = bs.pubVal("#pubValidator").substr(1);
+        auto valtype = "EdDSA"s;
         auto sm{sigMgrByType(valtype)};
         if (sm.ref().needsKey()) {
             if (ap - argv >= argc ) {

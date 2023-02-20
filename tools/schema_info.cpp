@@ -31,6 +31,7 @@
 #include "dct/format.hpp"
 #include "dct/schema/rdschema.hpp"
 
+using namespace dct;
 
 void usage(const char** argv) {
     print("- usage: {} [-c] [-t] bschema [pubname]\n", argv[0]);

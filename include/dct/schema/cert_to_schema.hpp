@@ -1,5 +1,6 @@
 #ifndef CERT_TO_SCHEMA_HPP
 #define CERT_TO_SCHEMA_HPP
+#pragma once
 /*
  * Convert the schema from a DCTcert to its bSchema representation
  *
@@ -29,6 +30,8 @@
 #include "dct/sigmgrs/sigmgr_by_type.hpp"
 #include "rdschema.hpp"
 
+namespace dct {
+
 // return the binary schema associated with certificate 'cert'
 // It's assumed that the cert signature has been validated and
 // the cert name checked for conformance to schema conventions.
@@ -38,5 +41,7 @@ static inline bSchema certToSchema(const dctCert& cert, thumbPrint& tp) {
     bs.schemaTP_.insert(bs.schemaTP_.begin(), tp.begin(), tp.end());
     return bs;
 }
+
+} // namespace dct
 
 #endif // CERT_TO_SCHEMA_HPP

@@ -1,5 +1,6 @@
 #ifndef CERT_BUNDLE_HPP
 #define CERT_BUNDLE_HPP
+#pragma once
 /*
  * unpack a bundle of wire-format certs into a vector of cert objects
  *
@@ -31,6 +32,8 @@
 #include "dct/schema/tlv_parser.hpp"
 #include "dct/sigmgrs/sigmgr_by_type.hpp"
 
+namespace dct {
+
 using certItem = std::pair<dctCert,keyVal>;
 using certBundle = std::vector<certItem>;
 
@@ -59,5 +62,7 @@ static inline certBundle rdCertBundle(const std::vector<uint8_t>& buf) {
     }
     return cb;
 }
+
+} // namespace dct
 
 #endif // CERT_BUNDLE_HPP

@@ -1,5 +1,6 @@
 #ifndef PTPS_HPP
 #define PTPS_HPP
+#pragma once
 /*
  * passPub.hpp: Publication-based pub/sub API for DCT
  *
@@ -33,16 +34,22 @@
 #include <unordered_map>
 #include <utility>
 
+#include <dct/syncps/syncps.hpp>
+#include <dct/schema/dct_model.hpp>
+
+namespace dct {
+
 //if not using syncps defaults, set these here
 static constexpr size_t MAX_CONTENT=768; //max content size in bytes, <= maxPubSize in syncps.hpp
 static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
 
-#include <dct/syncps/syncps.hpp>
-#include <dct/schema/dct_model.hpp>
-
-using namespace dct;
-
+using error = std::runtime_error;
 using addChnCb = std::function<void(const rData, const certStore&)>;
+struct ptps;
+using ptPub = DCTmodel::sPub;
+using connectCb = std::function<void()>;
+using pubCb = std::function<void(ptps*, const Publication&)>;
+using chnCb = std::function<void(ptps*, const rData, const certStore&)>;
 
 /* 
  * ptps (pass-through publish/subscribe) provides a DeftT pub/sub
@@ -55,13 +62,18 @@ using addChnCb = std::function<void(const rData, const certStore&)>;
  /*
   * Pass-throughs enable trust-based relay of pubs, certs, and keys between different
   * network interfaces, identified by a string of protocol//host:<opt>port or default, that
-  * is used to create a particular Face. Thus a few additions
-  * to DCTmodel are required. A DCTmodelPT is derived from DCTmodel.
+  * is used to create a particular Face. Thus a few additions to DCTmodel are required.
+  * DCTmodelPT is derived from DCTmodel and adds tracking of relayed certs, a test of
+  * validity of outgoing pubs against this dct_model's trust schema, and a "validate only"
+  * version of the pub validator since relays do not decrypt pubs but pass through as long
+  * as they cryptographically validate.
   */
-
-struct DCTmodelPT final : DCTmodel {
+struct DCTmodelPT final : DCTmodel  {
+    SigMgrPT ptPubSm_;     // sigmgr for validating but not decrypting pubs
+    SyncPS* m_gkSync{};
     std::unordered_map<thumbPrint,bool> m_rlyCerts {};
-    addChnCb m_rlyCertCb{}; //used to relay validated cert chain to shim
+    bool m_pubDist;
+    addChnCb m_rlyCertCb{};  //used to relay validated cert chain to shim
 
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
     void addRelayed(thumbPrint tp) { m_rlyCerts[tp] = true;}
@@ -76,41 +88,52 @@ struct DCTmodelPT final : DCTmodel {
         // print("isValidPub pub {} doesn't validate\n", pub.name());
         return false;
     }
+    // ensure publication's signer is in cert store of this outgoing DeftT
+    bool publishKnownSigner(const Publication&& pub) {
+        if (m_pubDist && cs_.contains(pub.thumbprint())) {
+             m_gkSync->publish(std::move(pub));
+            return true;
+        }
+        return false;
+    }
 
   // create a DCTmodelPT instance using the certs in the bootstrap bundle file 'bootstrap'
   // optional string for face name
     DCTmodelPT(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, DirectFace& face,
-               addChnCb&& rcb = nullptr) : DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, face)
+               addChnCb&& rcb = nullptr) : DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, face),
+               ptPubSm_{psm_.ref()}
     {
-        //this changes the cert store's callback upon adding a valid cert so that it will relay the chain of a signing cert
+        // reset  m_sync.pubSigmgr_ to syncPTSm_ to use the pass-through version
+        syncSm_.setSigMgr(ptPubSm_);
+        // callbacks to relay for certs and pub key distributors
         m_rlyCertCb = std::move(rcb);
+        m_pubDist = m_pgkd == NULL ? m_psgkd != NULL :  true;
+        // if there's distributor for publication group keys need
+        // to pass those to the relay via the appropriate syncps.
+        if (m_pubDist) m_gkSync = (m_pgkd == NULL)?  &(m_psgkd->m_sync) : &(m_pgkd->m_sync);
+
+        // change the cert store's callback so adding a valid cert will relay the signing cert chain 
         cs_.addCb_ = [this, &ckd=m_ckd] (const dctCert& cert) {
-                                                   ckd.publishCert(cert);
-                                                   if (isSigningCert(cert) && !wasRelayed(cert.computeThumbPrint()))
-                                                       m_rlyCertCb(cert, certs());   //pass the signing cert and the cert store containing its chain
-                                                   };
+                           ckd.publishCert(cert);
+                           if (isSigningCert(cert) && !wasRelayed(cert.computeThumbPrint())) {
+                               //pass the signing cert and the cert store containing its chain
+                               m_rlyCertCb(cert, certs());
+                           }
+                       };
     }
 };
-
-struct ptps;
-
-using ptPub = DCTmodel::sPub;
-using connectCb = std::function<void()>;
-using pubCb = std::function<void(ptps*, const Publication&)>;
-using chnCb = std::function<void(ptps*, const rData, const certStore&)>;
-
-using error = std::runtime_error;
 
 struct ptps
 {   
     connectCb m_connectCb;
     DirectFace m_face;
     DCTmodelPT m_pb;
-    crName m_pubpre{};        // full prefix for Publications
+    crName m_pubpre{};     // full prefix for Publications
     Timer* m_timer;
-    chnCb m_ch;        // call back to app when this DefTT's cert distributor gets a fully validated signing cert that arrived from its syncps
-    pubCb m_failCb;     // call back to app when publication fails if confirmation was requested on publication
-    std::string m_label;    //label for the transport to be used by this face
+    chnCb m_chCb;                 // call back to app when this DefTT's cert distributor gets a fully validated signing cert that arrived from its syncps
+    pubCb m_gkCb;            // call back for Publication group key distributor pubs
+    pubCb m_failCb;           // call back to app when publication fails if confirmation was requested on publication
+    std::string m_label;        // label for the transport to be used by this face
     uint64_t m_success{};
     uint64_t m_fail{};
     bool m_connected{false};
@@ -118,11 +141,12 @@ struct ptps
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
 
     ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
-             const std::string& fl, const chnCb& certHndlr = {}, const pubCb& failCb={}) :
+             const std::string& fl, const chnCb& certHndlr = {}, const pubCb& distCb = {}, const pubCb& failCb={}) :
         m_face{fl},
-        m_pb{rootCb, schemaCb, idChainCb, signIdCb, m_face, [this](const rData c, const certStore& cs){ m_ch(this, c, cs); }},   // tracks if certs were NOT relayed, set m_rlyCerts entry false in this lambda
+        m_pb{rootCb, schemaCb, idChainCb, signIdCb, m_face, [this](const rData c, const certStore& cs){ m_chCb(this, c, cs); } },
         m_pubpre{m_pb.pubPrefix()},
-        m_ch{certHndlr},
+        m_chCb{certHndlr},
+        m_gkCb{distCb},
         m_failCb{failCb},
         m_label{fl.size()? fl : "default"} {}
 
@@ -147,6 +171,8 @@ struct ptps
      * The success callback scb is where the application starts work that involves communication.
      * If m_pb.start results in a callback indicating success, m_connectCb is invoked.
      * If fails, throws an error.
+     * Set up the pass-through subscribe to distributor (if any) publications after successful start()
+     * (pubPrefix() is used for distributor pubprefix when created in DCTmodel)
      *
      * connect does not timeout; if there is a wait time limit meaningful to an
      * application it should set its own timeout.
@@ -160,10 +186,12 @@ struct ptps
 
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {
-                if(!success) {
+                if (!success) {
                     throw runtime_error("ptps failed to initialize connection");
                 } else {
                     m_connected = true;
+                     if(m_pb.m_pubDist)
+                         m_pb.m_gkSync->subscribe(m_pb.pubPrefix(),  [this](const rData p){ m_gkCb(this, p);});
                     m_connectCb();
                 }
             });
@@ -199,20 +227,32 @@ struct ptps
         return;
     }
     /*
-     * p is a complete trust-schema compliant Publication on the input Face
-     * A sub-trust schema can be used to limit Publications on a Face
-     * This allows checking of the Publication against this outgoing Face's trust schema
+     * p is a complete trust-schema compliant Publication for the input DeftT
+     * A sub-trust schema can be used to limit Publications that are accepted from relay by a DeftT
+     * This allows checking of the Publication against this outgoing DeftT's trust schema
+     * Thus "failed to validate" is desired behavior if using schema to limit some publications
+     *
      * Returns true if p was passed to syncps, false otherwise
      */
     bool publishValid(Publication&& p)
-    {
+    {      
         if(m_pb.isValidPub(p)) {
             publish(std::move(p));
             return true;
         } else {
-            //print("publishValid failed to validate {}\n", p.name());
+            // print("publishValid failed to validate {}\n", p.name());     // this pub isn't in the schema for this DeftT
             return false;
         }
+    }
+      /*
+     * p is a complete trust-schema compliant Publication on the input Face
+     * This is used to pass the publications of a pub gk distributor
+     * This allows checking of the Publication against this outgoing Face's trust schema
+     * Returns true if p was passed to gk syncps, false otherwise
+     */
+    bool publishKnown(Publication&& p)
+    {
+        return m_pb.publishKnownSigner(std::move(p));
     }
     /*
      * Use if a failure callback was set for this shim when constructed. Confirms whether Publication made it to the Collection.
@@ -267,5 +307,6 @@ struct ptps
     void oneTime(std::chrono::microseconds d, TimerCb&& cb) { m_pb.oneTime(d, std::move(cb)); }
 };
 
-#endif
+} // namespace dct
 
+#endif

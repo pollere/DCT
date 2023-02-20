@@ -1,5 +1,6 @@
 #ifndef DIST_GKEY_HPP
 #define DIST_GKEY_HPP
+#pragma once
 /*
  * dist_gkey - distribute a symmetric encryption key to a group of peers.
  * This version is a self-contained 'header-only' library.
@@ -11,14 +12,14 @@
  * https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519). If a new
  * member joins between rekeying, it is added to the list of encrypted keys and
  * a key list publication is issued with just the new encrypted key.
- * The group key is currently used by sigmgr_aead.hpp
  *
- * This distributor puts three separate subtopics into use: <pubprefix>/keys/{KM,mr,gk}
+ * This distributor puts three separate subtopics into use: <pubprefix>/{km,mr,gk}
  * where <pubprefix> is passed in as the topic for all publications and
- * subtopic KM is used by the key maker election code,
+ * subtopic km is used by the key maker election,
  * subtopic mr is used by members of the group to request a copy of the encryption key, and
  * subtopic gk is used by the key maker to publish key records where the symmetric key is encrypted
- * for each valid member of the group.
+ *      for each valid member of the group.
+ * The PDU prefix the distributor's sync uses is <tp_id>/keys/<pubs || pdus>, in the "keys" collection
  * 
  * Copyright (C) 2020-3 Pollere LLC
  *
@@ -88,6 +89,7 @@ struct DistGKey {
     connectedCb m_connCb{[](auto) {}};
     kmpriCB m_kmpri;
     thumbPrint m_tp{};
+    thumbPrint m_kmtp{};        // thumbprint of the keymaker
     keyVal m_pDecKey{};         // transformed pk used to encrypt group key; use with
     keyVal m_sDecKey{};         // transformed sk used to decrypt group key
     keyVal m_curKey{};          // current group key
@@ -98,9 +100,11 @@ struct DistGKey {
     std::chrono::milliseconds m_keyRand{10};
     std::chrono::milliseconds m_keyLifetime{3600+10};
     kmElection* m_kme{};
-    uint32_t m_KMepoch{};       // current election epoch
-    bool m_keyMaker{false};     // true if this entity is a key maker
-    bool m_init{true};          // key maker status unknown while in initialization
+    uint32_t m_KMepoch{};        // current election epoch
+    bool m_keyMaker{false};      // true if this entity is a key maker
+    bool m_init{true};                  // key maker status unknown while in initialization
+    bool m_pubdist = false;        // true indicates this is a pub group key distributor (not pdu)
+    bool m_mrPending{false};    //member request pending
     pTimer m_mrRefresh{std::make_shared<Timer>(getDefaultIoContext())};
 
     DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& gkeyCb, const certStore& cs,
@@ -114,8 +118,8 @@ struct DistGKey {
        m_sync.cStateLifetime(253ms);
        m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
        m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),mreq=crPrefix(m_mrPrefix)](const auto& p) {
-            if (mreq.isPrefix(p.name())) return m_keyLifetime; //0ms;
-            return cand.isPrefix(p.name())? 100ms : m_keyLifetime;
+            if (mreq.isPrefix(p.name())) return 6000ms;  // member request could last for a key lifetime
+            return cand.isPrefix(p.name())? 1000ms : m_keyLifetime; //election winner's km/elec should last indefinitely
             });
 #if 0
         // Order publications by ours first then most recent first
@@ -139,14 +143,30 @@ struct DistGKey {
 
     // publish my membership request with updated key: name <m_mrPrefix><timestamp>
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
-    // XXX publish with a confirmation callback and republish if not confirmed
+    // XXXX publish with a confirmation callback and republish if not confirmed.
+    // Member requests have a lifetime same order as a gkey so don't have to keep reissuing
+    //XXXX  when distributor rules get added to trust schemas, then only members will be able to
+    // issue requests and relays cannot be members of a pub distributor (only pdu).
     void publishMembershipReq() {
+        /* using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+        auto now = std::chrono::system_clock::now();
+        print("{:%M:%S} {} publishes a {} membership request\n",  ticks(now.time_since_epoch()), m_certs[m_tp].name(), m_sync.collName_.last().toSv()); */
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         crData p(m_mrPrefix/std::chrono::system_clock::now());
         p.content(std::vector<uint8_t>{});
         m_keySM.sign(p);    // will put my thumbprint into Publication
+        m_mrPending = true;
         m_sync.publish(std::move(p));
-        m_mrRefresh = m_sync.schedule(m_keyLifetime, [this](){ publishMembershipReq(); });
+        m_mrRefresh = m_sync.schedule(2000ms, [this](){ publishMembershipReq(); });
+    }
+
+    // Called when a group key has been received and decrypted. Cancel any pending refresh
+    // of the membership request. It will be reissued only if a new group key record is received
+    // and I'm not in the list
+    void receivedGK() {
+        m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
+        m_mrPending = false;
+        //print("{} got a valid {} GK\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
     }
 
     /*
@@ -179,7 +199,7 @@ struct DistGKey {
     void initDone() {
         if (m_init) {
             m_init = false;
-            m_sync.cStateLifetime(6763ms);
+ //           m_sync.cStateLifetime(6763ms);
             m_connCb(true);
         }
     }
@@ -194,20 +214,31 @@ struct DistGKey {
      */
     void receiveGKeyList(const rPub& p)
     {      
-        if (m_keyMaker) {
-            print("keymaker got keylist from {}\n", m_certs[p].name());
-            return;
-        }
         if (m_kmpri(p.thumbprint()) <= 0) {
             print("ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
             return;
         }
+        if (m_keyMaker) {
+            // another member claims to be a keyMaker - largest thumbPrint wins
+            if (m_tp < p.thumbprint()) {
+                    print("keymaker got keylist from {}\n", m_certs[p].name());
+                    m_keyMaker = false;
+                    m_kmtp = p.thumbprint();
+                    m_sync.unsubscribe(m_mrPrefix);
+                    publishMembershipReq();
+            }
+            return;
+        }
+        if(m_init && !m_mrPending) {
+            publishMembershipReq();
+            return;
+        }
         /*
+         * I am a member and have an outstanding membership request that this gklist may service.
          * Parse the name and make checks to determine if this key record publication should be used.
          * if this msg was from an earlier Key Maker epoch, ignore it. If from a later
          * epoch, wrongEpoch will cancel any in-progress election and update our epoch.
          */
-
         auto n = p.name();
         auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
         if (epoch != m_KMepoch) {
@@ -218,6 +249,10 @@ struct DistGKey {
             //assert(m_KMepoch == 0);
             m_KMepoch = epoch;
         }
+        // check if keymaker has a larger tp than my stored value (can resolve conflict after elections th can happen in
+        // relayed domains in particular), if so, (re)set my saved value and cur key ct so I get a new key
+        if (m_kmtp < p.thumbprint())    { m_curKeyCT = 0; m_kmtp = p.thumbprint(); }
+
         // check if I'm in this publication's range
         static constexpr auto less = [](const auto& a, const auto& b) -> bool {
             auto asz = a.size();
@@ -227,18 +262,21 @@ struct DistGKey {
             return r < 0;
         };
 
+        decltype(m_curKeyCT) newCT{};   //decode the new key's creation time
+
         auto tpl = n.nextBlk().toSpan();
         auto tph = n.nextBlk().toSpan();
         auto tpId = std::span(m_tp).first(tpl.size());
-        if(less(tpId, tpl) || less(tph, tpId))
-            return; //no key for me in this pub
-        if(std::cmp_less(n.last().toTimestamp().time_since_epoch().count(), m_curKeyCT)) {
-            //group key publication is older than current stored key
+        if(less(tpId, tpl) || less(tph, tpId)) {
+            // no key for me in this pub
+            if (std::cmp_less(m_curKeyCT, newCT) && !m_mrPending) {
+                // new key is being published, make sure keymaker has my membership
+                m_sync.oneTime(2000ms, [this](){ publishMembershipReq(); } ) ;
+            }
             return;
         }
 
-        // decode the Content
-        decltype(m_curKeyCT) newCT{};
+        // decode the content of the GK list
         std::span<const gkr> gkrVec{};
         try {
             auto content = p.content();
@@ -246,15 +284,14 @@ struct DistGKey {
             // a new key will have a creation time larger than m_curKeyCT
             // (future: ensure it's from the same creator as last time?)
             newCT = content.nextBlk(36).toNumber();
-            if(newCT <= m_curKeyCT) return; // group key not newer than ours
- 
+            if(newCT <= m_curKeyCT) return; // group key not newer than ours 
             // the second tlv should be type 130 and should be a vector of gkr pairs
             gkrVec = content.nextBlk(130).toSpan<gkr>();
         } catch (std::runtime_error& ex) {
             return; //ignore this publication
         }
         auto it = std::find_if(gkrVec.begin(), gkrVec.end(), [this](auto p){ return p.first == m_tp; });
-        if (it == gkrVec.end()) return; // didn't find our key in pub
+        if (it == gkrVec.end())      return;  // didn't find our encrypted key in pub
 
         // decrypt and save the key
         const auto& nk = it->second;
@@ -265,7 +302,8 @@ struct DistGKey {
         m_curKeyCT = newCT;
         m_curKey = std::vector<uint8_t>(m, m + aeadKeySz);
         m_newKeyCb(m_curKey, m_curKeyCT);   // call back parent with new key
-        if (m_init) initDone();
+        receivedGK();   //got a new group key, cancel pending member request and schedule one for key lifetime
+        if (m_init)  initDone();    // member has a key, can exit init state
     }
 
     /*
@@ -274,7 +312,7 @@ struct DistGKey {
      * there are active peers. It is passed a callback, 'ccb', to be
      * invoked when a group key has been received (i.e., when this entity is
      * able to encrypt/decrypt wirepacket content). There may also be a
-     * kmCap capability cert in this entity's signing chain which allows
+     * km capability cert in this entity's signing chain which allows
      * it to participate in keyMaker elections.  The value of the
      * capability influences the probability of this entity being elected
      * with larger values giving higher priority.
@@ -282,10 +320,17 @@ struct DistGKey {
 
     void setup(connectedCb&& ccb) {
         m_connCb = std::move(ccb);
+        if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;
+         // XXXX Hack to keep a relay from participating in pub group since it doesn't do encryption or decryption
+        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay"s) {
+            initDone();
+            return;
+        }
 
         // build function to get the key maker priority from a signing chain then
         // use it to see if we should join the key maker election
-        auto kmval = Cap::getval("KM", m_prefix, m_certs);
+        auto kmval = Cap::getval(m_pubdist ? "KMP" : "KM", m_prefix, m_certs);
+
         auto kmpri = [kmval](const thumbPrint& tp) {
                           // return 0 if cap wasn't found or has wrong content
                           // XXX value currently has to be a single digit
@@ -296,25 +341,24 @@ struct DistGKey {
                           return c - '0';
                       };
         m_kmpri = kmpri;
-        // subscribe to group key subcollection
-        m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
 
-        if(m_kmpri(m_tp) > 0) {
+        // check for keymaker priority and whether election is over
+        // elections need to be longer for relayed trust domains
+        if (m_kmpri(m_tp) > 0 ) {
             auto eDone = [this](auto elected, auto epoch) {
                             m_keyMaker = elected;
                             m_KMepoch = epoch;
-                            if (! elected) {
-                                publishMembershipReq();
-                                return;
-                            }
-                            m_sync.unsubscribe(m_gkPrefix);
+                            // all members  subscribe to group key subcollection; keymakers subscribe in case of conflicts
+                            m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
+                            if (! elected)   return;
+                            //print("{} wins election to make {} GKs\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
+                            // keymakers need the member requests
                             m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); });
-                            gkeyTimeout();  //create a group key, publish it, callback parent with key
-                            initDone();
+                            gkeyTimeout();  //create a group key and reschedule group key creation
                           };
-            m_kme = new kmElection(m_prefix/"km", m_keySM.ref(), m_sync, std::move(eDone), std::move(kmpri), m_tp);
-        } else {
-            publishMembershipReq();
+            m_kme = new kmElection(m_prefix/"km", m_keySM.ref(), m_sync, std::move(eDone), std::move(kmpri), m_tp, m_pubdist? 5s : 500ms);
+        } else { // non-keymaker,  subscribe to group key subcollection
+            m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
         }
     }
 
@@ -331,14 +375,27 @@ struct DistGKey {
         m_sync.publish(std::move(p));
     }
 
-    // Make a new group key, publish it, and locally switch to using the new key.
+    /*
+     * Make a new group key, publish it, and locally switch to using the new key.
+     * A keymaker that has just won an election will publish an empty gk list to assert its win
+     * to later joiners. Since subscribers get this gklist, using reception of any gklist (when in init
+     * state with no pending member requests) to publish a membership request.
+     * Might want to use this in the future to have keymaker do some sort of delay to gather members
+     * and publish the keylist for all of them at start up
+     *
+     * If in init state and there are group members, call initDone to exit init and callback to start
+    */
     void makeGKey() {
         //make a new key
         m_curKey.resize(aeadKeySz); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
         crypto_aead_xchacha20poly1305_ietf_keygen(m_curKey.data());
+        //print("{} makes a new {} GK\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
         //set the key's creation time
         m_curKeyCT = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
+
+        // remove expired (not valid()) certs (thumbprints) from memberList
+        std::erase_if(m_mbrList, [this](auto& kv) { return m_certs.contains(kv.first)? !m_certs[kv.first].valid() : true; });
 
         //encrypt the new group key for all the group members in a sealed box
         // that can only opened by the secret key associated with converted public key in mbrList
@@ -369,15 +426,16 @@ struct DistGKey {
             publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, pubTS, gkrEnc.vec());
             s -= r;
         }
+         // call back to parent with new key, parent calls the application publication sigmgr's addKey()
+        m_newKeyCb(m_curKey, m_curKeyCT);
 
-        m_newKeyCb(m_curKey, m_curKeyCT);   // call back to parent with new key
-        // parent calls the application publication sigmgr's addKey()
+        if(m_init && m_mbrList.size())  initDone();
     }
 
     // Periodically refresh the group key. This routine should only be called *once*
     // since each call will result in an additional refresh cycle running.
     void gkeyTimeout() {
-        if (!m_keyMaker) return;    // since not a cancelable timer, need to stop if I lose a future election
+        if (!m_keyMaker) return;    // since not a cancelable timer, need to stop if I lose a future election or another keymaker took priority
         makeGKey();
         m_sync.oneTime(m_reKeyInt, [this](){ gkeyTimeout();});  //next re-keying event
     }
@@ -385,8 +443,10 @@ struct DistGKey {
     /*
      * This called when there is a new valid peer member request to join the distribution group.
      * This indicates to the keyMaker there is a new peer that needs the group key.
-     * Ignore if not a keyMaker. If received during initialization, add to list in case
-     * this becomes the keyMaker, but don't try to publish.
+     * Only subscribe to this after win election to be keyMaker, ignore if not a keyMaker as a safeguard
+     * If received while in initialization state, haven't made a key yet so don't try to publish.
+     *
+     * If conversion of public key works, thaat adds this member to list (by thumbprint).
      * Shouldn't have to republish the entire keylist, so  publishes the
      * new encrypted group key separately for members joining after initialization
      * .
@@ -395,28 +455,36 @@ struct DistGKey {
      */
 
     void addGroupMem(const rData& p) {
-        if (!m_init && !m_keyMaker) return;
-
+        if (!m_keyMaker) return;
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
-        // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members. 
+        // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members.
         if (m_mbrList.size() == 80*maxKR) return;
 
         auto tp = p.thumbprint();
+        if (m_mbrList.contains(tp))     return;  // already a member
+        // XXXX Test here for a member request (mr) from relay role when this is a "pubs" distributor (later would be rejected in validation)
+        if (m_pubdist && m_certs[tp].name()[1].toSv() == "relay"s) return;  //this is a hacky hack
+
         auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
         // convert pk to form that can be used to encrypt and add to member list
-        if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0)
-            return;     //unable to convert member's pk to sealed box pk
-
-        if (!m_init) {   //publish the group key for this new peer
-            encGK egKey;
-            crypto_box_seal(egKey.data(), m_curKey.data(), m_curKey.size(), m_mbrList[tp].data());
-            std::vector<gkr> ek{ {tp, egKey} };
-            tlvEncoder gkrEnc{};    //tlv encoded content
-            gkrEnc.addNumber(36, m_curKeyCT);
-            gkrEnc.addArray(130, ek);
-            publishKeyRange(tp, tp, std::chrono::system_clock::now(), gkrEnc.vec());
+        if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0) {
+            m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
             return;
         }
+
+        if(!m_curKeyCT)    return;  // haven't made first group key
+
+        //publish the group key for this new peer
+        encGK egKey;
+        crypto_box_seal(egKey.data(), m_curKey.data(), m_curKey.size(), m_mbrList[tp].data());
+        std::vector<gkr> ek{ {tp, egKey} };
+        tlvEncoder gkrEnc{};    //tlv encoded content
+        gkrEnc.addNumber(36, m_curKeyCT);
+        gkrEnc.addArray(130, ek);
+        publishKeyRange(tp, tp, std::chrono::system_clock::now(), gkrEnc.vec());
+        //print("{} addGroupMem publishes {} gkey for {}\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv(), p.name());
+
+        if (m_init) initDone();    // keyMaker was in init state but now has a group key, and at least one member
     }
 
     // won't encrypt a group key for this thumbPrint in future

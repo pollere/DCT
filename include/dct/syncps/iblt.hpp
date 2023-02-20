@@ -1,4 +1,6 @@
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
+#ifndef SYNCPS_IBLT_HPP
+#define SYNCPS_IBLT_HPP
+#pragma once
 /*
  * Pollere LLC added (6/14/2020) checks for validity to file
  *
@@ -49,9 +51,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
 */
-
-#ifndef SYNCPS_IBLT_HPP
-#define SYNCPS_IBLT_HPP
 
 #include <array>
 #include <cmath>

@@ -1,5 +1,6 @@
 #ifndef CRPACKET_HPP
 #define CRPACKET_HPP
+#pragma once
 /*
  * DCT tlv builders
  *
@@ -32,6 +33,8 @@
 #include "rand32.hpp"
 #include "rpacket.hpp"
 
+namespace dct {
+
 using namespace std::literals::chrono_literals;
 
 // build a 'complete' raw TLV - vector containing TLV's data together with an rPacket view of it.
@@ -57,21 +60,48 @@ struct crTLV : rView {
         return off;
     }
 
-    constexpr auto initBlk() noexcept {
-        // check how much tlv space was left at the front
-        auto off = blkOffset();;
-        auto len = v_.size() - off;
-        rView::m_off = tlvBytes(len);
+    // fill in the outer tlv header. 'len' is the *payload* length (doesn't include
+    // the TLV header). The last byte of the header will at v_[off-1] (i.e., 'off'
+    // is the first payload byte). View is updated to reflect the new hdr and
+    // maintain the invarient that m_off indexes the payload start.
+    constexpr auto fillOuterHdr(size_t len, size_t off) {
+        // fill in the outer tlv header
+        auto hsz = tlvBytes(len);
+        auto hoff = off - hsz;
+        addTlvHdr(tlvType(), len, hoff);
         if constexpr (std::is_same_v<rView,rPrefix>) {
-            // an rPrefix view covers just the TLV value, hiding the initial type & len
-            // but during construction the initial TL may not have been added yet
-            if (rView::m_off > 0 && v_[off] == tlvNum()) {
-                off += rView::m_off;
-                len -= rView::m_off;
-            }
+            // An rPrefix view covers just the TLV value, hiding the initial type & len.
+            // Since the initial TL has been added or updated adjust the view appropriately.
             rView::m_off = 0;
+            rView::m_blk = decltype(rView::m_blk){v_.data() + off, len};
+        } else {
+            rView::m_blk = decltype(rView::m_blk){v_.data() + hoff, len + hsz};
+            rView::m_off = hsz;
         }
-        rView::m_blk = decltype(rView::m_blk){v_.data()+off, len};
+    }
+
+    // done() is called at the end of each addition to fix up the outer tlv length and
+    // update the view to match the vector. The routines can be method-chained.
+    constexpr auto& done() noexcept {
+        auto off = blkOffset();
+        auto len = v_.size() - off;
+        if (off >= 4 && len > 0 && v_[off] != tlvNum()) {
+            // there's no outer hdr yet so len is payload size
+            fillOuterHdr(len, off);
+            return *this;
+        }
+        assert(len == 0 || v_[off] == tlvNum());
+        if (len > tlvSize(rView::size())) {
+            // fix outer tlv length by overwriting previous header. new hdr may be larger
+            // so make enough space for it first.
+            auto hsz = v_[off+1] >= extra? 4u : 2u;
+            off += hsz;
+            len -= hsz;
+            hsz = tlvBytes(len);
+            if (off < hsz) { v_.insert(v_.begin()+off, hsz - off, 0); off = hsz; }
+            fillOuterHdr(len, off);
+        }
+        return *this;
     }
 
     // C++ default constructors can't be used because they'll copy the source's view
@@ -91,20 +121,20 @@ struct crTLV : rView {
     // constructor debugging
     crTLV(const crTLV& c) : v_{c.v_} {
         //print("{}cp {}\n", tlvNum(), v_.size());
-        initBlk();
+        done();
     }
     crTLV(crTLV&& c) : v_{std::move(c.v_)} {
         //print("{}mv {}\n", tlvNum(), v_.size());
-        initBlk();
+        done();
     }
     crTLV& operator=(const crTLV& c) {
         //print("{}cp= {}\n", tlvNum(), v_.size());
-        if (this != &c) { v_ = c.v_; initBlk(); }
+        if (this != &c) { v_ = c.v_; done(); }
         return *this;
     }
     crTLV& operator=(crTLV&& c) {
         //print("{}mv= {}\n", tlvNum(), v_.size());
-        if (this != &c) { std::swap(v_, c.v_); initBlk(); }
+        if (this != &c) { std::swap(v_, c.v_); done(); }
         return *this;
     }
 
@@ -112,19 +142,19 @@ struct crTLV : rView {
     template<typename V = rView> requires requires {!std::is_same_v<rView,rName>;}
     crTLV(crTLV<rName,tlv::Name>&& n) : rView{}, v_{std::move(n.v_)} {
         //print("{}mvN {} {}\n", tlvNum(), n.v_.size(), v_.size());
-        initBlk();
+        done();
     }
     // these constructors are used for pre-built TLVs and don't leave space for a header.
     // done() will check the tlv length against the vector length and fix it if something was appended.
-    crTLV(rView r) : rView{}, v_{r.asSpan().begin(), r.asSpan().end()} { initBlk(); }
+    crTLV(rView r) : rView{}, v_{r.asSpan().begin(), r.asSpan().end()} { done(); }
 
     crTLV(const std::vector<uint8_t>& v) : rView{}, v_{v} {
         //print("{}cp2 {}\n", tlvNum(), v_.size());
-        initBlk();
+        done();
     }
     crTLV(std::vector<uint8_t>&& v) : rView{}, v_{std::move(v)} {
         //print("{}mv2 {}\n", tlvNum(), v_.size());
-        initBlk();
+        done();
     }
 
     // always use the ordering operators of the view
@@ -134,41 +164,6 @@ struct crTLV : rView {
     // the following routines are used to incrementally add bytes or TLVs to this tlv.
     // done() is called at the end of each addition to fix up the outer tlv length and
     // update the view to match the vector. The routines can be method-chained.
-
-    // fill in the outer tlv header. 'len' is the *payload* length (doesn't include
-    // the TLV header). The last byte of the header will at v_[off-1] (i.e., 'off'
-    // is the first payload byte). View is updated to reflect the new hdr and
-    // maintain the invarient that m_off indexes the payload start.
-    constexpr auto fillOuterHdr(size_t len, size_t off) {
-        // fill in the outer tlv header
-        auto hsz = tlvBytes(len);
-        auto hoff = off - hsz;
-        addTlvHdr(tlvType(), len, hoff);
-        rView::m_blk = decltype(rView::m_blk){v_.data() + hoff, len + hsz};
-        rView::m_off = hsz;
-    }
-
-    constexpr auto& done() noexcept {
-        auto off = blkOffset();
-        auto len = v_.size() - off;
-        if (off >= 4 && v_[off] != tlvNum()) {
-            // there's no outer hdr yet so len is payload size
-            fillOuterHdr(len, off);
-            return *this;
-        }
-        assert(v_[off] == tlvNum());
-        if (len > tlvSize(rView::size())) {
-            // fix outer tlv length by overwriting previous header. new hdr may be larger
-            // so make enough space for it first.
-            auto hsz = v_[off+1] >= extra? 4u : 2u;
-            off += hsz;
-            len -= hsz;
-            hsz = tlvBytes(len);
-            if (off < hsz) { v_.insert(v_.begin()+off, hsz - off, 0); off = hsz; }
-            fillOuterHdr(len, off);
-        }
-        return *this;
-    }
 
     constexpr auto addTlvHdr(tlv typ, size_t len = 0) noexcept {
         v_.emplace_back((uint8_t)typ);
@@ -270,7 +265,7 @@ struct crTLV : rView {
 struct crName : crTLV<rName,tlv::Name> {
     constexpr crName() = default;
 
-    crName(rName n) { append(n.asSpan()); initBlk(); }
+    crName(rName n) { append(n.asSpan()); done(); }
     crName(rPrefix n) { append(n.asSpan()); done(); }
     crName(std::string_view s) { strToName(s).done(); }
 
@@ -317,21 +312,8 @@ struct crPrefix : crTLV<rPrefix,tlv::Name> {
     crPrefix& operator=(const crPrefix&) = default;
     crPrefix& operator=(crPrefix&&) = default;
 
-    crPrefix(crName&& n) : crTLV{std::move(n)} { }
-    crPrefix(const crName& n) : crTLV{n} { }
-};
-
-template<> struct fmt::formatter<crName>: formatter<rPrefix> {
-    template <typename FormatContext>
-    auto format(const crName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
-        return format_to(ctx.out(), "{}", rPrefix(n));
-    }
-};
-template<> struct fmt::formatter<crPrefix>: formatter<rPrefix> {
-    template <typename FormatContext>
-    auto format(const crPrefix& n, FormatContext& ctx) const -> decltype(ctx.out()) {
-        return format_to(ctx.out(), "{}", rPrefix(n));
-    }
+    crPrefix(crName&& n) : crTLV{std::move(n.v_)} { }
+    crPrefix(const crName& n) : crTLV{n.v_} { }
 };
 
 struct crInterest : crTLV<rInterest,tlv::Interest> {
@@ -403,6 +385,21 @@ struct crCert : crData {
     crCert(rCert d) : crData{d} { }
     crCert(crName&& n) : crData{std::move(n), tlv::ContentType_Key} { }
     crCert(rName n)  : crData{n, tlv::ContentType_Key} { }
+};
+
+} // namespace dct
+
+template<> struct fmt::formatter<dct::crName>: formatter<dct::rPrefix> {
+    template <typename FormatContext>
+    auto format(const dct::crName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
+        return format_to(ctx.out(), "{}", dct::rPrefix(n));
+    }
+};
+template<> struct fmt::formatter<dct::crPrefix>: formatter<dct::rPrefix> {
+    template <typename FormatContext>
+    auto format(const dct::crPrefix& n, FormatContext& ctx) const -> decltype(ctx.out()) {
+        return format_to(ctx.out(), "{}", dct::rPrefix(n));
+    }
 };
 
 #endif  // CRPACKET_HPP

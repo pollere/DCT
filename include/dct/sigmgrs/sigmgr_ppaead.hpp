@@ -1,5 +1,6 @@
 #ifndef SIGMGRPPAEAD_HPP
 #define SIGMGRPPAEAD_HPP
+#pragma once
 /*
  * PPAEAD Signature Manager
  *
@@ -73,6 +74,8 @@
 #include <cstring>  // for memcpy
 #include "dct/utility.hpp"
 #include "sigmgr.hpp"
+
+namespace dct {
 
 struct SigMgrPPAEAD final : SigMgr {
     static constexpr uint32_t aeadkeySize = crypto_aead_xchacha20poly1305_IETF_KEYBYTES;
@@ -278,12 +281,6 @@ struct SigMgrPPAEAD final : SigMgr {
     }
 };
 
+} // namespace dct
+
 #endif // SigMgrPPAEAD_HPP
-
-
-
-
-
-
-
-

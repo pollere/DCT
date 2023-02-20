@@ -29,35 +29,15 @@
 #endif
 #include <span>
 #include "dct/format.hpp"
+#include "dct/face/default-if.hpp"
+
+using namespace dct;
 
 bool verbose{false};
-
-/*
- * Interface flag testing. Candidate interfaces must be:
- *   up, running, broadcast, multicast and NOT loopback, NOT pointToPoint, NOT promiscuous
- */
-constexpr int flagsMask {
-    IFF_UP | IFF_RUNNING | IFF_BROADCAST | IFF_MULTICAST | IFF_LOOPBACK | IFF_POINTOPOINT | IFF_PROMISC
-};
-constexpr int flagsSet { IFF_UP | IFF_RUNNING | IFF_BROADCAST | IFF_MULTICAST };
 
 static void usage(std::string_view pname) {
         print("- usage: {} [-v]\n", pname);
         exit(1);
-}
-
-static bool better(void* n, void* o) {
-    if (! o) return true;
-#ifdef __linux__
-    const auto& nd = *(rtnl_link_stats*)n;
-    const auto& od = *(rtnl_link_stats*)o;
-    if (nd.tx_packets > od.tx_packets || nd.rx_packets > od.rx_packets) return true;
-#else
-    const auto& nd = *(if_data*)n;
-    const auto& od = *(if_data*)o;
-    if (nd.ifi_imcasts > od.ifi_imcasts || nd.ifi_opackets > od.ifi_opackets) return true;
-#endif
-    return false;
 }
 
 

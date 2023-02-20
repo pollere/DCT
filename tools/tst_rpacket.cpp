@@ -31,6 +31,8 @@
 #include "dct/schema/tlv_encoder.hpp"
 #include "dct/schema/rpacket.hpp"
 
+using namespace dct;
+
 static void usage(const char** argv) {
     print("- usage: {} -o outfile file ...\n", argv[0]);
     exit(1);

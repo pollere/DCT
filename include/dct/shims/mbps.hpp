@@ -1,5 +1,6 @@
 #ifndef MBPS_HPP
 #define MBPS_HPP
+#pragma once
 /*
  * mbps.hpp: message-based pub/sub API for DCT (NDN network layer)
  *
@@ -33,14 +34,14 @@
 #include <unordered_map>
 #include <utility>
 
-//if not using syncps defaults, set these here
-static constexpr size_t MAX_CONTENT=768; //max content size in bytes, <= maxPubSize in syncps.hpp
-static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
-
 #include <dct/syncps/syncps.hpp>
 #include <dct/schema/dct_model.hpp>
 
-using namespace dct;
+namespace dct {
+
+//if not using syncps defaults, set these here
+static constexpr size_t MAX_CONTENT=768; //max content size in bytes, <= maxPubSize in syncps.hpp
+static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
 
 /* 
  * MBPS (message-based publish/subscribe) provides a pub/sub shim
@@ -130,8 +131,6 @@ struct mbps
         m_uniqId = format("{}", rName(m_pb.pubVal("#chainInfo")));
 
         // call start() with lambda to confirm success/failure
-        // Second argument is priority for this entity to make group keys (0 == won't
-        // make keys; defaults to 1).
         m_pb.start([this](bool success) {
                 if(!success) {
                     throw runtime_error("mbps failed to initialize connection");
@@ -372,5 +371,7 @@ struct mbps
     //    m_pb.orderPub([this](auto& pv1, auto& pv2) {return robustPub(pv1, pv2);});
     }
 };
+
+} // namespace dct
 
 #endif

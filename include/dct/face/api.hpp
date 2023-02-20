@@ -1,5 +1,6 @@
 #ifndef DCT_FACE_API_HPP
 #define DCT_FACE_API_HPP
+#pragma once
 /*
  * Types related to the DCT Direct Face API
  *
@@ -29,6 +30,8 @@
 
 #include <dct/schema/rpacket.hpp>
 
+namespace dct {
+
 using Timer = boost::asio::system_timer;
 using pTimer = std::shared_ptr<Timer>;
 using TimerCb = std::function<void()>;
@@ -37,5 +40,7 @@ using DataCb = std::function<void(const rInterest& i, rData d)>;
 using InterestCb = std::function<void(const rName& n, const rInterest& i)>;
 using InterestTO = std::function<void(const rInterest& i)>;
 using RegisterCb = std::function<void(const rName& prefix)>;
+
+} // namespace dct
 
 #endif  // DCT_FACE_API_HPP

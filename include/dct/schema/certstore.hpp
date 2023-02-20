@@ -1,5 +1,6 @@
 #ifndef CERTSTORE_HPP
 #define CERTSTORE_HPP
+#pragma once
 /*
  * Certificate store abstraction used by schemas
  *
@@ -30,6 +31,8 @@
 #include <vector>
 #include "bschema.hpp"
 #include "dct_cert.hpp"
+
+namespace dct {
 
 using schema_error = bschema::schema_error;
 
@@ -182,5 +185,7 @@ struct certStore {
     }
     const auto& Chains() const { return chains_; }
 };
+
+} // namespace dct
 
 #endif // CERTSTORE_HPP

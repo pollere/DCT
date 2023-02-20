@@ -1,5 +1,5 @@
 /*
- * app4.cpp: command-line application to exercise mbps.hpp
+ * app3.cpp: command-line application to exercise mbps.hpp
  *
  * This is an application using the mbps shim. Message body is packaged
  * in int8_t vectors are passed between application and mbps. Parameters
@@ -9,18 +9,16 @@
  * contains an unordered_map where values are indexed by the tags (components of Names)
  * that are defined in the trust schema for this particular application.
  *
- * app4 models an asymmetric, request/response style protocol between controlling
+ * app2 models an asymmetric, request/response style protocol between controlling
  * agent(s) ("operator" role in the schema) and controlled agent(s) ("device" role
  * in the schema). If the identity bundle gives the app an 'operator' role, it
  * periodically publishes a message and prints all the responses it receives.
  * If the app is given a 'device' role, it waits for a message then sets its
  * simulated state based on the message an announces its current state.
  *
- * app4 is a version of app2 that has been modified for testing relay. It has two
- * differences:
- *  1. It runs forever
- *  2. Rather than throwing an error if tries to build a publication that is not
- *     in its identity bundle, it just ignores it.
+ * app3 is a version of app2 that has been modified for testing relay.
+ * Rather than throwing an error if tries to build a publication that is not
+ * in its identity bundle, it just ignores it.
  *
  * Copyright (C) 2020-22 Pollere LLC
  *
@@ -50,18 +48,18 @@
 #include <iostream>
 #include <random>
 
-#include <dct/shims/mbps.hpp>
-#include "../util/identity_access.hpp"
-
-using namespace std::literals;
+#include "../util/dct_example.hpp"
 
 static constexpr bool deliveryConfirmation = false; // get per-message delivery confirmation
 
 // handles command line
 static struct option opts[] = {
+    {"addr", required_argument, nullptr, 'a'},
     {"capability", required_argument, nullptr, 'c'},
     {"debug", no_argument, nullptr, 'd'},
     {"help", no_argument, nullptr, 'h'},
+    {"location", required_argument, nullptr, 'l'},
+    {"count", required_argument, nullptr, 'n'},
     {"wait", required_argument, nullptr, 'w'}
 };
 static void usage(const char* cname)
@@ -72,16 +70,23 @@ static void help(const char* cname)
 {
     usage(cname);
     std::cerr << " flags:\n"
+           "  -a addr           transport addr, defaults to multicast\n"
            "  -c capability     defaults to 'lock'\n"
            "  -d |--debug       enable debugging output\n"
            "  -h |--help        print help then exit\n"
+           "  -l location       defaults to 'all'\n"
+           "  -n |--count       number of messages to publish\n"
            "  -w |--wait        wait (in ms) between sends\n";
 }
 
 /* Globals */
 static std::string myPID, myId, role;
-static std::chrono::microseconds pubWait = std::chrono::seconds(1);
+static std::chrono::microseconds pubWait = std::chrono::seconds(4);
+static decltype(std::chrono::system_clock::now().time_since_epoch()) lastSend;
 static int Cnt = 0;
+static int nMsgs = 10;
+static int nRcv = 0;
+static std::string addr{};
 static std::string capability{"lock"};
 static std::string myState{"unlocked"};       // simulated state (for devices)
 
@@ -89,7 +94,7 @@ using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
 static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
 
 /*
- * msgPubr passes messages to publish to mbps. A simple lambda
+ * msgPubr passes messages to publish to the mbps. A simple lambda
  * is used if "qos" is desired. A more complex callback (messageConfirmation)
  * is included in the app1.cpp file.
  */
@@ -100,28 +105,27 @@ static void msgPubr(mbps &cm) {
     msgParms mp;
 
     if(role == "operator") {
-        std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
+        lastSend = std::chrono::system_clock::now().time_since_epoch();
         std::string l = (std::rand() & 2)? "gate" : "frontdoor"; // randomly toggle targeted location
+        std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
         mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",l},{"topicArgs", a}};
-        print("{}:{}-{} publishing msg {} targeted at {}\n", role, myId, myPID, Cnt, l);
     } else {
         mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", myState}};
     }
-
     if constexpr (deliveryConfirmation) {
         try {
             cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
-                    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
                     auto now = std::chrono::system_clock::now();
                     auto dt = ticks(now - ts).count() / 1000.;
-                    print("{:%M:%S} {}:{}-{} #{} published and {} +{:.3} mS\n",
-                            ticks(ts.time_since_epoch()), role, myId, myPID, Cnt,
-                            delivered? "confirmed":"timed out", dt);
+                    print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
+                            tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
                     });
         } catch (const std::exception&) {
             std::cout << "    msg " << Cnt << " structure is not permitted for this entity\n";
         }
     } else {
+//         auto now = std::chrono::system_clock::now();
+//        print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
         try {
             cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
         } catch (const std::exception&) {
@@ -129,24 +133,18 @@ static void msgPubr(mbps &cm) {
         }
     }
 
+    if (Cnt >= nMsgs && nMsgs) {
+        cm.oneTime(2*pubWait, [](){
+                    print("{}:{}-{} published {} messages, received {} and exits\n", role, myId, myPID, Cnt, nRcv);
+                    exit(0);
+                });
+        return;
+    }
+
     // operators send periodic messages, devices respond to incoming msgs
     if (role == "operator") {
-        Cnt++;
         cm.oneTime(pubWait + std::chrono::milliseconds(rand() & 0x1ff), [&cm](){ msgPubr(cm); });
     }
-}
-
-/*
- * msgPrnt prints the message received in the subscription
- */
-static void msgPrnt(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload) {
-    auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - mt.time("mts")).count() / 1000.;
-
-    print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
-            tp2d(now), role, myId, myPID, dt, mt["target"],
-                mt["topic"], mt["trgtLoc"], mt["topicArgs"],
-                std::string(msgPayload.begin(), msgPayload.end()));
 }
 
 /*
@@ -161,28 +159,31 @@ static void msgPrnt(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload) 
 
 void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
-    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-    auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - mt.time("mts")).count() / 1000.;
+    auto now = tp2d(std::chrono::system_clock::now());
+    auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
+    nRcv++;
 
-    print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
-            ticks(now.time_since_epoch()), role, myId, myPID, dt, mt["target"],
-                mt["topic"], mt["trgtLoc"], mt["topicArgs"],
-                std::string(msgPayload.begin(), msgPayload.end()));
+    // actions can be conditional upon msgArgs and msgPayload
 
-    // further action can be conditional upon msgArgs and msgPayload
-
-    // devices set their 'state' from the incoming 'arg' value then immediately reply
     if (role == "device") {
+        // devices set their 'state' from the incoming 'arg' value then immediately reply
+        print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
+                now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
+                std::string(msgPayload.begin(), msgPayload.end()));
         myState = mt["topicArgs"] == "lock"? "locked":"unlocked";
         msgPubr(cm);
+    } else {
+        auto rtt = (now - std::chrono::duration_cast<ticks>(lastSend)).count() / 1000.;
+        print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit, {:.3}ms rtt): {} {}: {} {} | {}\n",
+                now, role, myId, myPID, dt, rtt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
+                std::string(msgPayload.begin(), msgPayload.end()));
     }
 }
 
 /*
  * Main() for the application to use.
  * First complete set up: parse input line, set up message to publish,
- * set up entity identifier. Then make the mbps, connect, and run the context.
+ * set up entity identifier. Then make the mbps DeftT, connect, and run the context.
  */
 
 static int debug = 0;
@@ -192,8 +193,11 @@ int main(int argc, char* argv[])
     std::srand(std::time(0));
     // parse input line
     for (int c;
-        (c = getopt_long(argc, argv, ":c:dhl:n:w:", opts, nullptr)) != -1;) {
+        (c = getopt_long(argc, argv, ":a:c:dhl:n:w:", opts, nullptr)) != -1;) {
         switch (c) {
+                case 'a':
+                    addr = optarg;
+                    break;
                 case 'c':
                     capability = optarg;
                     break;
@@ -203,6 +207,9 @@ int main(int argc, char* argv[])
                 case 'h':
                     help(argv[0]);
                     exit(0);
+                case 'n':
+                    nMsgs = std::stoi(optarg);    //number of times to publish
+                    break;
                 case 'w':
                     pubWait = std::chrono::milliseconds(std::stoi(optarg));
                     break;
@@ -214,27 +221,32 @@ int main(int argc, char* argv[])
     }
 
     /*
-     *  These are useful in developing DeftT-based applications and/or in learning about Defined-trust Communications and DeftT.
-     *  The process id is useful for identifying trust domain members in dctwatch, doubtful usage in a deployment.
-     *  Application command lines pass a "bootstrap" identity file that would be (at least partially) securely configured in a
-     *  deployment. "readBootstrap" is in the identity_access.hpp utility file and parses the file. The rootCert, schemaCert,
-     *  identityChain, and currentSigningPair methods access that parsed data and serve as examples for the functions that
-     *  MUST be provided for an application, preferable securing at least the secret key and the integrity of the trust root.
+     *  These are useful in developing DeftT-based applications and/or
+     *  learning about Defined-trust Communications and DeftT.  The rootCert,
+     *  schemaCert, identityChain and currentSigningPair callbacks are how
+     *  DeftT's internals request the four kinds of information needed to
+     *  bootstrap an app. In a real deployment these would be handled in
+     *  a Trusted Execution Environment. For expository purposes,
+     *  identity_access.hpp contains simple, unsecure, examples of these
+     *  callbacks implemented by routine readBootstrap which reads an identity
+     *  bundle file (whose name must be the final command line arg passed to the
+     *  app), splits it into the pieces needed by the callbacks, and supplies a
+     *  routine to locally generate the app identity cert and signing key.
      */
-    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch, doubtful usage in a deployment
+    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch,
+                                        // of doubtful usage in a deployment
     readBootstrap(argv[optind]);
 
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
 
+    // this example application needs information about some of its identity attributes which can now be returned by
+    // DeftT modules through the shim but this may not be needed in a deployed application
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-
     if (role == "operator") {
         cm.subscribe(msgRecv);  // single callback for all messages
-    } else if (role == "hub") { // role for publisher privacy examples in locateapp
-        cm.subscribe(msgPrnt);
     } else {
         //here devices just subscribe to command topic
         cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance

@@ -1,5 +1,6 @@
 #ifndef FILE_TO_VEC_HPP
 #define FILE_TO_VEC_HPP
+#pragma once
 /*
  * fileToVec - read the contents of a file into a vector
  *
@@ -28,6 +29,8 @@
 #include <vector>
 #include "format.hpp"
 
+namespace dct {
+
 static auto fileToVec(std::string_view fname) {
     // XXX workaround for macOS clang-11 bug that gives a compiler error is istream 1st arg is a string_view:
     // XXX "error: 'basic_ifstream' is unavailable: introduced in macOS 10.15"
@@ -46,4 +49,7 @@ static auto fileToVec(std::string_view fname) {
     is.close();
     return buf;
 }
+
+} // namespace dct
+
 #endif // FILE_TO_VEC_HPP

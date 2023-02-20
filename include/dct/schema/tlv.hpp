@@ -1,5 +1,6 @@
 #ifndef TLV_HPP
 #define TLV_HPP
+#pragma once
 /*
  * Data Centric Transport c++ TLV defines
  * (from NDN Packet Format Specification 0.3
@@ -25,6 +26,8 @@
  *  More information on DCT is available from info@pollere.net
  */
 #include <array>
+
+namespace dct {
 
 enum class tlv : uint16_t {
     Name = 7,
@@ -128,5 +131,7 @@ static constexpr auto TLV(std::array<uint8_t,S> arg) noexcept { return tlvFlatte
 
 template<tlv typ>
 static constexpr auto TLV(uint8_t arg) noexcept { return std::to_array<uint8_t>({ uint8_t(typ), 1, arg}); }
+
+} // namespace dct
 
 #endif // TLV_HPP

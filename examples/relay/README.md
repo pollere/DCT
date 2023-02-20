@@ -2,7 +2,7 @@
 
 Everything on the same subnet may not be in the same trust domain (TD) and entities in the same TD may not be on the same subnet. A single DeftT instance handles the former case; cState and cAdd PDUs of different TDs are differentiated by the leading trust domain id (thumbprint of the signed trust schema cert) component so a DeftT instance can ignore PDUs with different TD ids. 
 
- In the second case, each subnet has a different sync zone (SZ), i.e., cStates and cAdds are not propagated off a subnet. A *relay* that has a DeftT instance in each subnet moves the Publications between SZs of the same trust domain (or overlapping subdomains).  When a trust domain needs to extend beyond a single subnet, Publications are relayed between SZs using identical trust schemas (though different signing/encryption may be specified for the cAdds).  Signing identities are associated with an entire TD (including subsets), but cAdd packet encryption group keys are specific to a particular subnet.  The same relay set up can be used to connect trust sub-domains, where some of the subnets implement only some of the trust rules in their trust schemas.
+ In the second case, each subnet has a different sync zone (SZ), i.e., cStates and cAdds are not propagated off a subnet. A *relay* that has a DeftT instance in each subnet moves the Publications between SZs of the same trust domain (or overlapping subdomains).  When a trust domain needs to extend beyond a single subnet, Publications are relayed between SZs using identical trust schemas (though different signing/encryption may be specified for the cAdds).  Signing identities can be associated with an entire TD (including subsets), but cAdd encryption is specific to a particular subnet. The same relay set up can be used to connect trust sub-domains, where some of the subnets implement only some of the trust rules in their trust schemas. Relays handle the three sync collections of every DeftT: **pubs** which contains the information exchanged by applications, **cert** which contains the signing identity chains of member, and **keys** which contains all the information needed for group key encryption. The **keys** collection has two sub-collections, *keys/pdus* for encryption of cAdds and *keys/pubs* for encryption of the Publications in **pubs**. Pub encryption is across a trust domain so must be passed on by relays but relays cannot join the encryption group and pass encrypted Publications without decrypting. Encryption of cAdds is local to a subnet so *keys/pdus* is never relayed and relays must be members of any local cAdd encryption group.
 
 Current work has focused on relaying between different networks in order to extend a trust domain (same trust root) with the same trust schema everywhere and relaying between different networks where some DeftTs are using trust schemas that are subsets of another trust schema. In this case, it is just a sub-domain that is extended. Relays can filter publications or just pass them through but a “default deny” has been most useful where the trust schema of each DeftT is used.
 
@@ -22,11 +22,13 @@ Additional features and filtering can be added to customize the Basic Relay. Pub
 
 A few examples use the hmIot directory's applications with basicRelays and the figure below. DCT/examples/relay directory contains ioth.trust (a copy of examples/hmIot/iot1.trust with relay specification added) and iote.trust, a subset of ioth.trust that *only* contains the frontDoor publications and uses AEAD for cAdds on an "external" interface. A script, mkIotIDs.sh, is included for making identity bundles that illustrate use of relays with the home IoT example. A relay element (*home*) in the home network has a multicast DeftT on the local home network and a unicast DeftT on an external link. A second relay (*away*) has a unicast DeftT on the external side and multicast on the local away side. A roamOp on the away network can produce the same commands as any operator but the away relay will only publish commands for the frontDoor to the external interface as relays use the iote.trust rules for their external DeftT. The external DeftT will not validate (thus will discard) commands to devices other than frontDoor. Looking at the trust schemas and the script to make the bundles will show:
 
-- The "home" (green in figure) wifi network is using the ioth.trust schema
+- The **home** (green in figure) wifi network is using the ioth.trust schema
 
-- The "away" (blue in figure) wifi network is using the ioth.trust schema (if testing this, note away network must be isolated from the home network)
+- The **away** (blue in figure) wifi network is using the ioth.trust schema (if testing this, note **away** network must be isolated from the **home** network)
 
-- The relays run the iote.trust schema which only passes Publications with target location  *frontdoor* and implements AEAD encryption.
+- The relays run the iote.trust schema which only passes Publications with target location  *frontdoor* and implements AEAD encryption on the unicast link subnet.
+
+- The trust domain encrypts its Publications using the AEADSGN signature manager, which is AEAD encrypted but also signed by the originating member. (Recall that **all** Publications must be signed.)
 
 ![relay.hmIotex](relay.hmIotex.png)
 
@@ -107,4 +109,4 @@ Early thoughts on relays at: http://pollere.net/Pdfdocs/NDNandOT.pdf.
 
 ---
 
-Copyright (C) 2022 Pollere LLC 
+Copyright (C) 2022-3 Pollere LLC 

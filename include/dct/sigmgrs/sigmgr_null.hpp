@@ -1,5 +1,6 @@
 #ifndef SIGMGRNULL_HPP
 #define SIGMGRNULL_HPP
+#pragma once
 /*
  * Null Signature Manager
  *
@@ -33,6 +34,8 @@
 #include <array>
 #include "sigmgr.hpp"
 
+namespace dct {
+
 struct SigMgrNULL final : SigMgr {
 
     SigMgrNULL() : SigMgr(stNULL) {}
@@ -45,5 +48,7 @@ struct SigMgrNULL final : SigMgr {
     bool validate(rData ) override final { return true; }
     bool validate(rData , const rData&) override final { return true; }
 };
+
+} // namespace dct
 
 #endif // SIGMGRNULL_HPP

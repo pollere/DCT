@@ -1,5 +1,6 @@
 #ifndef TLVPARSER_HPP
 #define TLVPARSER_HPP
+#pragma once
 /*
  * Data Centric Transport TLV-encoded packet parser
  *
@@ -29,6 +30,9 @@
 #include <vector>
 #include "dct/format.hpp"
 #include "tlv.hpp"
+
+namespace dct {
+
 using runtime_error = std::runtime_error;
 
 // routines for parsing NDN-style tlv blocks
@@ -288,12 +292,6 @@ struct tlvParser {
     }
 };
 
-template<> struct std::hash<tlvParser> {
-    constexpr size_t operator()(const tlvParser& tp) const noexcept {
-        return std::hash<std::u8string_view>{}({(char8_t*)tp.data(), tp.size()});
-    }
-};
-
 // allow a tlv containing other tlvs to be accessed like a vector
 // (e.g., the components of a name). It's assumed that m_off points to the
 // start of the first contained tlv. Offsets to each tlv are recorded but
@@ -325,6 +323,14 @@ struct tlvVec {
 
     // return the container tlv with the offset set to the first component
     auto& tlv() { b_.skipTo(o_[0]); return b_; }
+};
+
+} // namespace dct
+
+template<> struct std::hash<dct::tlvParser> {
+    constexpr size_t operator()(const dct::tlvParser& tp) const noexcept {
+        return std::hash<std::u8string_view>{}({(char8_t*)tp.data(), tp.size()});
+    }
 };
 
 #endif // TLVPARSER_HPP

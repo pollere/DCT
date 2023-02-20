@@ -1,3 +1,6 @@
+#ifndef SYNCPS_SYNCPS_HPP
+#define SYNCPS_SYNCPS_HPP
+#pragma once
 /*
  * Copyright (C) 2019-2 Pollere LLC
  * Pollere authors at info@pollere.net
@@ -18,9 +21,6 @@
  *  along with this program; if not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef SYNCPS_SYNCPS_HPP
-#define SYNCPS_SYNCPS_HPP
-
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -36,8 +36,8 @@
 #include <dct/schema/dct_cert.hpp>
 #include "iblt.hpp"
 
-namespace dct
-{
+namespace dct {
+
 // recognize containers that combine a view with its backing store
 template<typename C> concept hasView = requires { std::remove_cvref_t<C>().asView(); };
 
@@ -279,7 +279,6 @@ struct SyncPS {
      * the copy (plaintext versions of encrypted objects must be ephemeral).
      */
     void deliver(const rPub& pub, const SubCb& cb) {
-        // print("syncps delivering: {}\n", pub.name());
         if (pubSigmgr_.encryptsContent() && pub.content().size() > 0) {
             Publication pcpy{pub};
             if (pubSigmgr_.decrypt(pcpy)) cb(pcpy);

@@ -1,5 +1,6 @@
 #ifndef SIGMGRSHA256_HPP
 #define SIGMGRSHA256_HPP
+#pragma once
 /*
  * SHA256 Signature Manager
  *
@@ -50,6 +51,8 @@
 
 #include "sigmgr.hpp"
 
+namespace dct {
+
 struct SigMgrSHA256 final : SigMgr {
 
     SigMgrSHA256() : SigMgr(stSHA256) { }
@@ -77,5 +80,7 @@ struct SigMgrSHA256 final : SigMgr {
         return true;
     }
 };
+
+} // namespace dct
 
 #endif // SIGMGRSHA256_HPP

@@ -1,9 +1,10 @@
 #ifndef SCHEMA_CERT_HPP
 #define SCHEMA_CERT_HPP
+#pragma once
 /*
  * schemaCert - construct a signed cert containing a schema
  *
- * Copyright (C) 2020-2 Pollere LLC
+ * Copyright (C) 2020-3 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -27,8 +28,11 @@
 #include "dct/schema/dct_cert.hpp"
 #include "dct/sigmgrs/sigmgr_by_type.hpp"
 
+namespace dct {
+
 static inline auto schemaCert(const bSchema& bs, const keyVal& pk, SigMgr& sm) {
     // schema must be signed the same way as its pubs
+    // XXXX this needs to change to certValidator
     auto valtype = bs.pubVal("#pubValidator").substr(1);
 
     // schema names are derived from the schema and must have the form:
@@ -37,5 +41,7 @@ static inline auto schemaCert(const bSchema& bs, const keyVal& pk, SigMgr& sm) {
     auto certName = format("{}/schema/{}", bs.pubVal("#pubPrefix"), bs.pubName(0));
     return dctCert(certName, pk, sm);
 }
+
+} // namespace dct
 
 #endif // SCHEMA_CERT_HPP

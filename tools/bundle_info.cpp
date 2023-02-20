@@ -31,6 +31,7 @@
 #include "dct/schema/validate_bootstrap.hpp"
 #include "dct/schema/capability.hpp"
 
+using namespace dct;
 
 int main(int argc, const char* argv[]) {
     if (argc < 3) {

@@ -1,5 +1,6 @@
 #ifndef BSCHEMA_HPP
 #define BSCHEMA_HPP
+#pragma once
 
 /*
  * Definitions for reading and writing binary schemas.
@@ -36,6 +37,8 @@
 #include <vector>
 #include <unordered_map>
 #include "dct/format.hpp"
+
+namespace dct {
 
 namespace bschema {
 
@@ -284,24 +287,26 @@ struct bSchema {
 
 } //namespace bschema
 
+} // namespace dct
+
 template<>
-struct fmt::formatter<bschema::corItem>: fmt::dynamic_formatter<> {
+struct fmt::formatter<dct::bschema::corItem>: fmt::dynamic_formatter<> {
     template <typename FormatContext>
-    auto format(const bschema::corItem& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+    auto format(const dct::bschema::corItem& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return fmt::format_to(ctx.out(), "{}.{}={}.{}", v.ct1, v.co1, v.ct2, v.co2);
     }
 };
 template<>
-struct fmt::formatter<bschema::tDiscrim>: fmt::dynamic_formatter<> {
+struct fmt::formatter<dct::bschema::tDiscrim>: fmt::dynamic_formatter<> {
     template <typename FormatContext>
-    auto format(const bschema::tDiscrim& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+    auto format(const dct::bschema::tDiscrim& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return fmt::format_to(ctx.out(), "(chns#{}, tmpl={}, comp={}, vals={}, cor={})", v.cbm, v.tmpl, v.disc, v.vl, v.cor);
     }
 };
 template<>
-struct fmt::formatter<bschema::tPub>: fmt::dynamic_formatter<> {
+struct fmt::formatter<dct::bschema::tPub>: fmt::dynamic_formatter<> {
     template <typename FormatContext>
-    auto format(const bschema::tPub& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+    auto format(const dct::bschema::tPub& v, FormatContext& ctx) const -> decltype(ctx.out()) {
         return fmt::format_to(ctx.out(), "(par#{:x}, disc#{:x}, tok={}, tags={})", v.par, v.d, v.pub, v.tag);
     }
 };

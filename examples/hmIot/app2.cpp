@@ -44,10 +44,7 @@
 #include <iostream>
 #include <random>
 
-#include <dct/shims/mbps.hpp>
-#include "../util/identity_access.hpp"
-
-using namespace std::literals;
+#include "../util/dct_example.hpp"
 
 static constexpr bool deliveryConfirmation = false; // get per-message delivery confirmation
 
@@ -80,10 +77,11 @@ static void help(const char* cname)
 
 /* Globals */
 static std::string myPID, myId, role;
-static std::chrono::microseconds pubWait = std::chrono::seconds(1);
+static std::chrono::microseconds pubWait = std::chrono::seconds(4);
 static decltype(std::chrono::system_clock::now().time_since_epoch()) lastSend;
 static int Cnt = 0;
 static int nMsgs = 10;
+static int nRcv = 0;
 static std::string addr{};
 static std::string capability{"lock"};
 static std::string location{"all"}; // target's location (for operators)
@@ -118,12 +116,14 @@ static void msgPubr(mbps &cm) {
                             tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
                     });
     } else {
+//         auto now = std::chrono::system_clock::now();
+//        print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
         cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
     }
 
     if (Cnt >= nMsgs && nMsgs) {
         cm.oneTime(2*pubWait, [](){
-                    print("{}:{}-{} published {} messages and exits\n", role, myId, myPID, Cnt);
+                    print("{}:{}-{} published {} messages, received {} and exits\n", role, myId, myPID, Cnt, nRcv);
                     exit(0);
                 });
         return;
@@ -149,6 +149,7 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
     auto now = tp2d(std::chrono::system_clock::now());
     auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
+    nRcv++;
 
     // actions can be conditional upon msgArgs and msgPayload
 
@@ -211,19 +212,25 @@ int main(int argc, char* argv[])
     }
 
     /*
-     *  These are useful in developing DeftT-based applications and/or in learning about Defined-trust Communications and DeftT.
-     *  The process id is useful for identifying trust domain members in dctwatch, doubtful usage in a deployment.
-     *  Application command lines pass a "bootstrap" identity file that would be (at least partially) securely configured in a
-     *  deployment. "readBootstrap" is in the identity_access.hpp utility file and parses the file. The rootCert, schemaCert,
-     *  identityChain, and currentSigningPair methods access that parsed data and serve as examples for the functions that
-     *  MUST be provided for an application, preferable securing at least the secret key and the integrity of the trust root.
+     *  These are useful in developing DeftT-based applications and/or
+     *  learning about Defined-trust Communications and DeftT.  The rootCert,
+     *  schemaCert, identityChain and currentSigningPair callbacks are how
+     *  DeftT's internals request the four kinds of information needed to
+     *  bootstrap an app. In a real deployment these would be handled in
+     *  a Trusted Execution Environment. For expository purposes,
+     *  identity_access.hpp contains simple, unsecure, examples of these
+     *  callbacks implemented by routine readBootstrap which reads an identity
+     *  bundle file (whose name must be the final command line arg passed to the
+     *  app), splits it into the pieces needed by the callbacks, and supplies a
+     *  routine to locally generate the app identity cert and signing key.
      */
-    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch, doubtful usage in a deployment
+    myPID = std::to_string(getpid());   // useful for identifying trust domain members in dctwatch,
+                                        // of doubtful usage in a deployment
     readBootstrap(argv[optind]);
 
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
 
     // this example application needs information about some of its identity attributes which can now be returned by
     // DeftT modules through the shim but this may not be needed in a deployed application
@@ -251,6 +258,5 @@ int main(int argc, char* argv[])
         std::cerr << "default exception";
         exit(1);
     }
-
     cm.run();
 }

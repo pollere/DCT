@@ -84,11 +84,13 @@
 #include <sstream>
 
 #include "dct/format.hpp"
+#include "dct/sigmgrs/sigmgr.hpp"
 #include "dct/schema/rpacket.hpp"
 #include "dissect.hpp"
 #include "watcher.hpp"
 
 using namespace std::literals;
+using namespace dct;
 
 static enum oFmt { compact, names, full } ofmt{compact};
 static bool doData = true;
@@ -166,15 +168,17 @@ static void namePrint(const uint8_t* d, size_t s, uint16_t sport) {
     compactPrint(d, s, sport);
     if (d[0] != 6) return;
 
-    auto rd = rData(d, s);
-    if (rd.sigType() == 7/*AEAD*/) return;
+    try {
+        auto rd = rData(d, s);
+        if (SigMgr::encryptsContent(rd.sigType())) return;
 
-    for (const auto c : rd.content()) {
-        if (! c.isType(6)) return;
-        rData p{c};
-        if (! p.valid()) return;
-        print(" | {}\n", p.name());
-    }
+        for (const auto c : rd.content()) {
+            if (! c.isType(6)) return;
+            rData p{c};
+            if (! p.valid()) return;
+            print(" | {}\n", p.name());
+        }
+    } catch (const std::runtime_error&) { }
 }
 
 static void handlePkt(const uint8_t* d, size_t s, uint16_t sport) {

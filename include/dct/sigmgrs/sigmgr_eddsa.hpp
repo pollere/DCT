@@ -1,5 +1,6 @@
 #ifndef SIGMGREdDSA_HPP
 #define SIGMGREdDSA_HPP
+#pragma once
 /*
  * EdDSA Signature Manager
  *
@@ -65,6 +66,8 @@
 
 #include "sigmgr.hpp"
 
+namespace dct {
+
 /*
  * The sigInfo this signature manager uses stays the same for a
  * particular signing key. Can extract the needed information from
@@ -121,7 +124,7 @@ struct SigMgrEdDSA final : SigMgr {
     // common validate logic
     bool validate(rData d, keyRef pk) const {
         auto sig = d.signature();
-        if (sig.size() - sig.off() != crypto_sign_BYTES) return false;
+        if (sig.size() - sig.off() != crypto_sign_BYTES)    return false;
 
         // signed region goes from start of 'name' to end of 'signature' tlv
         auto strt = d.name().data();
@@ -136,5 +139,7 @@ struct SigMgrEdDSA final : SigMgr {
         return false;
     }
 };
+
+} // namespace dct
 
 #endif // SigMgrEdDSA_HPP

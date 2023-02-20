@@ -1,5 +1,6 @@
 #ifndef SIGMGRAEAD_HPP
 #define SIGMGRAEAD_HPP
+#pragma once
 /*
  * AEAD Signature Manager
  *
@@ -61,7 +62,7 @@
 #include <ranges>
 #include "sigmgr.hpp"
 
-
+namespace dct {
 
 struct SigMgrAEAD final : SigMgr {
     struct keyRecord {
@@ -168,12 +169,6 @@ struct SigMgrAEAD final : SigMgr {
     inline size_t keyListSize() const { return m_keyList.size(); }
 };
 
+} // namespace dct
+
 #endif // SIGMGRAEAD_HPP
-
-
-
-
-
-
-
-

@@ -1,5 +1,6 @@
 #ifndef KM_ELECTION_HPP
 #define KM_ELECTION_HPP
+#pragma once
 /*
  * km_election - run a key-maker election for some distributor
  *
@@ -29,7 +30,7 @@
  * with 0 (or no cert) meaning 'not authorized' and larger values giving
  * higher priority.
  *
- * The keyMaker election is conducted via publications to a "KM" sub-topic
+ * The keyMaker election is conducted via publications to a "km" sub-topic
  * of the distributor's topic. The election is currently one-round &
  * priority-based but will eventually follow a 'simple paxos' re-election
  * model to handle loss of the current keymaker.
@@ -78,7 +79,7 @@ struct kmElection {
     const uint16_t preSz_;  // leading prefix size of all election pubs
     const uint16_t nmBlks_; // number of components in election pub names
 
-    // build and publish a key maker ('km') pubication
+    // build and publish a key maker ('km') publication
     void publishKM(const char* topic) {
         crData p(prefix_ / topic / epoch_ / std::chrono::system_clock::now());
         p.content(std::vector<uint8_t>{});

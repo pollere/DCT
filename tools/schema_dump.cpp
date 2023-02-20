@@ -31,6 +31,8 @@
 #include "dct/format.hpp"
 #include "dct/schema/rdschema.hpp"
 
+using namespace dct;
+
 int main(int argc, const char* argv[]) {
     if (argc < 2) {
         print("- usage: {} file\n", argv[0]);

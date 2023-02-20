@@ -29,6 +29,8 @@
 #include "dct/schema/cert_bundle.hpp"
 #include "dct/schema/signed_cert.hpp"
 
+using namespace dct;
+
 void usage(const char** argv) {
     print("- usage: {} [-s sigType] [-o outfile] name [signer]\n", argv[0]);
     exit(1);

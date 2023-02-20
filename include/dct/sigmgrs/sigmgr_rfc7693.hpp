@@ -1,5 +1,6 @@
 #ifndef SIGMGRRFC7693_HPP
 #define SIGMGRRFC7693_HPP
+#pragma once
 /*
  * RFC7693 Signature Manager
  *
@@ -49,6 +50,8 @@
 
 #include "sigmgr.hpp"
 
+namespace dct {
+
 struct SigMgrRFC7693 final : SigMgr {
 
     SigMgrRFC7693() : SigMgr(stRFC7693) { }
@@ -77,5 +80,7 @@ struct SigMgrRFC7693 final : SigMgr {
         return true;
     }
 };
+
+} // namespace dct
 
 #endif // SIGMGRRFC7693_HPP

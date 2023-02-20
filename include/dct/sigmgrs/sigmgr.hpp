@@ -1,5 +1,6 @@
 #ifndef SIGMGR_HPP
 #define SIGMGR_HPP
+#pragma once
 /*
  * Signature Manager abstraction
  *
@@ -29,61 +30,38 @@
  * these methods should be overridden in derived classes.
  */
 
-/*
- * List of available signature-managers and SIGNER_TYPE:
- *  0x00 SHA256
- *  0x07 AEAD
- *  0x08 EdDSA
- *  0x09 RFC7693
- *  0x0a NULL
- *  0x0b PPAEAD
- *  0x0c PPSIGN
- *  0x0d AEADSIG
- * Note that NULL is used to bypass signing for dctCerts which are already
- * signed, does not appear in "wire" packets and should not be otherwise used.
- */
-
 #include <functional>
 #include <span>
-
 
 // this file is included by syncps.hpp so libsodium calls can be available
 extern "C" {
     #include <sodium.h>
 };
 
-using keyVal = std::vector<uint8_t>;
-using keyRef = std::span<const uint8_t>;
-using SigInfo = std::vector<uint8_t>;
-using SigType = uint8_t;
+#include "sigmgr_defs.hpp"
+#include "../schema/crpacket.hpp"
 
-#include <dct/schema/dct_cert.hpp>
+namespace dct {
 
 using KeyCb = std::function<keyRef(rData)>;
 
 struct SigMgr {
-    // Signature types (must match equivalent NDN TLV if any) and be less than 64
-    static constexpr SigType stSHA256 = 0;
-    static constexpr SigType stAEAD = 7;
-    static constexpr SigType stEdDSA = 8;
-    static constexpr SigType stRFC7693 = 9;
-    static constexpr SigType stNULL = 10;
-    static constexpr SigType stPPAEAD = 11;
-    static constexpr SigType stPPSIGN = 12;
-    static constexpr SigType stAEADSGN = 13;
-
     const SigType m_type;
     SigInfo m_sigInfo;
     keyVal m_signingKey{};
     KeyCb m_keyCb{};
 
     // types that require a key locator in their sigInfo   
-    static constexpr uint64_t needsKey_{(1 << stEdDSA) | (1 << stPPAEAD) | (1 << stPPSIGN) | (1 << stAEADSGN)};
+    static constexpr uint64_t needsKey_{ (1 << stEdDSA) | (1 << stPPAEAD) | (1 << stPPSIGN) | (1 << stAEADSGN) };
     static constexpr bool needsKey(SigType typ) noexcept { return (needsKey_ & (1 << typ)) != 0; };
 
     // types that encrypt content
-    static constexpr uint64_t encryptsContent_{(1 << stPPSIGN) | (1 << stAEADSGN)};
-    static constexpr bool encryptsContent(SigType typ) noexcept { return (encryptsContent_ & (1 << typ)) != 0; };
+    static constexpr uint64_t encryptsContent_{(1 << stAEAD) | (1 << stPPAEAD) | (1 << stPPSIGN) | (1 << stAEADSGN)};
+    static constexpr bool encryptsContent(SigType typ) noexcept  { return (encryptsContent_ & (1 << typ)) != 0; };
+
+    // types that with restricted subscriber group
+    static constexpr uint64_t subscriberGroup_{(1 << stPPAEAD) | (1 << stPPSIGN)};
+    static constexpr bool subscriberGroup(SigType typ) noexcept  { return (subscriberGroup_ & (1 << typ)) != 0; };
 
     // build a siginfo for signing key type 'typ'
     auto  mkSigInfo(SigType typ) {
@@ -102,7 +80,7 @@ struct SigMgr {
 
     bool sign(crData& d) { return sign(d, m_sigInfo, m_signingKey); };
     bool sign(crData& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
-    virtual bool sign(crData&, const SigInfo&, const keyVal&) { abort();return false; };
+    virtual bool sign(crData&, const SigInfo&, const keyVal&) { abort(); };
     virtual bool validate(rData ) { return false; };
     virtual bool validate(rData, const rData&) { return false; };
     virtual bool validateDecrypt(rData d) { return validate(d); };
@@ -115,6 +93,7 @@ struct SigMgr {
 
     constexpr bool needsKey() const noexcept { return needsKey(m_type); };
     constexpr bool encryptsContent() const noexcept { return encryptsContent(m_type); };
+    constexpr bool subscriberGroup() const noexcept { return subscriberGroup(m_type); };
 
     // if validate requires public keys of publishers, m_keyCb returns by keylocator
     void setKeyCb(KeyCb&& kcb) { m_keyCb = std::move(kcb);}
@@ -122,5 +101,7 @@ struct SigMgr {
     SigType type() const noexcept { return m_type; };
     SigInfo getSigInfo() const noexcept { return m_sigInfo; }
 };
+
+} // namespace dct
 
 #endif //SIGMGR_HPP

@@ -1,5 +1,6 @@
 #ifndef RDSCHEMA_HPP
 #define RDSCHEMA_HPP
+#pragma once
 /*
  * Read and validate a binary (compiled) schema
  *
@@ -32,6 +33,8 @@
 #include <version>
 #include "bschema.hpp"
 #include "dct/format.hpp"
+
+namespace dct {
 
 using namespace bschema;
 
@@ -409,5 +412,7 @@ struct rdSchema {
     int remaining_{};
     bSchema bs_{};
 };
+
+} // namespace dct
 
 #endif // RDSCHEMA_HPP

@@ -1,3 +1,7 @@
+bugs/
+examples/
+old/
+tst/
 schemaCompile
 location.hpp
 parser.cpp

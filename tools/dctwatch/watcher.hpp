@@ -1,5 +1,6 @@
 #ifndef WATCHER_HPP
 #define WATCHER_HPP
+#pragma once
 /*
  * Async I/O and UDP6 multicast NDN packet watcher
  *
@@ -28,8 +29,6 @@
 #include <string>
 #include <string_view>
 
-using runtime_error = std::runtime_error;
-
 // boost bug workaround: this should be defined for any c++17 or beyond compiler
 // and is *required* for c++20 or beyond since std::result_of is gone.
 // Broken in boost 1.77 and earlier
@@ -38,6 +37,10 @@ using runtime_error = std::runtime_error;
 #include "dct/face/default-io-context.hpp"
 #include "dct/face/default-if.hpp"
 #endif
+
+namespace dct {
+
+using runtime_error = std::runtime_error;
 
 struct AsIO {
     using onRcv = std::function<void(const uint8_t* pkt, size_t len, uint16_t sport)>;
@@ -99,5 +102,7 @@ struct Watcher {
         getDefaultIoContext().run();
     }
 };
+
+} // namespace dct
 
 #endif // WATCHER_HPP

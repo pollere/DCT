@@ -41,6 +41,8 @@
 #include "parser.hpp"
 #include "symtab.hpp"
 
+namespace bschema = dct::bschema;
+
 // -v (verbose) output levels
 static constexpr int V_QUIET  = 0;
 static constexpr int V_MIN    = V_QUIET+1;

@@ -23,15 +23,17 @@ schemaCompile -o sensor.scm ../sensor.trust
 # extract the info needed to make certs from the compiled schema
 Pub=$(schema_info $Bschema);
 PubPrefix=$(schema_info $Bschema "#pubPrefix");
-PubValidator=$(schema_info -t $Bschema "#pubValidator");
+# CertValidator=$(schema_info -t $Bschema "#certValidator");
+# default value
+CertValidator=EdDSA
 
-make_cert -s $PubValidator -o $RootCert $PubPrefix
+make_cert -s $CertValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
 schema_cert -o sensor.schema sensor.scm $RootCert
 
-
 # if main mesh schema uses AEAD must set keymaker
-if [ $(schema_info -t $Bschema "#wireValidator") == AEAD ]; then
+if [[ $(schema_info -t $Bschema "#wireValidator") =~ AEAD|AEADSGN|PPAEAD|PPSIGN ||
+      $(schema_info -t $Bschema "#pubValidator") =~ AEADSGN|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KM") ]; then
 	echo
 	echo "- error: AEAD encryption requires entity(s) with a KM (KeyMaker) Capability"
@@ -40,30 +42,29 @@ if [ $(schema_info -t $Bschema "#wireValidator") == AEAD ]; then
     fi;
     # make the 'key maker' capability cert
     KMCapCert=km.cap
-    make_cert -s $PubValidator -o $KMCapCert $PubPrefix/CAP/KM/1 $RootCert
+    make_cert -s $CertValidator -o $KMCapCert $PubPrefix/CAP/KM/1 $RootCert
     MeshSigner=$KMCapCert
 fi;
 
-make_cert -s $PubValidator -o cntrl.cert $PubPrefix/controller/main $MeshSigner
+make_cert -s $CertValidator -o cntrl.cert $PubPrefix/controller/main $MeshSigner
 if [ -n $KMCapCert ]; then
     make_bundle -v -o cntrl.bundle $RootCert $SchemaCert $KMCapCert +cntrl.cert
 else
     make_bundle -v -o cntrl.bundle $RootCert $SchemaCert +cntrl.cert
 fi;
-# for testing
-#  make_bundle -v -o cntrl.bundle $RootCert $SchemaCert +cntrl.cert
 
 # make the relay external link certs and bundles
 # could use same signing cert for both relay ports if not using AEAD on mesh
-# this isn't set up to use AEAD on sensor side - doesn't give relay a KM cert
+# Gives relay a KM cert on both sides in order to work with AEADSGN pub even
+# though it's not used (test should be for a KM in domain rather than subnet)
 for n in ${relay[@]}; do
     if [ -n $KMCapCert ]; then
-    make_cert -s $PubValidator -o mesh$n.cert $PubPrefix/relay/m$n $KMCapCert
+    make_cert -s $CertValidator -o mesh$n.cert $PubPrefix/relay/m$n $KMCapCert
     make_bundle -v -o mesh$n.bundle $RootCert $SchemaCert $KMCapCert +mesh$n.cert
-    make_cert -s $PubValidator -o snet$n.cert $PubPrefix/relay/s$n $RootCert
-    make_bundle -v -o snet$n.bundle $RootCert sensor.schema +snet$n.cert
+    make_cert -s $CertValidator -o snet$n.cert $PubPrefix/relay/s$n $KMCapCert
+    make_bundle -v -o snet$n.bundle $RootCert sensor.schema $KMCapCert +snet$n.cert
     else
-    make_cert -s $PubValidator -o relay$n.cert $PubPrefix/relay/$n $RootCert
+    make_cert -s $CertValidator -o relay$n.cert $PubPrefix/relay/$n $RootCert
     make_bundle -v -o mesh$n.bundle $RootCert $SchemaCert +relay$n.cert
     make_bundle -v -o snet$n.bundle $RootCert sensor.schema +relay$n.cert
     fi
@@ -71,6 +72,6 @@ done
 
 # make the sensor certs and bundles
 for n in ${sensor[@]}; do
-    make_cert -s $PubValidator -o sensor$n.cert $PubPrefix/sensor/$n $RootCert
+    make_cert -s $CertValidator -o sensor$n.cert $PubPrefix/sensor/$n $RootCert
     make_bundle -v -o sensor$n.bundle $RootCert sensor.schema +sensor$n.cert
 done

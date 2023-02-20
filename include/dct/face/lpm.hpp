@@ -1,5 +1,6 @@
 #ifndef DCT_FACE_LPM_HPP
 #define DCT_FACE_LPM_HPP
+#pragma once
 /*
  * Longest-Prefix-Match lookup template class
  *
@@ -29,6 +30,8 @@
 #include <map>
 #include <type_traits>
 #include "../schema/crpacket.hpp"
+
+namespace dct {
 
 // need to be able to recognize containers that combine a view with its backing store
 template<typename C> concept lpmCapable = std::is_convertible_v<const C &, const rPrefix&>;
@@ -131,5 +134,7 @@ struct lpmLT {
         return lt_.extract(it);
     }
 };
+
+} // namespace dct
 
 #endif  // DCT_FACE_LPM_HPP

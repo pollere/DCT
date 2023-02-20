@@ -1,5 +1,6 @@
 #ifndef DCT_FACE_TRANSPORT_HPP
 #define DCT_FACE_TRANSPORT_HPP
+#pragma once
 /*
  * Async I/O transport for a Direct Face
  *
@@ -54,7 +55,8 @@
 #include "default-io-context.hpp"
 
 namespace dct {
-    using namespace boost::asio::ip;
+
+using namespace boost::asio::ip;
 
 struct Transport {
     using onRcv = std::function<void(const uint8_t* pkt, size_t len)>;

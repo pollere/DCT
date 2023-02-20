@@ -1,10 +1,10 @@
-DCT_mbps.cflags
-DCT_mbps.config
-DCT_mbps.creator
-DCT_mbps.cxxflags
-DCT_mbps.files
-DCT_mbps.includes
+*.cflags
+*.config
+*.creator
+*.cxxflags
+*.files
+*.includes
 app1
 app2
-app3
 app4
+xx

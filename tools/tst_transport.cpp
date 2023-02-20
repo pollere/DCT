@@ -28,6 +28,8 @@
 #include "dct/face/default-io-context.hpp"
 #include "dct/face/transport.hpp"
 
+using namespace dct;
+
 using Timer = boost::asio::system_timer;
 
 using namespace std::literals::chrono_literals;

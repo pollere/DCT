@@ -1,5 +1,6 @@
 #ifndef BUILDPUB_HPP
 #define BUILDPUB_HPP
+#pragma once
 /*
  * Use a schema to build and sign publication objects
  *
@@ -39,21 +40,17 @@
 #include "rdschema.hpp"
 #include "rpacket.hpp"
 
+// parameter types allowed
+//using timeVal = std::chrono::sys_time<std::chrono::microseconds>;
+namespace dct {
+    using timeVal = std::chrono::time_point<std::chrono::system_clock>;
+    using paramVal = std::variant<std::monostate, std::string, std::string_view, uint64_t, timeVal>;
+    using parItem = std::pair<std::string_view, paramVal>;
+}
+
 // XXX these should be in <variant> but currently aren't
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-
-namespace dct {
-
-using namespace std::string_literals;
-
-// parameter types allowed
-//using timeVal = std::chrono::sys_time<std::chrono::microseconds>;
-using timeVal = std::chrono::time_point<std::chrono::system_clock>;
-using paramVal = std::variant<std::monostate, std::string, std::string_view, uint64_t, timeVal>;
-using parItem = std::pair<std::string_view, paramVal>;
-
-}
 
 template<>
 struct fmt::formatter<dct::paramVal>: fmt::dynamic_formatter<> {
@@ -67,6 +64,8 @@ struct fmt::formatter<dct::paramVal>: fmt::dynamic_formatter<> {
 };
 
 namespace dct {
+
+    using namespace std::string_literals;
 
 // template describing one viable pub for some particular signing chain.
 // An array of such templates is the primary structure used by both the

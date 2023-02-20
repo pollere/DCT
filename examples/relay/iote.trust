@@ -35,12 +35,13 @@ lockCommand: #iotPub & { target: "lock", topic: "command" } &
 roleCert:    _domain/_role/_roleId/_keyinfo
 signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 
-opSign:  signCert & { _role: "operator" } <= mbrCert
-devSign: signCert & { _role: "device" } <= mbrCert
-rlySign: signCert <= rlyCert
+opSign:  signCert & { _role: "operator" } <= opCert
+devSign: signCert & { _role: "device" } <= devCert
+rlySign: signCert & { _role: "relay" } <= rlyCert
 
-rlyCert: roleCert & { _role: "relay" } <= domCert | kmCap 
-mbrCert: roleCert <= domCert
+rlyCert: roleCert <= domCert | kmCap 
+devCert: roleCert <= domCert | kmCap | kmpCap 
+opCert: roleCert <= domCert
 
 // There are different signing chains for opCert & devCerts.
 // "key makers" (authorized by the KM capability, kmCap) are
@@ -60,9 +61,10 @@ capCert: _domain/"CAP"/capId/capArg/_keyinfo
 // The relay remote bundle needs to have the key maker capability
 //  could limit the possible device types to frontdoor to keep from
 //  relaying unusued certs
-// devSign: signCert & { _role: "device" } & {_roleId: "frontdoor" } <= mbrCert
+// devSign: signCert & { _role: "device" } & {_roleId: "frontdoor" } <= devCert
 
 kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert
+kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domCert | kmCap
 
 domCert: _domain/_keyinfo
 
@@ -71,7 +73,7 @@ domCert: _domain/_keyinfo
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
+#pubValidator: "AEADSGN"
 
 // for cAdds
 #wireValidator: "AEAD"

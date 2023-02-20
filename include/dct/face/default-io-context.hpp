@@ -1,5 +1,6 @@
 #ifndef GET_DEFAULT_IO_CONTEXT_HPP
 #define GET_DEFAULT_IO_CONTEXT_HPP
+#pragma once
 /*
  * getDefaultIoContext - get current DCT application's default io_context
  *
@@ -30,6 +31,8 @@
 
 #include <boost/asio.hpp>
 
+namespace dct {
+
 static inline auto& getDefaultIoContext()
 {
     static boost::asio::io_context* ioc{};
@@ -39,5 +42,7 @@ static inline auto& getDefaultIoContext()
     }
     return *ioc;
 }
+
+} // namespace dct
 
 #endif // GET_DEFAULT_IO_CONTEXT_HPP

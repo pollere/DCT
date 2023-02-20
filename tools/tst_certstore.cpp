@@ -30,6 +30,7 @@
 #include "dct/format.hpp"
 #include "dct/schema/dct_model.hpp"
 
+using namespace dct;
 
 int main(int argc, const char* argv[]) {
     using namespace std::literals;

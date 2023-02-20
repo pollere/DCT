@@ -1,5 +1,6 @@
 #ifndef VALIDATE_PUB_HPP
 #define VALIDATE_PUB_HPP
+#pragma once
 /*
  * structural (schema-based) publication validation
  *
@@ -130,7 +131,7 @@ struct pubValidator {
 using tpToValidator = std::unordered_map<thumbPrint,pubValidator>;
 
 struct SigMgrSchema final : SigMgr {
-    SigMgr& pubsm_;
+    std::reference_wrapper<SigMgr> pubsm_;
     const bSchema& bs_;
     const tpToValidator& pv_;
 
@@ -139,20 +140,36 @@ struct SigMgrSchema final : SigMgr {
 
     bool validate(rData data) override final {
         // cryptographically validate 'data'
-        if (! pubsm_.validate(data)) {
-            print("invalid sig {}\n", data.name());
+        if (! pubsm_.get().validate(data)) {
+            print("SigMgrSchema::validate: invalid sig {}\n", data.name());
             return false;
         }
         // structurally validate 'data'
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(data));
             auto valid = pubval.matchTmplt(bs_, data.name());
-            if (!valid) print("invalid structure {}\n", data.name());
+            if (!valid) print("SigMgrSchema::validate: invalid structure {}\n", data.name());
             return valid;
-        } catch (std::exception& e) { print("structure validation err: {}\n", e.what()); }
+        } catch (std::exception& e) { print("SigMgrSchema::validate: structure validation err: {}\n", e.what()); }
         return false;
     }
+
+    bool decrypt(rData data) override final { return pubsm_.get().decrypt(data); }
+
+    void setSigMgr(SigMgr& sm) { pubsm_ = sm; }
+};
+
+// sigmgr for pass-through shims (e.g., relays) that validate pubs but don't decrypt them.
+// It validates using the validate method of the sigmgr it's constructed with but all other
+// methods ('decrypt' in particular) are handled by the sigmgr base class.
+struct SigMgrPT final : SigMgr {
+    SigMgr& pubsm_;
+
+    SigMgrPT(SigMgr& pubsm) : SigMgr(pubsm.type()), pubsm_{pubsm} { }
+
+    bool validate(rData data) override final { return pubsm_.validate(data); }
 };
 
 } // namespace dct
+
 #endif // VALIDATE_PUB_HPP

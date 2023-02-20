@@ -1,5 +1,6 @@
 #ifndef DCT_FACE_LPM_TABLES_HPP
 #define DCT_FACE_LPM_TABLES_HPP
+#pragma once
 /*
  * Longest-Prefix-Match lookup tables implementing NDN Face Interest/Data semantics.
  *
@@ -33,6 +34,8 @@
 
 #include "api.hpp"
 #include "lpm.hpp"
+
+namespace dct {
 
 /**
  * The Registered Interest Table (RIT) delivers incoming Interests to a
@@ -197,5 +200,7 @@ struct PIT : lpmLT<rPrefix, PITentry> {
         return add(PITentry{i});
     }
 };
+
+} // namespace dct
 
 #endif  // DCT_FACE_LPM_TABLES_HPP

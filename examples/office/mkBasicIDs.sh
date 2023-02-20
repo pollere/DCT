@@ -27,24 +27,27 @@ schemaCompile -o $Bschema $1
 Pub=$(schema_info $Bschema);
 PubPrefix=$(schema_info $Bschema "#pubPrefix");
 PubValidator=$(schema_info -t $Bschema "#pubValidator");
+# CertValidator=$(schema_info -t $Bschema "#certValidator");
+# default value
+CertValidator=EdDSA
 
-make_cert -s $PubValidator -o $RootCert $PubPrefix
+make_cert -s $CertValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
 
 # make the config cert then room certs
-make_cert -s $PubValidator -o $ConfigCert $PubPrefix/config/ITwiz $RootCert
+make_cert -s $CertValidator -o $ConfigCert $PubPrefix/config/ITwiz $RootCert
 
 # cert for each room and a controller for each room, signed by the room cert
 for nm in ${rooms[@]}; do
-    make_cert -s $PubValidator -o $nm.cert $PubPrefix/room/$nm $ConfigCert
-    make_cert -s $PubValidator -o ctlr.$nm.cert $PubPrefix/controller/$nm $nm.cert
+    make_cert -s $CertValidator -o $nm.cert $PubPrefix/room/$nm $ConfigCert
+    make_cert -s $CertValidator -o ctlr.$nm.cert $PubPrefix/controller/$nm $nm.cert
 done
 
 # make the role certs; 'ri' tracks the room index for assigning people
 # to rooms
 let ri=0
 for nm in ${people[@]}; do
-    make_cert -s $PubValidator -o $nm.cert $PubPrefix/person/$nm ${rooms[$ri]}.cert
+    make_cert -s $CertValidator -o $nm.cert $PubPrefix/person/$nm ${rooms[$ri]}.cert
     let ri++
 done
 

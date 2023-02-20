@@ -1,5 +1,6 @@
 #ifndef VALIDATE_BOOTSTRAP_HPP
 #define VALIDATE_BOOTSTRAP_HPP
+#pragma once
 /*
  * validate and load the DCT bootstrap identity information
  *
@@ -30,6 +31,8 @@
 #include "validate_certs.hpp"
 #include "dct/file_to_vec.hpp"
 #include "dct/format.hpp"
+
+namespace dct {
 
 using certCb = std::function< dctCert ()>;
 using chainCb = std::function<std::vector<dctCert> ()>;
@@ -78,8 +81,11 @@ static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& 
         throw schema_error("schema cert name malformed");
 
     const auto& bs = loadSchema(scert);
-    if (getSigMgr(bs).ref().type() != sigType)
-        throw schema_error("schema signature type doesn't match its pubValidator");
+    /* this needs to check if it matches the certValidator from schema, not the pubValidator
+     * the "default" cert sigmgr is EdDSA
+    if (getSigMgr(bs).ref().type() != )
+        throw schema_error("schema signature type doesn't match its certValidator");
+    */
 
     // check that schema and root cert match (root cert is always last in schema cert table)
     if (! matches(bs, root.name(), bs.cert_.size() - 1))
@@ -96,16 +102,15 @@ static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& 
     // check that all identity chain certs have the right sigType, each locator refers to the previous
     // and is validated by the previous.
     auto ch = idChainCb();
-    auto& prev = root;
+    auto prevTP = root.computeThumbPrint();
     for (size_t c = 0; c < ch.size(); c++) {
         const auto& cert = ch[c];
         if (cert.getSigType() != sigType) throw schema_error("identity chain certs don't all have same signing type");
-        if (cert.getKeyLoc() != prev.computeThumbPrint())
-            throw schema_error(format("cert {} signing chain invalid",cert.name()));
-        if (! sm.validate(cert, prev)) throw schema_error(format("cert {} doesn't validate", c));
+        if (cert.getKeyLoc() != prevTP) throw schema_error(format("cert {} signing chain invalid",cert.name()));
+        if (! sm.validate(cert, cs[prevTP])) throw schema_error(format("cert {} doesn't validate", c));
         if (matchesAny(bs, cert.name()) < 0) throw schema_error(format("cert {} doesn't match a schema cert", cert.name()));
         cs.add(cert);
-        prev = cert;
+        prevTP = cert.computeThumbPrint();
     }
 
     // all the bootstrap identity certs are valid, ask for a signing pair of <cert, secretKey> to complete the chain
@@ -189,5 +194,7 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
 
     return bs;
 }
+
+} // namespace dct
 
 #endif // VALIDATE_BOOTSTRAP_HPP

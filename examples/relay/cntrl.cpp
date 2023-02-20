@@ -32,10 +32,7 @@
 #include <iostream>
 #include <random>
 
-#include <dct/shims/mbps.hpp>
-#include "../util/identity_access.hpp"
-
-using namespace std::literals;
+#include "../util/dct_example.hpp"
 
 // handles command line
 static struct option opts[] = {
@@ -86,7 +83,7 @@ void rprtRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
  * sends commands periodically
  */
 static void cmdPubr(mbps &cm) {
-    print("{}:{} publishing command {}\n", role, myId, Cmd+1);
+    // print("{}:{} publishing command {}\n", role, myId, Cmd+1);
     // make a message to publish
     std::string s = format("Command #{} from {}:{}", ++Cmd, role, myId);
     std::vector<uint8_t> toSend(s.begin(), s.end());
@@ -126,17 +123,17 @@ int main(int argc, char* argv[])
 
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, [](){ return currentSigningPair(); });
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
 
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-    cm.subscribe("sens/rpt", rprtRecv);     // if collection command acks, need to subscribe to that
 
     // Connect and pass in the handler
     try {
         /* main task for this entity is to wait for location reports */
         cm.connect([&cm]{
             print("{}:{} connected and waiting for location reports\n", role, myId);
+            cm.subscribe("sens/rpt", rprtRecv);     // if collection command acks, need to subscribe to that
             cmdPubr(cm);
         });
     } catch (const std::exception& e) {

@@ -27,6 +27,7 @@
 #include "dct/format.hpp"
 #include "dct/schema/crpacket.hpp"
 
+using namespace dct;
 
 int main(int argc, const char* argv[]) {
     if (argc < 2) {

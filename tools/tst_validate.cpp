@@ -31,6 +31,8 @@
 #include "dct/format.hpp"
 #include "dct/schema/dct_model.hpp"
 
+using namespace dct;
+
 auto makePub(DCTmodel& dm, const char* nm) {
     auto n = ndn::Name(nm);
 

@@ -1,5 +1,6 @@
 #ifndef RPACKET_HPP
 #define RPACKET_HPP
+#pragma once
 /*
  * DCT (raw) packet TLV parsing
  *
@@ -25,11 +26,11 @@
 
 #include <compare>
 #include <cstring>
-extern "C" {
-#include <sodium.h>
-}
 
+#include "../sigmgrs/sigmgr_defs.hpp"
 #include "tlv_parser.hpp"
+
+namespace dct {
 
 // return a parser for a Name object.
 struct rName : tlvParser {
@@ -137,13 +138,6 @@ constexpr auto rName::operator<=>(const rName& rhs) const noexcept { return rPre
 constexpr bool rName::isPrefix(const rName& nm) const noexcept { return rPrefix(*this).isPrefix(rPrefix(nm)); }
 constexpr auto rName::first(int comp) const { return rPrefix(*this).first(comp); }
 
-template<> struct std::hash<rName> {
-    size_t operator()(const rName& c) const noexcept { return std::hash<tlvParser>{}(c); }
-};
-template<> struct std::hash<rPrefix> {
-    size_t operator()(const rPrefix& c) const noexcept { return std::hash<tlvParser>{}(c); }
-};
-
 struct rInterest : tlvParser {
     constexpr rInterest() = default;
     rInterest(const rInterest&) = default;
@@ -210,9 +204,8 @@ struct rData : tlvParser {
 
         auto sigType() const { return sigInfo().findBlk(tlv::SignatureType).toByte(); }
 
-        using thumbPrint = std::array<uint8_t,32>;
         auto& thumbprint() const {
-            static constinit std::array<uint8_t,4> kloc{ 28, 34, 29, 32 };
+            static constinit std::array<uint8_t,4> kloc{ 28, thumbPrint_s+2, 29, thumbPrint_s };
             auto si = sigInfo().findBlk(tlv::KeyLocator);
             if (memcmp(si.data(), kloc.data(), kloc.size()) != 0)
                 throw runtime_error("KeyLocator not a DCT thumbprint");
@@ -262,7 +255,7 @@ struct rCert : rData {
         // a DCT cert siginfo is constant size so its entire structure can be
         // checked at once
         static const std::array<uint8_t,4> si0{22, 81, 27, 1};
-        static const std::array<uint8_t,4> si5{28, 34, 29, 32};
+        static const std::array<uint8_t,4> si5{28, thumbPrint_s+2, 29, thumbPrint_s};
         static const std::array<uint8_t,8> si41{253, 0, 253, 38, 253, 0, 254, 15};
         static const std::array<uint8_t,4> si64{253, 0, 255, 15};
         const auto si = sigInfo().data();
@@ -281,12 +274,21 @@ struct rCert : rData {
     }
 };
 
-template<> struct fmt::formatter<rPrefix>: fmt::dynamic_formatter<> {
+} // namespace dct
+
+template<> struct std::hash<dct::rName> {
+    size_t operator()(const dct::rName& c) const noexcept { return std::hash<dct::tlvParser>{}(c); }
+};
+template<> struct std::hash<dct::rPrefix> {
+    size_t operator()(const dct::rPrefix& c) const noexcept { return std::hash<dct::tlvParser>{}(c); }
+};
+
+template<> struct fmt::formatter<dct::rPrefix>: fmt::dynamic_formatter<> {
     template <typename FormatContext>
-    auto format(const rPrefix& p, FormatContext& ctx) const -> decltype(ctx.out()) {
+    auto format(const dct::rPrefix& p, FormatContext& ctx) const -> decltype(ctx.out()) {
         auto np = [](auto s) -> bool { for (auto c : s) if (c < 0x20 || c >= 0x7f) return true; return false; };
         auto out = ctx.out();
-        for (auto blk : rPrefix{p}) {
+        for (auto blk : dct::rPrefix{p}) {
             auto s = blk.rest();
             // if there are any non-printing characters, format as hex. Otherwise format as a string.
             if (np(s)) {
@@ -313,10 +315,10 @@ template<> struct fmt::formatter<rPrefix>: fmt::dynamic_formatter<> {
     }
 };
 
-template<> struct fmt::formatter<rName>: formatter<rPrefix> {
+template<> struct fmt::formatter<dct::rName>: formatter<dct::rPrefix> {
     template <typename FormatContext>
-    auto format(const rName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
-        return format_to(ctx.out(), "{}", rPrefix(n));
+    auto format(const dct::rName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
+        return format_to(ctx.out(), "{}", dct::rPrefix(n));
     }
 };
 

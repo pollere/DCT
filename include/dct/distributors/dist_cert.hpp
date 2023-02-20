@@ -1,5 +1,6 @@
 #ifndef DIST_CERT_HPP
 #define DIST_CERT_HPP
+#pragma once
 /*
  * sync a collection of certs among peers
  *
@@ -77,6 +78,7 @@ struct DistCert
                     return pOurs;
                 });
 #endif
+
         m_sync.subscribe(m_pubPrefix, std::move(addCb));
     }
 
@@ -132,7 +134,8 @@ struct DistCert
                         // when this routine is called. If all the initial pubs have been acked
                         // and we have at least one peer's signing chain, initialization is done.
                         m_initialPubs.erase(h);
-                        if (m_havePeer && m_initialPubs.empty()) initDone();
+                        if (m_havePeer && m_initialPubs.empty())
+                            initDone();
                     });
             return;
         }

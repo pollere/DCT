@@ -1,5 +1,6 @@
 #ifndef VALIDATE_CERTS_HPP
 #define VALIDATE_CERTS_HPP
+#pragma once
 /*
  * validate certs against a schema
  *
@@ -27,6 +28,7 @@
 #include "certstore.hpp"
 #include "dct/format.hpp"
 
+namespace dct {
 
 /*
  * Following routines make use of the low-level binary schema to cross-validate cert and
@@ -116,6 +118,9 @@ static inline int validateChain(const bSchema& bs, const certStore& cs, const dc
 }
 
 static inline auto getSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#pubValidator").substr(1)); }
+static inline auto getCertSigMgr(const bSchema&) { return sigMgrByType("EdDSA"s); }
 static inline auto getWireSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#wireValidator").substr(1)); }
+
+} // namespace dct
 
 #endif // VALIDATE_CERTS_HPP

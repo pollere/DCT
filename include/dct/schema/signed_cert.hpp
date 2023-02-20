@@ -1,5 +1,6 @@
 #ifndef SIGNED_CERT_HPP
 #define SIGNED_CERT_HPP
+#pragma once
 /*
  * Construct a Certificate containing a schema
  *
@@ -29,6 +30,7 @@
 #include "dct_cert.hpp"
 #include "dct/sigmgrs/sigmgr_by_type.hpp"
 
+namespace dct {
 
 /**
  * Create a public/private keypair
@@ -77,5 +79,7 @@ static inline std::pair<dctCert,keyVal> selfSignedCert(crName&& nm, SigMgr& sm) 
     sm.addKey(sk);
     return {dctCert(std::move(nm), pk, sm), sk};
 }
+
+} // namespace dct
 
 #endif // SIGNED_CERT_HPP

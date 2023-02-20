@@ -47,10 +47,7 @@
 #include <iostream>
 #include <random>
 
-#include <dct/shims/mbps.hpp>
-#include "../util/identity_access.hpp"
-
-using namespace std::literals;
+#include "../util/dct_example.hpp"
 
 /* Globals */
 
@@ -88,8 +85,7 @@ int main(int argc, char* argv[])
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
    //Create the mbps DeftT
-    mbps cm(rootCert, [](){ return schemaCert(); }, [](){ return identityChain(); }, 
-        [](){ return currentSigningPair(); });
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
 
     cm.m_pb.pubLifetime(500ms); // want fresh status information
     role = cm.attribute("_role");

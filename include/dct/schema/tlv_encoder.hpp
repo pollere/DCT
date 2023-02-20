@@ -1,5 +1,6 @@
 #ifndef TLV_ENCODER_HPP
 #define TLV_ENCODER_HPP
+#pragma once
 /*
  * Data Centric Transport TLV encoder
  *
@@ -30,6 +31,8 @@
 #include <span>
 #include <vector>
 #include <utility>
+
+namespace dct {
 
 using runtime_error = std::runtime_error;
 
@@ -120,5 +123,7 @@ struct tlvEncoder {
         return in;
     }
 };
+
+} // namespace dct
 
 #endif // TLV_ENCODER_HPP

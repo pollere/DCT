@@ -1,5 +1,6 @@
 #ifndef SIGMGRAEADSGN_HPP
 #define SIGMGRAEADSGN_HPP
+#pragma once
 /*
  * AEAD Signature Manager
  *
@@ -63,6 +64,8 @@
 #include <ranges>
 #include "sigmgr.hpp"
 
+namespace dct {
+
 struct SigMgrAEADSGN final : SigMgr {
     struct keyRecord {
         keyVal key;
@@ -83,7 +86,7 @@ struct SigMgrAEADSGN final : SigMgr {
     std::vector<keyRecord> m_keyList;
     size_t m_decryptIndex;
 
-    SigMgrAEADSGN() : SigMgr(stAEAD) {
+    SigMgrAEADSGN() : SigMgr(stAEADSGN) {
         randombytes_buf(m_nonce.data(), m_nonce.size()); //always done - set unique part of nonce (12 bytes)
     }
 
@@ -96,13 +99,11 @@ struct SigMgrAEADSGN final : SigMgr {
         // update private signing key then compute thumbprint of cert and put it at end of sigInfo
         m_signingKey.assign(sk.begin(), sk.end());
         auto tp = c.computeTP();   // to reset thumbPrint in sigInfo
-        auto k = c.content().rest();
-        m_signingKey.assign(k.data(), k.data()+crypto_sign_PUBLICKEYBYTES);
         const auto off = m_sigInfo.size() - sizeof(tp);
         std::copy(tp.begin(), tp.end(), m_sigInfo.begin() + off);
         }
 
-    // update to signing keyList with these values. New key goes
+    // update to encrypt/decrypt  keyList with these values. New key goes
     // at the front of keyList and no more than two keys are kept.
     void addKey(keyRef k, uint64_t ktm) override final {
         m_keyList.insert(m_keyList.begin(), keyRecord(k, ktm));
@@ -140,9 +141,9 @@ struct SigMgrAEADSGN final : SigMgr {
 
         std::vector<uint8_t> ctext(content.size(),0);
         unsigned long long maclen;
-        crypto_aead_xchacha20poly1305_ietf_encrypt_detached(ctext.data(), mac.data(), &maclen,
+        if (crypto_aead_xchacha20poly1305_ietf_encrypt_detached(ctext.data(), mac.data(), &maclen,
                              content.data(), content.size(), ad.data(), ad.size(),
-                             NULL, sig.data(), curKey.data());
+                             NULL, sig.data(), curKey.data()) != 0 )    return false;
         if (content.size()) std::memcpy((uint8_t*)content.data(), ctext.data(), content.size());
 
         //sign the data up through nonce|mac and put signature after nonce and mac
@@ -158,7 +159,8 @@ struct SigMgrAEADSGN final : SigMgr {
      */
 
     bool decrypt(rData d) override final {
-       if(!keyListSize()) return false;    //can't decrypt without a key
+        if(!keyListSize()) return false;    //can't decrypt without a key
+        try {
         auto content = d.content().rest();
         auto ad = d.rest();
         ad = ad.first(content.data() - ad.data());
@@ -176,8 +178,10 @@ struct SigMgrAEADSGN final : SigMgr {
              }
              i = (i + 1) % keyListSize();
         } while (i != m_decryptIndex);
-        // print("aeadsgn decrypt failed on {}\n", d.name());
+        print("aeadsgn decrypt failed on: ");
+        print(" {}\n", d.name());
         return false;
+       } catch (std::exception& e) { print("aeadsgn decrypt failed\n"); throw runtime_error (e.what()); }
     }
 
     /*
@@ -215,12 +219,6 @@ struct SigMgrAEADSGN final : SigMgr {
     inline size_t keyListSize() const { return m_keyList.size(); }
 };
 
+} // namespace dct
+
 #endif // SIGMGRAEADSGN_HPP
-
-
-
-
-
-
-
-

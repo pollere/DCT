@@ -42,7 +42,7 @@ grdSign:    signCert & { _role: "guard" } <= personCert
 cntrlrSign: signCert & { _role: "controller" } <= cntrlrCert
 
 personCert: roleCert <= roomCert
-cntrlrCert: roleCert & { _role: "controller" } <= kmCap | roomCert
+cntrlrCert: roleCert & { _role: "controller" } <= kmCap | kmpCap | roomCert
 
 roomCert: _domain/"room"/_roomId/_keyinfo <= configCert
 
@@ -57,6 +57,7 @@ capCert: _domain/"CAP"/capId/capArg/_keyinfo
 // ('capArg: _' in the schema constraints means that it will be
 // assigned a value when each KM cert is constructed.)
 kmCap:   capCert & { capId: "KM", capArg: _ }  <= roomCert
+kmpCap:   capCert & { capId: "KMP", capArg: _ }  <= roomCert | kmCap
 
 configCert: _domain/"config"/_configId/_keyinfo <= domCert
 domCert:    _domain/_keyinfo
@@ -66,10 +67,10 @@ domCert:    _domain/_keyinfo
 
 // Publication prefix and validator type
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
+#pubValidator: "AEADSGN"
 
 // for cAdds
-#wireValidator: "AEAD"
+#wireValidator: "EdDSA"
 
 // The final components are KEY,keyID, issuerID and version 
 _keyinfo: "KEY"/_/"dct"/_

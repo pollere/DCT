@@ -30,6 +30,8 @@
 #include "dct/format.hpp"
 #include "dct/schema/cert_bundle.hpp"
 
+using namespace dct;
+
 static void usage(const char** argv) {
     print("- usage: {} [-v] -o outfile file ...\n", argv[0]);
     exit(1);

@@ -279,10 +279,9 @@ struct schemaOut {
      * no loops and all terminate on the same root key. To make these
      * checks cheap, the cert indices are required to be assigned 
      * such that all certs are signed by something with a larger index.
-     * I.e., certs in a topological order determined by the signing DAG
+     * I.e., certs in a topological order determined by the signing DAG.
      */
     void makeCertTable() {
-        int i{};
         std::set<sComp> needed{};
         for (const auto& [cert,nms] : drv_.certs_) {
             if (drv_.isExported(cert)) continue; // pub, not a cert
@@ -297,13 +296,37 @@ struct schemaOut {
             }
             needed.emplace(cert);
         }
-        for (const auto& cert : drv_.certDag_.topo()) {
+        /*
+         *
+         * It's possible for two or more certs to have the same components
+         * but different paths through the signing DAG (e.g., if their
+         * components are determined via parent correspondences but different
+         * parents have different signing chains). The duplicate(s) are not
+         * placed in certvec_ so their parent dependencies have to be added to the
+         * DAG to get a correct topological ordering.
+         */
+        auto dag = drv_.certDag_;
+        auto rdag = dag.reverse();
+        for (const auto& cert : dag.topo()) {
+            if (! needed.contains(cert)) continue;
+            // since a node may be represented by its base class, make sure any signing
+            // dependencies include the base class of the signer.
+            for (const auto& signer : dag.links(cert)) {
+                for (const auto& base : rdag.links(signer)) {
+                    if (dag.attr(base) == 1 && !dag.linked(base, cert)) {
+                        dag.add(cert, base);
+                        //print(" \"{}\" -> \"{}\";\n", drv_.to_string(cert), drv_.to_string(base));
+                    }
+                }
+            }
+        }
+        for (const auto& cert : dag.topo()) {
             if (! needed.contains(cert)) continue;
             const auto& nm = drv_.certs_.at(cert)[0];
             cert_.addx(cert, nm, [this,&nm](auto c){ return mapTok(c, nm); });
-            dprint("cert {}({}): {}\n", i++, drv_.to_string(cert), drv_.to_string(nm));
+            auto i = cert_[cert];
+            dprint("cert {}({}): {}   {::x}\n", i, drv_.to_string(cert), drv_.to_string(nm), cert_.v_[i]);
         }
-        dprint("certvec_:\n{}\n", fmt::join(cert_.v_, "\n"));
     }
     /*
      * add all the cert chains used by 'pub' to the chain map.

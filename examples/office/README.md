@@ -35,7 +35,7 @@ A possible exercise is to add a status message from employees indicating in-offi
 
 ## Testing the application
 
-You can use the mkIDs.sh script to generate identity bundles and then start room controllers with room identities. You can start all the rooms with the included *runRooms.sh* (you can *killall room* to stop) and then run phone applications from the command line by inputting the command along with an identity bundle for a user (e.g., alice.bundle, bob.bundle, emily.bundle, herb.bundle, frank.bundle). Examples:
+You can use the mkIDs.sh script to generate identity bundles and then start room controllers with room identities. The script can handle any combination of publication encryption (AEADSGN) or just signing (EdDSA) and pdu (or "wire") encryption (AEAD) or just signing (EdDSA). You can start all the rooms with the included *runRooms.sh* (you can *killall room* to stop) and then run phone applications from the command line by inputting the command along with an identity bundle for a user (e.g., alice.bundle, bob.bundle, emily.bundle, herb.bundle, frank.bundle). Examples:
 
 ```
 ./phone id/bob.bundle light on (room1 should turn on light)` 

@@ -1,5 +1,6 @@
 #ifndef DCTMODEL_HPP
 #define DCTMODEL_HPP
+#pragma once
 
 /*
  * Data Centric Transport schema policy model abstraction
@@ -38,9 +39,7 @@
 #include "validate_pub.hpp"
 #include "dct/distributors/dist_cert.hpp"
 #include "dct/distributors/dist_gkey.hpp"
-#ifndef notdef
 #include "dct/distributors/dist_sgkey.hpp"
-#endif
 
 namespace dct {
 
@@ -51,19 +50,21 @@ struct DCTmodel {
     const bSchema& bs_;     // trust schema for this model instance
     pubBldr<false> bld_;    // publication builder/verifier
     SigMgrAny psm_;         // publication signing/validation
+    SigMgrAny csm_;         // cert signing/validation (XXXX currently limited to EdDSA)
     SigMgrAny wsm_;         // wire packet signing/validation
     SigMgrSchema syncSm_;   // syncps pub validator
     SyncPS m_sync;  // sync collection for pubs
     static inline std::function<size_t(std::string_view)> _s2i;
     DistCert m_ckd;         // cert collection distributor
     DistGKey* m_gkd{};      // group key distributor (if needed)
-#ifndef notdef
     DistSGKey* m_sgkd{};    // subscriber group key distributor (if needed)
-#endif
+    DistGKey* m_pgkd{};      // pubs group key distributor (if needed)
+    DistSGKey* m_psgkd{};    // pubs subscriber group key distributor (if needed)
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
 
     SigMgr& wireSigMgr() { return wsm_.ref(); }
     SigMgr& pubSigMgr() { return psm_.ref(); }
+    SigMgr& certSigMgr() { return csm_.ref(); }
     auto pubPrefix() const { return crName{bs_.pubVal("#pubPrefix")}; }
 
     // all cState/cAdd packet names start with the first 8 bytes
@@ -105,7 +106,7 @@ struct DCTmodel {
         if (b == e) return;
         std::vector<dctCert> pv{};
         for (auto i = b; i != e; ++i) {
-            if (pubSigMgr().validate(i->second, cert)) pv.emplace_back(std::move(i->second));
+            if (certSigMgr().validate(i->second, cert)) pv.emplace_back(std::move(i->second));
         }
         pending_.erase(tp);
         for (auto p : pv) addCert(p);
@@ -128,7 +129,7 @@ struct DCTmodel {
         // XXX eventually need tools to securely check/update certs & bundles
         try {
             auto cert = rCert{d};
-            if (! cert.valid(pubSigMgr().type())) return;
+            if (! cert.valid(certSigMgr().type())) return;
             auto cname = tlvVec(cert.name());
             if (matchesAny(bs_, cname) < 0) return; // name doesn't match schema
 
@@ -146,7 +147,7 @@ struct DCTmodel {
                 pending_.emplace(stp, cert);
                 return;
             }
-            if (! pubSigMgr().validate(cert, cs_[stp])) return;
+            if (! certSigMgr().validate(cert, cs_[stp])) return;
 
             if (isSigningCert(cert)) {
                 // we validated a signing cert which means we have its entire chain
@@ -171,6 +172,7 @@ struct DCTmodel {
             bs_{validateBootstrap(rootCb, schemaCb, idChainCb, signIdCb, cs_)},
             bld_{pubBldr(bs_, cs_, bs_.pubName(0))},
             psm_{getSigMgr(bs_)},
+            csm_{getCertSigMgr(bs_)},
             wsm_{getWireSigMgr(bs_)},
             syncSm_{psm_.ref(), bs_, pv_},
             m_sync{face, wirePrefix()/"pubs", wireSigMgr(), syncSm_},
@@ -179,27 +181,42 @@ struct DCTmodel {
     {
         // pub sync session is started after distributor(s) have completed their setup
         m_sync.autoStart(false);
-        if(wsm_.ref().type() == SigMgr::stAEAD) {
+        if(wsm_.ref().encryptsContent()) {
             if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
-                // schema doesn't contain a "KeyMaker" capability cert so AEAD won't work
-                throw schema_error("AEAD requires that some entity(s) have KeyMaker capability");
+                throw schema_error("Encrypted CAdds require that some entity(s) have KeyMaker capability");
             }
-            m_gkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
+            if (! wsm_.ref().subscriberGroup()) {
+                m_gkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
                              [this](auto gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
-#ifndef notdef
-        } else if (wsm_.ref().type() == SigMgr::stPPAEAD || wsm_.ref().type() == SigMgr::stPPSIGN) {
-            if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
-                // schema doesn't contain a member with keymaker ability so PPAEAD won't work
-                throw schema_error("PPAEAD and PPSIGNED requires that some entity(s) have KeyMaker capability");
-            }
-            if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
-                // schema doesn't contain an SG member so PPAEAD won't work
-                throw schema_error("PPAEAD and PPSIGNED requires that some entity(s) have Subscriber capability");
-            }
-            m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
+            } else {
+                if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
+                    // schema doesn't contain an SG member so PP won't work XXXX should extract name of group from schema
+                    throw schema_error("PPSIGNED/PPAEAD require that some entity(s) have Subscriber capability");
+                }
+                m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
                              [this](auto gpk, auto gsk, auto ct){ wsm_.ref().addKey(gpk, gsk, ct);}, certs());
-#endif
+            }
         }
+        //encryption methods for pubs MUST be signed versions
+        if(psm_.ref().encryptsContent()) {
+            if (matchesAny(bs_, pubPrefix()/"CAP"/"KMP"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
+                // schema doesn't contain a "KeyMaker" capability cert so AEAD won't work
+                throw schema_error("pub content encryption requires that some entity(s) have KeyMaker capability");
+            }
+            if ( psm_.ref().subscriberGroup()) {
+                if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
+                    // schema doesn't contain a member with subscriber  ability so PPAEAD won't work
+                    throw schema_error("PPSIGNED requires that some entity(s) have Subscriber capability");
+                }
+                // XXXX instead of pubs could be name of subscriber group
+                m_psgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys"/"pubs",
+                             [this](auto gpk, auto gsk, auto ct){ psm_.ref().addKey(gpk, gsk, ct);}, certs());
+            } else {
+                m_pgkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys"/"pubs",
+                             [this](auto gk, auto gkt){ psm_.ref().addKey(gk, gkt);}, certs());
+            }
+        }
+
         // cert distributor needs a callback when cert added to certstore.
         cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
 
@@ -209,6 +226,7 @@ struct DCTmodel {
         // a callback to return a public key given a cert thumbprint.
         const auto& tp = cs_.Chains()[0]; // thumbprint of signing cert
         pubSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
+  //      certSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);    //do I need this?
         wireSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
         pubSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
         wireSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
@@ -274,24 +292,58 @@ struct DCTmodel {
     auto defaults(Rest&&... rest) { return bld_.defaults(std::forward<Rest>(rest)...); }
 
     // set start callback for shims that have a separate connect/start like mbps
+    // Note: this can get much simpler when distributors derive from a common class
     void start(connectedCb&& cb) {
-        if (m_gkd) {
-            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
-                        if (!c) { cb(false); return; }
-                        m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                    });
+        auto pdu_dist = m_gkd == NULL? m_sgkd != NULL :  true;
+        auto pub_dist = m_pgkd == NULL ? m_psgkd != NULL :  true;
+        if (!pdu_dist && !pub_dist) {
+            m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
             return;
         }
-#ifndef notdef
-        if (m_sgkd) {
+
+        // complete pdu key distribution before pub key distribution
+        if ( pdu_dist && !pub_dist ) {
             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                         if (!c) { cb(false); return; }
-                        m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                        if (m_gkd) {
+                            m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                        } else { // must be m_sgkd
+                            m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                        }
                     });
             return;
+        } else  if ( !pdu_dist && pub_dist) {
+             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+                        if (!c) { cb(false); return; }
+                        if (m_pgkd) {
+                            m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                        } else { // must be m_psgkd
+                            m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                        }
+                    });
+            return;
+        } else {    //both pdus and pubs have a distributor
+           m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+                        if (!c) { cb(false); return; }
+                        if (m_gkd) {
+                            m_gkd->setup([this,cb=std::move(cb)](bool c){
+                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
+                                if (m_pgkd)
+                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                else    // must be m_psgkd
+                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           });
+                        } else { // must be m_sgkd
+                           m_sgkd->setup([this,cb=std::move(cb)](bool c){
+                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
+                                if (m_pgkd)
+                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                else    // must be m_psgkd
+                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           });
+                        }
+                    });
         }
-#endif
-        m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
     }
 
     // inspection API to extract information from the schema.
@@ -342,4 +394,5 @@ struct DCTmodel {
 };
 
 } // namespace dct
+
 #endif // DCTMODEL_HPP

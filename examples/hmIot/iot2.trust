@@ -49,7 +49,7 @@ devSign: signCert & { _role: "device" } <= devCert
 // a good key maker candidate.)
 
 opCert:  roleCert <= domainCert
-devCert: roleCert & { _role: "device" } <= domainCert | kmCap
+devCert: roleCert <= domainCert | kmCap | kmpCap
 
 // capability certs (capabilities granted to roles)
 capCert: _domain/"CAP"/capId/capArg/_keyinfo
@@ -59,6 +59,7 @@ capCert: _domain/"CAP"/capId/capArg/_keyinfo
 // election. The value of _capArg is their priority to win with
 // the holder's signing key thumbprint used as a tie breaker.
 kmCap:   capCert & { capId: "KM", capArg: _ } <= domainCert
+kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domainCert | kmCap
 
 domainCert: _domain/_keyinfo
 
@@ -67,7 +68,7 @@ domainCert: _domain/_keyinfo
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
+#pubValidator: "AEADSGN"
 
 // used for cAdds
 #wireValidator: "AEAD"

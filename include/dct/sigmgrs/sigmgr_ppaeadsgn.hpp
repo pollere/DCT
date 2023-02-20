@@ -1,5 +1,6 @@
 #ifndef SIGMGRPPSIGN_HPP
 #define SIGMGRPPSIGN_HPP
+#pragma once
 /*
  * PPSIGN Signature Manager
  *
@@ -61,6 +62,8 @@
 #include <cstring>  // for memcpy
 #include "dct/utility.hpp"
 #include "sigmgr.hpp"
+
+namespace dct {
 
 struct SigMgrPPSIGN final : SigMgr {
     static constexpr uint32_t aeadkeySize = crypto_aead_xchacha20poly1305_IETF_KEYBYTES;
@@ -284,12 +287,6 @@ struct SigMgrPPSIGN final : SigMgr {
     }
 };
 
+} // namespace dct
+
 #endif // SigMgrPPSIGN_HPP
-
-
-
-
-
-
-
-

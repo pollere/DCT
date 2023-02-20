@@ -1,5 +1,6 @@
 #ifndef DCTCERT_HPP
 #define DCTCERT_HPP
+#pragma once
 /*
  * Data Centric Transport schema certificate  abstraction
  *
@@ -54,27 +55,21 @@
  *    be propagated to other entities.
  */
 
-extern "C" {
-#include <sodium.h>
-}
 #include <algorithm>
 #include <array>
 #include <string_view>
 
-// thumbprint has to be defined before sigmgr included
-constexpr size_t thumbPrint_s{crypto_hash_sha256_BYTES};
-using thumbPrint = std::array<uint8_t,thumbPrint_s>;
+#include "../sigmgrs/sigmgr.hpp"
+#include "crpacket.hpp"
+
 // XXX would be nice if std:array had its own hash specialization
-template<> struct std::hash<thumbPrint> {
-    size_t operator()(const thumbPrint& tp) const noexcept {
+template<> struct std::hash<dct::thumbPrint> {
+    size_t operator()(const dct::thumbPrint& tp) const noexcept {
         return std::hash<std::u8string_view>{}({(char8_t*)tp.data(), tp.size()});
     }
 };
 
-struct dctCert;
-
-#include "crpacket.hpp"
-#include "dct/sigmgrs/sigmgr.hpp"
+namespace dct {
 
 struct dctCert : crCert {
     // dctCert is a certificate with contraints on its name and key locator
@@ -143,5 +138,7 @@ struct dctCert : crCert {
     static inline auto getSigType(rData data) { return data.sigType(); }
     auto getSigType() const { return getSigType(*this); }
 };
+
+} // namespace dct
 
 #endif // DCTCERT_HPP

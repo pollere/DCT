@@ -31,12 +31,20 @@ lockCommand: #iotPub & { target: "lock", topic: "command" } &
 roleCert:   _domain/_role/_roleId/_keyinfo
 signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 
-opSign:  signCert & { _role: "operator" } <= mbrCert
-devSign: signCert & { _role: "device" } <= mbrCert
-rlySign: signCert <= rlyCert
+opSign:  signCert & { _role: "operator" } <= opCert
+devSign: signCert & { _role: "device" } <= devCert
+rlySign: signCert & { _role: "relay" } <= rlyCert
 
-rlyCert: roleCert & { _role: "relay" } <= domCert
-mbrCert: roleCert <= domCert
+rlyCert: roleCert <= domCert | kmCap
+devCert: roleCert <= domCert | kmCap | kmpCap
+opCert: roleCert <= domCert
+
+// This is included in case an encryption Validator is specified
+// In this trust schema, only relays can be PDU ("wire") keymakers
+// and only devices can be Publication keymakers
+capCert: _domain/"CAP"/capId/capArg/_keyinfo
+kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert
+kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domCert | kmCap
 
 domCert: _domain/_keyinfo
 
@@ -45,7 +53,7 @@ domCert: _domain/_keyinfo
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
+#pubValidator: "AEADSGN"
 
 // validator for cAdds
 #wireValidator: "EdDSA"
