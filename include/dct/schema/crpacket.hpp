@@ -330,8 +330,8 @@ struct crData : crTLV<rData,tlv::Data> {
     void init(tlv typ) { append(TLV<tlv::MetaInfo>(TLV<tlv::ContentType>(uint8_t(typ)))); done(); }
 
     crData(rData d) : crTLV(d) { }
-    crData(crName&& n, tlv typ=tlv::ContentType_CAdd) : crTLV{std::move(n)} { init(typ); }
-    crData(rName n, tlv typ=tlv::ContentType_CAdd) { append(n.asSpan()); init(typ); }
+    crData(crName&& n, tlv typ=tlv::ContentType_Blob) : crTLV{std::move(n)} { init(typ); }
+    crData(rName n, tlv typ=tlv::ContentType_Blob) { append(n.asSpan()); init(typ); }
 
     auto content() const { return rData::content(); }
 

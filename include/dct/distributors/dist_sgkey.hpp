@@ -118,7 +118,7 @@ struct DistSGKey {
              std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
              std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
              std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
-             m_prefix{pPre}, m_krPrefix{pPre/"kr"}, m_mrPrefix{pPre/"mr"}, m_keyColl{dPre.lastBlk().toSv()},
+             m_prefix{pPre}, m_krPrefix{pPre/"kr"}, m_mrPrefix{pPre/"mr"}, m_keyColl{dPre.last().toSv()},
              m_sync(face, dPre, m_syncSM.ref(), m_keySM.ref()),
              m_certs{cs}, m_newKeyCb{std::move(sgkeyCb)}, //called when a (new) group key arrives or is created      
              m_sgCap{Cap::checker("SG", pPre, cs)},
@@ -127,7 +127,7 @@ struct DistSGKey {
         m_sync.cStateLifetime(253ms);
         m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
         m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),mreq=crPrefix(m_mrPrefix)](const auto& p) {
-                if (mreq.isPrefix(p.name())) return m_keyLifetime; //0ms;
+                if (mreq.isPrefix(p.name())) return 6000ms; //0ms;
                 return cand.isPrefix(p.name())? 1000ms : m_keyLifetime;
             });
 #if 0
@@ -148,13 +148,7 @@ struct DistSGKey {
         // get our identity thumbprint, check if we're allowed to make keys, check if we
         // are in subscriber group, then set up our public and private signing keys.
         m_tp = m_certs.Chains()[0];
-        // build function to get the subscriber group id from a signing chain then
-        // use it to see if I can joing this subscriber group
-        auto sgId = Cap::getval("SG", m_prefix, m_certs);
-                                // return 0 if cap wasn't found or has wrong content
-                         //checks if SG cap is present and, if so, returns its argument
-        m_sgMem = [this,sgId](const thumbPrint& tp) { return sgId(tp).toSv() == m_keyColl; };
-
+        if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
     }
 
@@ -187,6 +181,10 @@ struct DistSGKey {
      * if a local signing key pair is updated after start up.
      */
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
+        // check this new key matches 0th signing chain
+        m_tp = m_certs.Chains()[0];
+        if (m_tp != dctCert::computeThumbPrint(pubCert))
+            throw runtime_error("dist_sgkey:updateSigningKey gets new key not at chains[0]");
 
         // sigmgrs need to get the new signing keys and public key lookup callbacks
         m_syncSM.updateSigningKey(sk, pubCert);
@@ -194,7 +192,15 @@ struct DistSGKey {
         m_syncSM.setKeyCb([&cs=m_certs](rData d) -> keyRef { return cs.signingKey(d); });
         m_keySM.setKeyCb([&cs=m_certs](rData d) -> keyRef { return cs.signingKey(d); });
 
-        m_tp = m_certs.Chains()[0];
+        // build function to get the subscriber group id from a signing chain
+        if (m_init) {
+            auto sgId = Cap::getval("SG", m_prefix, m_certs);
+            //checks if SG cap is present and, if so, returns its argument
+            // return 0 if cap wasn't found or has wrong content
+            // eventually use an m_keyColl that can have a subcollection within pubs
+            m_sgMem = [this,sgId](const thumbPrint& tp) { return sgId(tp).toSv() == m_keyColl; };
+        }
+        // use it to see if I can join this subscriber group
         m_subr = m_sgMem(m_tp);
         if (! m_subr)  return;       //this identity is publish only
 
@@ -210,7 +216,7 @@ struct DistSGKey {
         if(crypto_sign_ed25519_pk_to_curve25519(m_pDecKey.data(), pk.data()) != 0) {
             std::runtime_error("DistSGKey::updateSigningKey unable to convert signing pk to sealed box pk");
         }
-        if (! m_init && ! m_keyMaker) {
+        if (! m_init && ! m_keyMaker && m_subr) {
              publishMembershipReq();
         }
     }
@@ -436,6 +442,8 @@ struct DistSGKey {
             crypto_box_seal(egKey.data(), m_sgSK.data(), m_sgSK.size(), v.data());
             pubPairs.emplace_back(k,egKey);
         }
+        // call back to parent with new key, parent calls the application publication sigmgr's addKey()
+        m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT);
 
         auto s = m_mbrList.size();
         auto p = s <= maxKR ? 1 : (s + maxKR - 1) / maxKR; // determine number of Publications needed
@@ -458,8 +466,6 @@ struct DistSGKey {
             publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, pubTS, sgkp.vec());
             s -= r;
         }
-        // call back to parent with new key, parent calls the application publication sigmgr's addKey()
-        m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT);
 
         if(m_init && m_mbrList.size())  initDone();
     }

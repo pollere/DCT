@@ -1,6 +1,6 @@
 # Signature Managers for DCT
 
-Signature Managers (sigmgrs) implement the signing (may include encryption) and validation (may include decryption) of both Publications and cAdd PDUs. These have the same underlying structure, an *rData* with TLV format, and thus can use the same sigmgrs. Publications, however, MUST be signed by their originator and thus cannot use any "encryption only" sigmgrs (e.g. AEAD or SG AEAD). 
+Signature Managers (sigmgrs) implement the signing (may include encryption) and validation (may include decryption) of both Publications and cAdd PDUs. These have the same underlying structure, an *rData* with TLV format, and thus can use the same sigmgrs. Publications, however, MUST be signed by their originator and thus cannot use any "encryption only" sigmgrs (e.g. AEAD or PPAEAD). Sign and encrypt sigmgrs like AEADSGN and PPSIGN must supply a validate and a decrypt method in addition to the validateDecrypt (which can just call the two methods) because decryption is done on subscriber upcalls and is bypassed for Relays and is not done on locally unsubscribed Publications.
 
 The following sigmgrs are currently available for specification in trust schemas:
 

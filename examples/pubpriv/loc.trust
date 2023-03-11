@@ -49,7 +49,8 @@ monCert:    roleCert & { _role: "monitor" } <= sgCap
 // capability certs (here capabilities granted to roles)
 capCert: _domain/"CAP"/capId/capArg/_keyinfo
 kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert  // allowed to be a key maker (capArg is priority)
-sgCap:   capCert & { capId: "SG", capArg: _ } <= kmCap  // allowed to be a subscriber (member of subscriber group)
+kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domCert | kmCap
+sgCap:   capCert & { capId: "SG", capArg: _ } <= kmCap | kmpCap  // allowed to be a subscriber (member of subscriber group)
 
 domCert: _domain/_keyinfo
 
@@ -58,11 +59,12 @@ domCert: _domain/_keyinfo
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
+// #pubValidator: "EdDSA"
+#pubValidator: "PPSIGN"
 
 // used for cAdd PDUs
-#wireValidator: "PPAEAD"
-//#wireValidator: "PPSIGN"
+//#wireValidator: "PPAEAD"
+#wireValidator: "AEAD"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version

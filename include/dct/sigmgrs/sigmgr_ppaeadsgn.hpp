@@ -210,39 +210,26 @@ struct SigMgrPPSIGN final : SigMgr {
     }
 
     /*
-     * returns true if success, false if failure. On success, the content
-     * of rData 'd' will have been decrypted.
+     * decrypts rData d's content and replaces d's content with the decrypted data
+     * This is used on rData that have already been validated
+     * returns false if failure.
      * need publisher cert
-     * signature holds nonce followed by computed MAC followed by the publisher signature for this Data
      */
-    bool validateDecrypt(rData d) override final {
-        //can't decrypt without a subscriber group secret key - silent discard
-        if(!sKeyListSize())   return false;
-        if (m_keyCb == 0) throw std::runtime_error("SigMgrPPSIGN::validateDecrypt needs signing key callback");
-
-        auto sig = d.signature().rest();
-        if (sig.size() != sigSize) return false;
-
-        const auto& tp = d.thumbprint();    //get thumbprint of publisher
-        keyRef ppk;                         //publisher public key
-        try {
-            ppk = m_keyCb(d);
-        } catch(...) {
-            return false;   //no public cert for thumbprint in Data
-        }
-
-        // Verify the signature. Signed region goes from start of 'name' thru 'signature' tlv and includes
-        // nonce and mac. The signature starts immediately after that.
-        auto o = nonceSize + macSize;
-        auto strt = d.name().data();
-        if(crypto_sign_verify_detached(sig.data() + o, strt, sig.data() + o - strt, ppk.data()) != 0)
-            return false;   //eddsa provenance and integrity verify failed
+    bool decrypt(rData d) override final {
+        if(!sKeyListSize())   return false;     //can't decrypt without a subscriber group secret key - silent discard
 
         //get the decryption key associated with the publisher
-        if(m_decKeys.count(tp) == 0)
+        const auto& tp = d.thumbprint();
+        keyRef ppk;
+        try {
+            ppk = m_keyCb(d);           // get public cert of d's signer
+        } catch(...) {  return false;  }  //no public cert for thumbprint in Data
+
+        if(! m_decKeys.contains(tp))
             computeDecKey(0, ppk, tp);   //compute decryption key using latest SG key pair
         keyVal curKey = m_decKeys.at(tp);
 
+        auto sig = d.signature().rest();
         auto content = d.content().rest();
         auto ad = d.rest();
         ad = ad.first(content.data() - ad.data());
@@ -254,7 +241,7 @@ struct SigMgrPPSIGN final : SigMgr {
                              NULL, content.data(), content.size(), sig.data() + nonceSize,
                              ad.data(), ad.size(), sig.data(), curKey.data()) == 0) {
                 // copy decrypted content back into packet
-                    if (content.size()) std::memcpy((uint8_t*)content.data(), decrypted.data(), content.size());
+                if (content.size()) std::memcpy((uint8_t*)content.data(), decrypted.data(), content.size());
                 m_decryptIndex = i; //successful key index
                 return true;
              }
@@ -268,6 +255,36 @@ struct SigMgrPPSIGN final : SigMgr {
             }
         } while (i != m_decryptIndex);
         return false;   //unable to decrypt
+    }
+
+        /*
+     * Validate the signature that follows the nonce and computed MAC in the Signature value
+     * The signed region goes from the start of the name through the Signature tlv and includes
+     * the nonce and MAC.
+     * The key locator is the thumbprint of the signer and EdDSA is used
+     */
+    bool validate(rData d) override final {
+        auto sig = d.signature().rest();
+        if (sig.size() != sigSize) return false;
+
+        keyRef ppk;                                    //publisher public key
+        try {
+            ppk = m_keyCb(d);
+        } catch(...) {
+            return false;   //no public cert for thumbprint
+        }
+
+        auto o = nonceSize + macSize;
+        auto strt = d.name().data();
+        if(crypto_sign_verify_detached(sig.data() + o, strt, sig.data() + o - strt, ppk.data()) != 0)
+            return false;   //eddsa provenance and integrity verify failed
+        return true;
+    }
+
+    // returns true if success, false if failure. On success, the content of 'd' will have been decrypted.
+    bool validateDecrypt(rData d) override final {
+        if(! validate(d))    return false;
+        return decrypt(d);
     }
 
     //compute the SG decryption key for this publisher and i-th sg key pair

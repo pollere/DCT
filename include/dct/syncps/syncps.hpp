@@ -426,7 +426,7 @@ struct SyncPS {
                     pv.resize(i); break; }
             }
         }
-        auto cAdd = crData{name}.content(pv);
+        auto cAdd = crData{name, tlv::ContentType_CAdd}.content(pv);
         // newPubs = true => there's a new local publication in this cAdd
         // othPubs =  true => there are publications from others in this cAdd
         if(newPubs | !othPubs) {   //both send and resend own with priority

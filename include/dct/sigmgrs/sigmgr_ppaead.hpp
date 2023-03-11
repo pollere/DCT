@@ -228,7 +228,7 @@ struct SigMgrPPAEAD final : SigMgr {
         if (sig.size() != sigSize) return false;
 
         const auto& tp = d.thumbprint();    //get the thumbprint of publisher
-        if(m_decKeys.count(tp) == 0) {  //get or compute the associated decryption key
+        if(! m_decKeys.contains(tp)) {  //get or compute the associated decryption key
             try {
                 computeDecKey(0, m_keyCb(d), tp);   //compute decryption key using latest SG key pair
             } catch(...) {
