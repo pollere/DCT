@@ -1,0 +1,78 @@
+// Home IoT Message-Based Pub/Sub 2 trust schema
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+
+// trust anchor name associated with this domain
+_domain:    "iot2"
+
+// MBPS Publication definition
+// target, topic, topicArgs are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
+// A particular application process can make its subscription more
+// specific by using a subscription list with specific subCollections (designated
+// by targets) and related callback functions.
+
+#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+    _origin:   sysId()
+}
+
+lockReport: #iotPub & { target: "lock", topic: "event"|"status"
+    trgtLoc: _roleId
+    topicArgs: "locked" | "unlocked" | "battery_low"
+} <= devSign 
+
+lockCommand: #iotPub & { target: "lock", topic: "command" } &
+    { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
+    { topicArgs:  "lock"|"unlock"|"report" } <= opSign
+
+roleCert:    _domain/_role/_roleId/_keyinfo
+signCert:    _domain/_role/_roleId/"sgn"/_keyinfo
+
+opSign: signCert & { _role: "operator" } <= opCert
+devSign: signCert & { _role: "device" } <= devCert
+
+// There are different signing chains for opCert & devCerts.
+// "key makers" (authorized by the KM capability, kmCap) are
+// responsible for creating and distributing the nonce
+// symmetric encryption keys used ensure publication privacy
+// and thus provide a service to the entire Collection that
+// needs to be highly available.
+// opCerts are used to sign commands issued by (transient) client
+// programs and transient programs shouldn't be key makers.
+// devCerts are used by devices that run continuously
+// (unless they're battery powered) thus make better
+// keymaker candidates. (The domain configurer decides at
+// device enrollment whether any particular device is
+// a good key maker candidate.)
+
+opCert:  roleCert <= domainCert
+devCert: roleCert <= domainCert | kmCap | kmpCap
+
+// capability certs (capabilities granted to roles)
+capCert: _domain/"CAP"/capId/capArg/_keyinfo
+
+// KM (KeyMaker) allows the holder to become a key maker. There
+// can only be one active keymaker so holders participate in an
+// election. The value of _capArg is their priority to win with
+// the holder's signing key thumbprint used as a tie breaker.
+kmCap:   capCert & { capId: "KM", capArg: _ } <= domainCert
+kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domainCert | kmCap
+
+domainCert: _domain/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= signCert
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _domain
+#pubValidator: "AEADSGN"
+
+// used for cAdds
+#wireValidator: "AEAD"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_

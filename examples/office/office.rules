@@ -1,0 +1,77 @@
+// Trust schema for office example (ACM ICN 2021 Tutorial)
+// (updated for updated identity bundle handling 1/23)
+
+// Each application process in this trust domain has a capability:
+// an app on a room device controls some functions in a room
+// an app on a phone acts as a smart badge
+// Rooms are: {room1 | room2 | room3 | room4 | confrm | hall}
+// (a room id of "all" is used for the guard role)
+// Room devices control functions of: lockset, light, temperature, screen
+// Directives of "command" and "status" tagged as topics
+
+// trust anchor name for this trust zone
+_domain:    "office"
+
+// Publication definition.
+// Use of mbps shim means publications have mId, sCnt, mts (set by mbps) and
+// at least one leading component to identify the domain. Between those
+// components, at least one more component followed by others as needed
+
+#pub: _domain/func/topic/loc/args/msgID/sCnt/mts
+
+ctrlr: #pub & (
+    { func: "light" | "screen", args: "on" | "off" } |
+    { func: "door", args: "lock" | "unlock" } |
+    { func: "temp", args: "ooo"| "heat" | "cool" })
+
+status: ctrlr & { topic: "status", loc: _roomId } <= cntrlrSign
+
+rmCmd: ctrlr & { topic: "command", loc: _roomId } <= empSign | mgrSign
+
+mgrCmd: ctrlr & { topic: "command", loc: "confRm"|"hall" } <=  mgrSign
+
+grdCmd: #pub & { topic: "command", loc: "all" } & ({ func: "light", args: "on"|"off" } |
+        { func: "door", args: "lock"|"unlock" } | { func: "temp", args: "ooo" }) <= grdSign
+
+roleCert:   _domain/_role/_roleId/_keyinfo
+signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
+
+empSign:    signCert & { _role: "employee" } <= personCert
+mgrSign:    signCert & { _role: "manager" } <= personCert
+grdSign:    signCert & { _role: "guard" } <= personCert
+cntrlrSign: signCert & { _role: "controller" } <= cntrlrCert
+
+personCert: roleCert <= roomCert
+cntrlrCert: roleCert & { _role: "controller" } <= kmCap | kmpCap | roomCert
+
+roomCert: _domain/"room"/_roomId/_keyinfo <= configCert
+
+// capability certs format (for capabilities granted to roles)
+capCert: _domain/"CAP"/capId/capArg/_keyinfo
+
+// AEAD privacy requires key maker(s)
+// KM (KeyMaker) allows the holder to become a key maker. There
+// can only be one active keymaker so holders participate in an
+// election. The value of capArg is their priority to win with
+// the holder's signing key thumbprint used as a tie breaker.
+// ('capArg: _' in the schema constraints means that it will be
+// assigned a value when each KM cert is constructed.)
+kmCap:   capCert & { capId: "KM", capArg: _ }  <= roomCert
+kmpCap:   capCert & { capId: "KMP", capArg: _ }  <= roomCert | kmCap
+
+configCert: _domain/"config"/_configId/_keyinfo <= domCert
+domCert:    _domain/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId/_roomId <= signCert
+
+// Publication prefix and validator type
+#pubPrefix:    _domain
+#pubValidator: "AEADSGN"
+
+// for cAdds
+#wireValidator: "EdDSA"
+
+// The final components are KEY,keyID, issuerID and version 
+_keyinfo: "KEY"/_/"dct"/_
+

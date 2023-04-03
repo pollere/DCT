@@ -1,0 +1,40 @@
+// Home IoT Message-Based Pub/Sub 0 trust schema
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+
+// trust anchor name associated with this trust domain
+_domain:    "iot0"
+
+// MBPS Publication definition
+// target, topic, topicArgs are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
+// A particular application process can make its subscription more
+// specific by using a subscription list with specific subCollections (designated
+// by targets) and related callback functions.
+
+#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+    _origin:   sysId()
+} <= signCert
+
+roleCert:    _domain/_role/_roleId/_keyinfo <= domainCert
+signCert:    _domain/_role/_roleId/"sgn"/_keyinfo <= roleCert
+
+domainCert: _domain/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= signCert
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _domain
+#pubValidator: "EdDSA"
+
+// The signature manager for cAdds. Change to AEAD for data privacy
+#wireValidator: "EdDSA"
+
+// Certs use NDN certificate format v2 suffix
+// final four components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_
+

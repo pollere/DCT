@@ -1,0 +1,37 @@
+// Trust schema for office example (ACM ICN 2021 Tutorial)
+// illustrating non-fine-grained security
+
+// Each application process in this trust domain has a role cert
+
+// trust anchor name for this trust zone
+_domain:    "office"
+
+// Publication definition.
+// Use of mbps shim means publications have mId, sCnt, mts (set by mbps) and
+// at least one leading component to identify the domain. Between those
+// components, at least one more component followed by others as needed
+// This basic version doesn't put any fine-grained restrictions on who can
+// say what to whom (as in office.trust) but just enforces that publications
+// must be signed by valide roleCerts.
+
+#pub: _domain/func/topic/loc/args/msgID/sCnt/mts <= signCert
+
+signCert: _domain/_role/_roleId/"sgn"/_keyinfo <= roleCert
+roleCert: _domain/_role/_roleId/_keyinfo <= roomCert
+roomCert: _domain/"room"/_roomId/_keyinfo <= configCert
+configCert: _domain/"config"/_configId/_keyinfo <= domCert
+domCert:    _domain/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId/_roomId <= signCert
+
+// Publication prefix and validator type
+#pubPrefix:    _domain
+#pubValidator: "EdDSA"
+
+// for cAdds
+#wireValidator: "EdDSA"
+
+// The final components are KEY,keyID, issuerID and version 
+_keyinfo: "KEY"/_/"dct"/_
+
