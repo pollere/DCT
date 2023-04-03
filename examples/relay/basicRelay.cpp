@@ -55,22 +55,7 @@
 #include <iostream>
 #include <chrono>
 
-// app interface to dct via ptps
-#include <dct/shims/ptps.hpp>
-using dct::ptps;
-using dct::parItem;
-using dct::Publication;
-using dct::rData;
-using dct::certStore;
-
-// DCT's secured identity bootstrap framework which, for development purposes,
-// is mapped onto (insecure) bundle files by identity_access.hpp.
-#include "../util/identity_access.hpp"
-using dct::readBootstrap;
-using dct::rootCert;
-using dct::schemaCert;
-using dct::identityChain;
-using dct::currentSigningPair;
+#include "../util/dct_relay.hpp"
 
 using namespace std::literals;
 
@@ -255,13 +240,13 @@ int main(int argc, char* argv[])
                 dtList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
-                                           [i=s_id]{return currentSigningPair(i);},
+                                           [i=s_id]{return getSigningPair(i);},
                                            l.substr(0u,m), chainRecv, keyPubRecv} );
             } else {
                 dtList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
-                                           [i=s_id]{return currentSigningPair(i);},
+                                           [i=s_id]{return getSigningPair(i);},
                                            l.substr(0u,m), chainRecv, keyPubRecv, pubFailure} );
             }
         } catch (const std::exception& e) {

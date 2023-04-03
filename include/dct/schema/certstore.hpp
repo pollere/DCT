@@ -179,8 +179,16 @@ struct certStore {
         return *ltp;
     }
 
+    // for my signing chain in bootstrap
     void addChain(const dctCert& cert) {
         chains_.emplace_back(cert.computeThumbPrint());
+        chainAddCb_(cert);
+    }
+    // for adding my new chain resulting from periodic signing pair updates - only holds my signing chains not others'
+    void insertChain(const dctCert& cert) {
+        chains_.insert(chains_.begin(), cert.computeThumbPrint());
+        // only keep my immediately prior signing chain
+        while (chains_.size() > 2 )  chains_.pop_back();
         chainAddCb_(cert);
     }
     const auto& Chains() const { return chains_; }

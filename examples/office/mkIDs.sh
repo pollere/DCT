@@ -1,6 +1,6 @@
 #! /bin/bash
 # mkIDs schema - script to create id bundles needed to run an 'office' app
-#  'schema' is the filename of the schema's .trust file
+#  'schema' is the filename of the schema's .rules file
 #  run the script from a subdirectory you set up to keep ids (ex: id under office)
 PATH=../../../tools:$PATH
 
@@ -13,11 +13,11 @@ emp=(bob emily herb)
 mgr=(alice)
 grd=(frank)
 
-if [ -z "$1" ]; then echo "-$0: must supply a .trust schema filename"; exit 1; fi;
+if [ -z "$1" ]; then echo "-$0: must supply a .rules schema filename"; exit 1; fi;
 if [ ! -r "$1" ]; then echo "-$0: file $1 not readable"; exit 1; fi;
 
 Schema=${1##*/}
-Schema=${Schema%.trust}
+Schema=${Schema%.rules}
 Bschema=$Schema.scm
 RootCert=$Schema.root
 SchemaCert=$Schema.schema

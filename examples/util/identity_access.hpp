@@ -14,7 +14,7 @@
  * copies. This approach will make it easier to test schemas for compatiblity (i.e. some overlap
  * in publication definition) for future use.
  *
- * Provides functions for access to the root of trust, the trust schema, the identiy chain, and the
+ * Provides functions for access to the root of trust, the schema, the identiy chain, and the
  * current signing pair (cert plus secret key) that can be used in lambdas passed to DeftT shims
  * at creation.
  * The locally created cert plus secret key is returned by currentSigningPair. This would be done
@@ -23,7 +23,7 @@
  *
  * As trust anchors and secret identities MUST be securely configured in a real deployment,
  * this provides stand-in methods for ones that would access securely configured information.
- * Note that the rest of the identity chain and the trust schema are validated based on the trust
+ * Note that the rest of the identity chain and the schema are validated based on the trust
  * anchor so may be distributed differently.
  *
  * Copyright (C) 2020-23 Pollere LLC
@@ -110,7 +110,7 @@ static inline certItem currentSigningPair(int i=0) {
             // (the last four components of a DCT cert name are pre-defined)
             // Lifetime of the cert can be set as desired (here 1 day) but the code to automatically make a
             // new signing pair hasn't been done yet.
-            // Extract the component used in the signing cert (here "sgn") from the trust schema in future
+            // Extract the component used in the signing cert (here "sgn") from the schema in future
             signingPair.push_back( signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), 24h) );
          } catch (const std::runtime_error& se)     { print("runtime error: {}\n", se.what()); }
     } else if (std::cmp_greater(i, signingPair.size())) {
@@ -118,6 +118,36 @@ static inline certItem currentSigningPair(int i=0) {
         exit (0);
     }
     return signingPair[i];
+}
+// Makes a new signing pair for ith (defaults to zero) identiy chain on-demand. Does not store the pair
+// Optionally pass in which idchain this is for (relays).
+// The lifetime should come from configuration (schema eventually)
+// An alternative to currentSigningPair above
+// Note that currently can only create a new signing pair with the same name and an updated validity period
+// since changing signing chain requires a new DeftT
+// In setting the validity start period for a future time, make sure you know what you are doing
+
+static inline certItem getSigningPair( int i=0) {
+    if(std::cmp_greater(idChain.size(), i)) {   //must be an identity chain for i
+         try {
+             // make a signature manager of the correct type and set it up to use the identity key for signing
+            auto sm{sigMgrByType(root.getSigType())};
+            std::chrono::seconds lifetime = std::chrono::hours(24);     // XXX needs to come from schema
+            sm.ref().updateSigningKey(idSecretKey[i], idChain[i].back());
+            // makes a public/secret key pair, then  a cert with public key and signs it
+            // the signing cert has a distinguishing component appended to the identity cert's unique name
+            // (the last four components of a DCT cert name are pre-defined)
+            // Lifetime of the cert can be set as desired (here 1 day)
+            // Not currently a way to separately set the validity period start time (that is, starts now) in the library
+            // Extract the component used in the signing cert (here "sgn") from the schema in future
+            // If the last element (the start time) is not set, it uses now
+           return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), lifetime); // , std::chrono::system_clock::now());
+         } catch (const std::runtime_error& se)     { print("getSigningPair runtime error: {}\n", se.what()); }
+    } else  {
+        print ("getSigningPair called with out-of-range identity chain id {}\n", i);
+        exit (0);
+    }
+    return certItem{};
 }
 
 } // namespace dct

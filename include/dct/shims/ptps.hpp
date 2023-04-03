@@ -78,14 +78,13 @@ struct DCTmodelPT final : DCTmodel  {
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
     void addRelayed(thumbPrint tp) { m_rlyCerts[tp] = true;}
 
-    // ensure a publication is valid on the outgoing DeftT
+    // ensure a publication is structurally valid on the outgoing DeftT
     bool isValidPub(const Publication& pub) {
         // structurally validate 'pub'
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(pub));
             return pubval.matchTmplt(bs_, pub.name());
         } catch (std::exception&) {}
-        // print("isValidPub pub {} doesn't validate\n", pub.name());
         return false;
     }
     // ensure publication's signer is in cert store of this outgoing DeftT
@@ -227,10 +226,10 @@ struct ptps
         return;
     }
     /*
-     * p is a complete trust-schema compliant Publication for the input DeftT
-     * A sub-trust schema can be used to limit Publications that are accepted from relay by a DeftT
+     * p is a complete schema-compliant Publication for the input DeftT
+     * A sub-schema can be used to limit Publications that are accepted from relay to DeftT
      * This allows checking of the Publication against this outgoing DeftT's trust schema
-     * Thus "failed to validate" is desired behavior if using schema to limit some publications
+     * Thus "failed to validate" is a desired behavior if using schema to limit some publications
      *
      * Returns true if p was passed to syncps, false otherwise
      */
@@ -245,9 +244,9 @@ struct ptps
         }
     }
       /*
-     * p is a complete trust-schema compliant Publication on the input Face
+     * p is a complete schema-compliant Publication on the input Face
      * This is used to pass the publications of a pub gk distributor
-     * This allows checking of the Publication against this outgoing Face's trust schema
+     * This allows checking of the Publication against this outgoing Face's schema
      * Returns true if p was passed to gk syncps, false otherwise
      */
     bool publishKnown(Publication&& p)

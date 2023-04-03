@@ -2,17 +2,17 @@
 # mkIDs schema - script to create id bundles needed to run location reporter example
 # uses PPSIGN for publisher privacy of Publications
 # may use AEAD or EdDSA for cAdd privacy/signing
-#  'schema' is the filename of the schema's .trust file
+#  'schema' is the filename of the schema's .rules file
 PATH=../../../tools:$PATH
 
 numLR=9
 numMon=2
 
-if [ -z "$1" ]; then echo "-$0: must supply a .trust schema filename"; exit 1; fi;
+if [ -z "$1" ]; then echo "-$0: must supply a .rules schema filename"; exit 1; fi;
 if [ ! -r "$1" ]; then echo "-$0: file $1 not readable"; exit 1; fi;
 
 Schema=${1##*/}
-Schema=${Schema%.trust}
+Schema=${Schema%.rules}
 Bschema=$Schema.scm
 RootCert=$Schema.root
 SchemaCert=$Schema.schema

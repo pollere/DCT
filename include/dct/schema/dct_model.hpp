@@ -41,6 +41,8 @@
 #include "dct/distributors/dist_gkey.hpp"
 #include "dct/distributors/dist_sgkey.hpp"
 
+using namespace std::literals;
+
 namespace dct {
 
 //template<typename sPub>
@@ -164,6 +166,41 @@ struct DCTmodel {
         } catch (const std::exception&) {};
     }
 
+    // schedule a call to 'cb' in 'd' microseconds (cannot be canceled)
+    auto oneTime(std::chrono::microseconds delay, TimerCb&& cb) { m_sync.oneTime(delay, std::move(cb)); }
+
+    void getNewSP(const pairCb& spCb) {
+        auto sp = spCb();       //new signing key pair
+        auto sc = sp.first;     // public cert of pair
+        auto now = std::chrono::system_clock::now();
+        auto nt = rCert(sc).validUntil() - 10s;   // reschedule before expiration time
+        if (nt <= now)
+            std::runtime_error("getNewSP was handed an expired cert");
+        oneTime(nt-now, [this,spCb]{getNewSP(spCb);});    //schedule re-keying
+
+        auto addKP = [this](auto& sp){
+            auto sc = sp.first;
+            cs_.add(sc, sp.second);   //add this signing cert
+            // make it a signing chain head
+            if (validateChain(bs_, cs_, sc) < 0) throw schema_error(format("cert {} signing chain invalid", sc.name()));
+            cs_.insertChain(sc);
+            // pass new signing pair to sigmgrs and distributors
+            pubSigMgr().updateSigningKey(sp.second, sc);
+            wireSigMgr().updateSigningKey(sp.second, sc);
+            // update cAdd group key distributors if any
+            if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
+            else if (m_sgkd) m_sgkd->updateSigningKey(sp.second, sc);
+            // update Publication group key distributors if any
+            if (m_pgkd)   m_pgkd->updateSigningKey(sp.second, sc);
+            else if (m_psgkd) m_psgkd->updateSigningKey(sp.second, sc);
+        };
+
+        if (rCert(sc).validAfter() > now) {
+            // schedule usage of the new pair once validity period starts
+            oneTime(rCert(sc).validAfter() - now, [addKP,sp] { addKP(sp); } );
+        } else
+            addKP(sp);  // within new cert validity period, add to certstore and use
+    }
 
     // create a new DCTmodel instance and pass the callbacks to access required certs to
     // "bootstrap" this new transport instance
@@ -233,6 +270,9 @@ struct DCTmodel {
 
         // SPub need access to builder's 'index' function to translate component names to indices
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
+
+        // set up timer to request a new signing pair before this pair expires
+        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - 10s, [this, signIdCb] {getNewSP(signIdCb);});    //schedule re-keying
     }
 
     // export the syncps API
@@ -262,8 +302,6 @@ struct DCTmodel {
     // only for timers that need to be canceled before they fire.
     auto schedule(std::chrono::microseconds delay, TimerCb&& cb) { return m_sync.schedule(delay, std::move(cb)); }
 
-    // schedule a call to 'cb' in 'd' microseconds (cannot be canceled)
-    auto oneTime(std::chrono::microseconds delay, TimerCb&& cb) { m_sync.oneTime(delay, std::move(cb)); }
 
     // construct a pub name from pairs of tag, value parameters
     template<typename... Rest> requires ((sizeof...(Rest) & 1) == 0)

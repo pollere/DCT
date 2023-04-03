@@ -1,21 +1,21 @@
 #! /bin/bash
 # mkIDs schema - script to create id bundles needed to run an app with some iot mbps schema
 # Creates bundles for operators and devices in multicast subdomains
-# and a "sub" schema, iote.trust for a relay's external unicast (UDP) subdomain 
+# and a "sub" schema, iote.rules for a relay's external unicast (UDP) subdomain 
 # Publications are secured across the trust domain with signed AEAD with their cAdds ("wire" PDUs)
 # signed via EdDSA and the externally unicast PDUs (cAdds/"wire") are secured with AEAD.
-#  'schema' is the filename of the schema's .trust file
+#  'schema' is the filename of the schema's .rules file
 PATH=../../../tools:$PATH
 
 device=(frontdoor backdoor gate patio)
 operator=(alice bob roamOp)
 relay=(home away)
 
-if [ -z "$1" ]; then echo "-$0: must supply a .trust schema filename"; exit 1; fi;
+if [ -z "$1" ]; then echo "-$0: must supply a .rules schema filename"; exit 1; fi;
 if [ ! -r "$1" ]; then echo "-$0: file $1 not readable"; exit 1; fi;
 
 Schema=${1##*/}
-Schema=${Schema%.trust}
+Schema=${Schema%.rules}
 Bschema=$Schema.scm
 Eschema=iote.scm
 RootCert=iot.root
@@ -26,7 +26,7 @@ DeviceSigner=$RootCert
 RelaySigner=$RootCert
 
 schemaCompile -o $Bschema $1
-schemaCompile -o $Eschema ../iote.trust
+schemaCompile -o $Eschema ../iote.rules
 
 PubPrefix=iot
 CertValidator=EdDSA

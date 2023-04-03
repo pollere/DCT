@@ -26,6 +26,8 @@
 
 #include <compare>
 #include <cstring>
+#include <sstream>
+#include "date/date.h" // XXX should be in <chrono>
 
 #include "../sigmgrs/sigmgr_defs.hpp"
 #include "tlv_parser.hpp"
@@ -225,12 +227,18 @@ struct rData : tlvParser {
 
 // Cert validity periods use a time point encoded in ISO 8601-1:2019 format (the 2014
 // and later versions of the standard *require* that lexicographic order correspond
-// to chronological order (e.g., pad with leading zeros, not spaces). This is a stuct
+// to chronological order (e.g., pad with leading zeros, not spaces). This is a struct
 // so it can include its ordering operators
 struct iso8601 : std::array<uint8_t,15> {
     iso8601(std::chrono::system_clock::time_point tp) {
         auto s = fmt::format("{:%G%m%dT%H%M%S}", fmt::gmtime(tp));
         std::copy(s.begin(), s.begin()+this->size(), this->begin());
+    }
+    auto toTP() const {
+        date::sys_time<std::chrono::microseconds> tp{};
+        std::istringstream is(std::string((const char*)data(), size()));
+        date::from_stream(is, "%Y%m%dT%H%M%S", tp);
+        return tp;
     }
     using ordering = std::strong_ordering;
     auto operator<=>(const iso8601& rhs) const noexcept {
@@ -248,8 +256,8 @@ struct rCert : rData {
     rCert(rData d) : rData{d} { }
 
     // The cert's rData validity was checked on arrival. Check that its content type is
-    // Key, its sigInfo contains a validity period and 'now' is within the period.
-    bool valid() const noexcept {
+    // Key and its sigInfo contains a validity period.
+    bool validForm() const noexcept {
         // Since the rData is valid none of the following should throw
         if (contentType() != uint8_t(tlv::ContentType_Key)) return false;
         // a DCT cert siginfo is constant size so its entire structure can be
@@ -261,17 +269,31 @@ struct rCert : rData {
         const auto si = sigInfo().data();
         if (std::memcmp(si+0, si0.data(), si0.size()) || std::memcmp(si+5, si5.data(), si5.size()) ||
             std::memcmp(si+41, si41.data(), si41.size()) || std::memcmp(si+64, si64.data(), si64.size())) return false; 
+        return true;
+    }
+
+    // check that cert's sigInfo is formatted correctly and that it's within its validity period.
+    bool valid() const noexcept {
+        if (! validForm()) return false;
 
         // check validity period
+        const auto si = sigInfo().data();
         auto now = iso8601(std::chrono::system_clock::now());
         if (std::memcmp(now.data(), si+49, now.size()) < 0) return false; // not valid yet
         if (std::memcmp(si+68, now.data(), now.size()) < 0) return false; // expired
         return true;
     }
+
+    // check that cert is valid and its signing type matches 'sType'
+    // (which is usually the schema's required cert signing type).
     bool valid(uint8_t sType) const noexcept {
         if (! valid()) return false;
         return sigType() == sType;
     }
+    // NOTE: these routines *assume* that rCert validity has been checked with .validForm()
+    // and will misbehave badly if that is not true.
+    auto validAfter() const noexcept { return ((const iso8601*)(sigInfo().data() + 49))->toTP(); }
+    auto validUntil() const noexcept { return ((const iso8601*)(sigInfo().data() + 68))->toTP(); }
 };
 
 } // namespace dct

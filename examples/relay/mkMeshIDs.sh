@@ -1,16 +1,16 @@
 #! /bin/bash
 # mkIDs schema - script to create id bundles needed to run the mesh with sensors
-#  'schema' is the filename of the schema's .trust file
+#  'schema' is the filename of the schema's .rules file
 PATH=../../../tools:$PATH
 
 sensor=(1 2 3 4 5 6)
 relay=(1 2 3)
 
-if [ -z "$1" ]; then echo "-$0: must supply a .trust schema filename"; exit 1; fi;
+if [ -z "$1" ]; then echo "-$0: must supply a .rules schema filename"; exit 1; fi;
 if [ ! -r "$1" ]; then echo "-$0: file $1 not readable"; exit 1; fi;
 
 Schema=${1##*/}
-Schema=${Schema%.trust}
+Schema=${Schema%.rules}
 Bschema=$Schema.scm
 RootCert=$Schema.root
 SchemaCert=$Schema.schema
@@ -18,7 +18,7 @@ MeshSigner=$RootCert
 KMCapCert=
 
 schemaCompile -o $Bschema $1
-schemaCompile -o sensor.scm ../sensor.trust
+schemaCompile -o sensor.scm ../sensor.rules
 
 # extract the info needed to make certs from the compiled schema
 Pub=$(schema_info $Bschema);

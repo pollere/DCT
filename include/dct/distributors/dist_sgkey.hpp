@@ -180,6 +180,14 @@ struct DistSGKey {
      * Currently only called at start up but this would need to be called (likely through dct_model)
      * if a local signing key pair is updated after start up.
      */
+       /*
+     * Called to process a new local signing key. Passes to the SigMgrs.
+     * Stores the thumbprint and makes decrypt versions of the public
+     * key and the secret key to use to decrypt the group key.
+     *      use new key immediately to sign - update the my signature managers
+     *      if member, send a new membership request
+     *      need to keep immediately prior decrypt key
+     */
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
         // check this new key matches 0th signing chain
         m_tp = m_certs.Chains()[0];
@@ -200,10 +208,12 @@ struct DistSGKey {
             // eventually use an m_keyColl that can have a subcollection within pubs
             m_sgMem = [this,sgId](const thumbPrint& tp) { return sgId(tp).toSv() == m_keyColl; };
         }
-        // use it to see if I can join this subscriber group
-        m_subr = m_sgMem(m_tp);
-        if (! m_subr)  return;       //this identity is publish only
+        if( m_subr && !m_sgMem(m_tp) )  // first time through m_subr will be false for all
+            std::runtime_error("DistSGKey::updateSigningKey subscriber group capability change indicates bad signing chain");
+        m_subr = m_sgMem(m_tp);     // set from signing chain
+        if (! m_subr)  return;       // this identity is publish only, done updating signing pair
 
+        // this member has subscriber group capability
         // convert the new key to form needed for group key encrypt/decrypt
         //only need first 32 bytes of sk (rest is appended pk)
         keyVal ssk(sk.begin(), sk.begin()+32);
@@ -216,9 +226,16 @@ struct DistSGKey {
         if(crypto_sign_ed25519_pk_to_curve25519(m_pDecKey.data(), pk.data()) != 0) {
             std::runtime_error("DistSGKey::updateSigningKey unable to convert signing pk to sealed box pk");
         }
-        if (! m_init && ! m_keyMaker && m_subr) {
+
+        if (m_init) return;
+        if (! m_keyMaker) {
              publishMembershipReq();
+             return;
         }
+        if (m_kmpri(m_tp) > 0) {
+            m_kmtp = m_tp;
+        } else
+            std::runtime_error("DistSGKey::updateSigningKey keymaker capability change indicates bad signing chain");
     }
 
     void initDone() {
@@ -273,6 +290,7 @@ struct DistSGKey {
             }
             //assert(m_KMepoch == 0);
             m_KMepoch = epoch;
+            m_kmtp.fill(0);     //new epoch, reset my record of keymaker tp
         }
         // check if keymaker has a larger tp than my stored value (can resolve conflict after elections this can happen in
         // relayed domains in particular), if so, (re)set my saved value and cur key ct so I get a new key
@@ -432,8 +450,9 @@ struct DistSGKey {
         m_curKeyCT = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
 
-        // remove expired (not valid()) certs (thumbprints) from memberList
-        std::erase_if(m_mbrList, [this](auto& kv) { return m_certs.contains(kv.first)? !m_certs[kv.first].valid() : true; });
+        // remove expired (not valid) certs (thumbprints) from memberList
+        auto now = std::chrono::system_clock::now();
+        std::erase_if(m_mbrList, [this,now](auto& kv) { return m_certs.contains(kv.first)? rCert(m_certs[kv.first]).validUntil() <= now : true; });
 
         //encrypt the new secret key for all the subscriber group members
         std::vector<egkr> pubPairs;

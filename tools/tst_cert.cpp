@@ -71,18 +71,24 @@ int main(int argc, const char* argv[]) {
             print("cert invalid\n");
             //exit(1);
         }
+        print("{} valid from {} to {}\n", cert.name(), rCert(cert).validAfter(), rCert(cert).validUntil());
         auto pk = cert.content().toSpan();
         auto now = std::chrono::system_clock::now();
         auto c2 = dctCert(crName(name)/"notyet", pk, sm.ref(), now+1h, 1h);
         auto c3 = dctCert(crName(name)/"expired", pk, sm.ref(), now-2h, 1h);
-        if (! rCert(c2).valid(sm.ref().type())) {
-            print("c2 invalid\n");
+        if (rCert(c2).valid(sm.ref().type())) {
+            print("c2 should be invalid and isn't\n");
             //exit(1);
         }
-        if (! rCert(c3).valid(sm.ref().type())) {
-            print("c3 invalid\n");
+        print("{} not valid until {} ({})\n", c2.name(), rCert(c2).validAfter(),
+                std::chrono::duration_cast<std::chrono::minutes>(rCert(c2).validAfter() - now)) ;
+        if (rCert(c3).valid(sm.ref().type())) {
+            print("c3 should be invalid and isn't\n");
             //exit(1);
         }
+        print("{} not valid since {} ({})\n", c3.name(), rCert(c3).validUntil(),
+                std::chrono::duration_cast<std::chrono::minutes>(now - rCert(c3).validUntil()));
+
         std::ofstream os{outfile, std::ios::binary};
         os.write((char*)cert.data(), cert.size());
         os.write((char*)c2.data(), c2.size());

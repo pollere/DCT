@@ -121,9 +121,9 @@ int main(int argc, char* argv[])
     }
     readBootstrap(argv[optind]);
 
-    // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
+    // the DeftT shim needs callbacks to get the trust root, the schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return getSigningPair();});
 
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");

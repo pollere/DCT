@@ -128,7 +128,7 @@ static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& 
     cs.add(sp.first, sp.second);
     // make it the signing chain head
     if (validateChain(bs, cs, sc) < 0) throw schema_error(format("cert {} signing chain invalid", sc.name()));
-    cs.addChain(sc);
+    cs.addChain(sc);    //this could be cs.insertChain(sc) to match rekey actions
 
     return bs;
 }

@@ -1,21 +1,23 @@
 # Tools for setting up certs for DCT-enabled applications
 
-The domain trust schema and the signing certs it specifies are central to DeftT deployments. The DCT/versec directory covers the language for expressing trust rules and a compiler that checks those rules and, optionally, creates a binary output file readable by DCT schema library modules. Since DeftT *requires* signing keys for all communications, this directory provides tools to simplify that process. DCT/tools contains utilities that can be used to go from that trust schema to identity *bundles* of certificates for each entity of the domain. These primitives that can be used as part of a secure configuration procedure. This document outlines how to make identity bundles and an example basic configuration procedure.
+The domain communications schema and the signing cert chain it specifies are central to DeftT deployments. The DCT/versec directory covers the language for expressing trust rules and a compiler that checks those rules and, optionally, creates a binary output file readable by DCT schema library modules. Since DeftT *requires* signing keys for all communications, this directory provides tools to simplify that process. DCT/tools contains utilities that can be used to go from that schema to identity *bundles* of certificates for each entity (member) of the domain. These primitives that can be used as part of a secure configuration procedure. This document outlines how to make identity bundles and an example basic configuration procedure.
 
-## From Trust Schema to Identity Bundle
+## From Trust Rules to Identity Bundle
 
 Bundles contain the information needed to start a DCT-enabled application organized (using TLVs), in the required order of:
 
 - 0: the trust anchor (sample.root)
 - 1: the schema (sample.schema)
-- 2...(n-2): the signing cert's signing chain
-- n-1: the signing cert and its key
+- 2...(n-2): the identity cert's signing chain
+- n-1: the identity cert and its key
 
-An application can receive its bundle via the command line, a pipe or some other method. The bundle is used by DCT's run-time modules (consult DCT/examples for applications). The identity bundle can itself be used by a utility on each device to create signing certs for applications rather than using the top-level identity directly. Steps to make a bundle:
+An application can receive its bundle via the command line, a pipe or some other method. The bundle is used by DCT's run-time modules (consult DCT/examples for applications). The identity bundle is itself used by each member entity to create signing certs for applications rather than using the identity directly. The example bundles include the private identity key but, in a deployment, this should not be part of the bundle, but securely configured. Deployment bundles should only include public certs.
+
+Steps to make a bundle:
 
 1. Starting from a text trust schema file, a binary version is compiled, e.g. for sample.trust in DCT/versec:
   
-    `schemaCompile -o sampe.scm sample.trust`
+    `schemaCompile -o sampe.scm sample.rules`
 
 2. A trust anchor (root) cert for the domain must be created in order to sign all the required certs.  sample.trust  gives the Name prefix required so the root is created as a self-signed cert:
   
@@ -49,4 +51,4 @@ Using the DCT library, programs could be written to add updated trust schemas to
 
 ---
 
-Copyright (C) 2021-2022 Pollere LLC
+Copyright (C) 2021-2023 Pollere LLC

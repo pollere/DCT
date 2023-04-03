@@ -83,9 +83,9 @@ int main(int argc, char* argv[])
 {
     readBootstrap(argv[argc-1]);
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
-    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
+    // cert chain, and the get signing secret key plus public cert (see util/identity_access.hpp)
    //Create the mbps DeftT
-    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return currentSigningPair();});
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return getSigningPair();});
 
     cm.m_pb.pubLifetime(500ms); // want fresh status information
     role = cm.attribute("_role");

@@ -17,7 +17,7 @@ echo
 sensors=(sensor1 sensor2 sensor3 sensor4 sensor5)
 
 for s in ${sensors[@]}; do
-  ./sens mesh/$s.bundle &
+  ./sens -n0 mesh/$s.bundle &
   echo -n " starting $s"
   echo -n " "
   sleep 1

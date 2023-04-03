@@ -1,11 +1,11 @@
-#ifndef DCT_EXAMPLE_HPP
-#define DCT_EXAMPLE_HPP
+#ifndef DCT_RELAY_HPP
+#define DCT_RELAY_HPP
 #pragma once
 /*
- * Core includes for a DCT example application.
+ * Core includes for a DCT relay application.
  *
- * All the DCT example applications use MBPS (Message-based Pub/Sub)
- * to communicate and a cert bundle file to establish their identity.
+ * DCT example relays use PTPS (Pass-Through Pub/Sub)
+ * to communicate and a cert bundle to establish identity(ies).
  * This include sets up those two pieces and injects unqualified names
  * for their main API into the app namespace.
  *
@@ -29,16 +29,17 @@
  *  More information on DCT is available from info@pollere.net
  */
 
-#include <dct/shims/mbps.hpp>
+#include <dct/shims/ptps.hpp>
 #include "identity_access.hpp"
 
 using namespace std::literals;
 
-// app interface to dct via mbps
-using dct::mbps;
-using dct::msgParms;
+// app interface to dct via ptps
+using dct::ptps;
 using dct::parItem;
-using dct::mbpsMsg;
+using dct::Publication;
+using dct::rData;
+using dct::certStore;
 
 // DCT's secured identity bootstrap framework which, for development purposes,
 // is mapped onto (insecure) bundle files by identity_access.hpp.
@@ -50,4 +51,4 @@ using dct::currentSigningPair;
 using dct::getSigningPair;
 
 
-#endif // DCT_EXAMPLE_HPP
+#endif // DCT_RELAY_HPP
