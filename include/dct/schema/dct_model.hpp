@@ -176,7 +176,8 @@ struct DCTmodel {
         auto nt = rCert(sc).validUntil() - 10s;   // reschedule before expiration time
         if (nt <= now)
             std::runtime_error("getNewSP was handed an expired cert");
-        oneTime(nt-now, [this,spCb]{getNewSP(spCb);});    //schedule re-keying
+        auto time = std::chrono::duration_cast<std::chrono::microseconds>(nt-now);
+        oneTime(time, [this,spCb]{getNewSP(spCb);});    //schedule re-keying
 
         auto addKP = [this](auto& sp){
             auto sc = sp.first;
@@ -197,7 +198,9 @@ struct DCTmodel {
 
         if (rCert(sc).validAfter() > now) {
             // schedule usage of the new pair once validity period starts
-            oneTime(rCert(sc).validAfter() - now, [addKP,sp] { addKP(sp); } );
+            auto time = rCert(sc).validAfter() - now;
+            auto timeMillis = std::chrono::duration_cast<std::chrono::milliseconds>(time);
+            oneTime(timeMillis, [addKP,sp] { addKP(sp); } );
         } else
             addKP(sp);  // within new cert validity period, add to certstore and use
     }
@@ -272,7 +275,8 @@ struct DCTmodel {
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
 
         // set up timer to request a new signing pair before this pair expires
-        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - 10s, [this, signIdCb] {getNewSP(signIdCb);});    //schedule re-keying
+        auto time = std::chrono::duration_cast<std::chrono::microseconds>(rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - 10s);
+        oneTime(time , [this, signIdCb] {getNewSP(signIdCb);});    //schedule re-keying
     }
 
     // export the syncps API
