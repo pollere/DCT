@@ -167,7 +167,9 @@ struct DCTmodel {
     }
 
     // schedule a call to 'cb' in 'd' microseconds (cannot be canceled)
-    auto oneTime(std::chrono::microseconds delay, TimerCb&& cb) { m_sync.oneTime(delay, std::move(cb)); }
+    auto oneTime(auto delay, TimerCb&& cb) {
+        m_sync.oneTime(std::chrono::duration_cast<std::chrono::microseconds>(delay), std::move(cb));
+    }
 
     void getNewSP(const pairCb& spCb) {
         auto sp = spCb();       //new signing key pair

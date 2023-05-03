@@ -235,7 +235,7 @@ struct iso8601 : std::array<uint8_t,15> {
         std::copy(s.begin(), s.begin()+this->size(), this->begin());
     }
     auto toTP() const {
-        date::sys_time<std::chrono::microseconds> tp{};
+        std::chrono::system_clock::time_point tp{};
         std::istringstream is(std::string((const char*)data(), size()));
         date::from_stream(is, "%Y%m%dT%H%M%S", tp);
         return tp;
