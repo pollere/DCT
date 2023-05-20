@@ -102,7 +102,7 @@ struct mbps
     void stop() { m_pb.stop(); }
     const auto& pubPrefix() const noexcept { return m_pubpre; }
 
-    /* relies on trust schema using mbps conventions of collecting all the signing chain
+    /* relies on communication schema using mbps conventions of collecting all the signing chain
      * identity information (_role, _roleId, _room, etc.) in pseudo-pub "#chainInfo" so
      * the app can extract what it needs to operate.
      */
@@ -135,6 +135,7 @@ struct mbps
                 if(!success) {
                     throw runtime_error("mbps failed to initialize connection");
                 } else {
+                  //  setOrderPub();  // do this here while still experimental
                     m_connectCb();
                 }
             });
@@ -343,13 +344,16 @@ struct mbps
 
     //setting non-default orderPubCb in shim (for now)
     // For commented code, add "ov" for second arg
-    bool robustPub(PubVec& pv, PubVec&){
+
+   // std::unordered_map<syncPS::PubHash, std::chrono::ms> frstReq;
+    bool robustPub(PubVec& pv, PubVec& /*ov*/) {
         //first do same as default and sort locally produced pubs
         std::sort(pv.begin(), pv.end(), [](const auto& p1, const auto& p2){
                 return p1.name().last().toTimestamp() > p2.name().last().toTimestamp(); });
         auto newPubs = false;   //indicate new publications on list
- /*      auto now = std::chrono::system_clock::now();
-          for(const auto& p : pv) {
+        /*
+        auto now = std::chrono::system_clock::now();
+        for(const auto& p : pv) {
             if(p.reqSrv == 0) newPubs = true;
             p.reqSrv = now;  // next time through, won't be new
         }
@@ -358,17 +362,19 @@ struct mbps
         //process others' pubs to see if I should resend
         auto resendRst = now - 10 * cStateRegenInterval;
         auto sendAt = now + 0.9*cStateRegenInterval;
-         for(const auto& p : ov) {
-            if(p.reqSrv < now && p.reqSrv > resendRst) {
+        for (const auto& p : ov) {
+            if (p.reqSrv < now && p.reqSrv > resendRst) {
                 pv.emplace_back(p);
                 p.reqSrv = now;
             } else if(p.reqSrv == 0 || p.reqSrv < resendRst) p.reqSrv = sendAt;
          }
-*/
-         return newPubs;
+        */
+        return newPubs;
     }
+
+    // this sets a non-default order pub method, here uses robustPub
     void setOrderPub() {
-    //    m_pb.orderPub([this](auto& pv1, auto& pv2) {return robustPub(pv1, pv2);});
+        m_pb.orderPub([this](auto& pv1, auto& pv2) {return robustPub(pv1, pv2);});
     }
 };
 

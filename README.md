@@ -12,6 +12,8 @@ DCT uses the basic Interest-Data semantics developed by the NDN project (named-d
 
 Defined-trust Communications comprises elements that may be used separately, e.g., the model of securing data could be separated from the syncps protocol and syncps could be used without a trust management engine.
 
+The version 10 release implements suppression of excess cStates and cAdds on a broadcast channel. It also adds a change to the cAdd format where only a hash of the associated cState iblt is used for increased efficiency. More changes for effective meshing are in progress.
+
 ### Directories
 
 This repository is organized into directories:

@@ -186,7 +186,8 @@ struct crTLV : rView {
     }
     constexpr auto& append(tlv typ, uint64_t num) noexcept {
         // find the most significan non-zero byte then output it and the bytes below it
-        int cnt = (std::bit_width(num) >> 3) + 1;
+        int cnt = std::bit_width(num);
+        if (cnt) cnt = ((cnt - 1) >> 3) + 1;
         addTlvHdr(typ, cnt);
         while (--cnt >= 0) v_.emplace_back(num >> (cnt << 3));
         return *this;

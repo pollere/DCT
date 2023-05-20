@@ -1,5 +1,6 @@
 #ifndef _MURMURHASH3_H_
 #define _MURMURHASH3_H_
+#pragma once
 /*
  * header-only version of 32bit MurmurHash3 and 64 bit Moremur finalizer
  *
@@ -111,4 +112,11 @@ struct murmurHash3 {
         return uint32_t(x);
     }
 };
+
+/**
+ * @brief murmurhash3 32 bit hash of some view-like object 'V'
+ */
+template<typename V>
+static constexpr uint32_t mhashView(const V& v) noexcept { return murmurHash3{}(0xd5a96f4b, v.data(), v.size()); }
+
 #endif  // _MURMURHASH3_H_

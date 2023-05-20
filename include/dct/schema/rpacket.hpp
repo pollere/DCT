@@ -151,6 +151,22 @@ struct rInterest : tlvParser {
     rInterest(const uint8_t* pkt, size_t sz) : tlvParser(pkt, sz) { }
     rInterest(const std::vector<uint8_t>& v) : tlvParser(v) { }
 
+    // an Interest is valid if it starts with the correct TLV, its name is valid and
+    // it contains the 3 required TLV blocks in the right order and nothing else.
+    // A cState name must contain at least 3 components (schema ID, collection name
+    // and iblt) and the iblt must be non-zero.
+    bool valid() const {
+        try {
+            tlvParser t(*this);
+            auto n = rName(t.nextBlk(tlv::Name));
+            if (! n.valid() || n.nBlks() < 3 || n[-1].size() == 0) return false;
+            t.nextBlk(tlv::Nonce);
+            t.nextBlk(tlv::InterestLifetime);
+            if (! t.eof()) return false;
+        } catch (const runtime_error& e) { return false; }
+        return true;
+    }
+
     auto name() const { return rName(tlvParser(*this).nextBlk(tlv::Name)); }
 
     auto nonce() const {
@@ -179,12 +195,15 @@ struct rData : tlvParser {
     rData(const uint8_t* pkt, size_t sz) : tlvParser(pkt, sz) { }
     rData(const std::vector<uint8_t>& v) : tlvParser(v) { }
 
-    // a Data is valid if it starts with the correct TLV, its name is valid and
+    // a cAdd is valid if it starts with the correct TLV, its name is valid and
     // it contains the 5 required TLV blocks in the right order and nothing else.
+    // A cAdd name must contain at least 3 components (schema ID, collection name
+    // and iblt hash). The iblt hash must be type 'Version' and < 9 bytes.
     bool valid() const {
         try {
             tlvParser t(*this);
-            rName(t.nextBlk(tlv::Name)).valid();
+            auto n = rName(t.nextBlk(tlv::Name));
+            if (! n.valid() || n.nBlks() < 3) return false;
             t.nextBlk(tlv::MetaInfo);
             t.nextBlk(tlv::Content);
             t.nextBlk(tlv::SignatureInfo);

@@ -274,7 +274,8 @@ struct DCTmodel {
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
 
         // set up timer to request a new signing pair before this pair expires
-        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - 10s, [this, signIdCb] {getNewSP(signIdCb);});    //schedule re-keying
+        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - 10s,
+                 [this, signIdCb] {getNewSP(signIdCb);});
     }
 
     // export the syncps API

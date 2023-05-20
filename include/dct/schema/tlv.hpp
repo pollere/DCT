@@ -42,7 +42,7 @@ enum class tlv : uint16_t {
         Timestamp = 36,
         SequenceNum = 37,
 
-    // an NDN Interest packet contains exactly 3 TLV blocks in the following order:
+    // a DCT cState packet contains exactly 3 TLV blocks in the following order:
     //   7 (Name), 10 (Nonce), 12 (InterestLifetime)
     Interest = 5,
         Nonce = 10,
@@ -54,7 +54,7 @@ enum class tlv : uint16_t {
         //HopLimit = 34,
         //ApplicationParameters = 36,
 
-    // an NDN Data packet contains exactly 5 TLV blocks in the following order:
+    // a DCT cAdd packet contains exactly 5 TLV blocks in the following order:
     //   7 (Name), 20 (Metainfo), 21 (Content), 22 (SignatureInfo), 23 (SignatureValue)
     Data = 6,
         MetaInfo = 20,

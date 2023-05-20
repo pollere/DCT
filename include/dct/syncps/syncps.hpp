@@ -53,6 +53,9 @@ static constexpr int maxPubSize = 1024; // max payload in Data (with 1448B MTU
 static constexpr std::chrono::milliseconds maxPubLifetime = 2s;
 static constexpr std::chrono::milliseconds maxClockSkew = 1s;
 
+static constexpr std::chrono::milliseconds distDelay = 50ms; // time for a PDU to be distributed to all members on this subnet
+static constexpr std::chrono::milliseconds repubDelay = 50ms; // time to suppress republishing own publication
+
 /**
  * @brief app callback when new publications arrive
  */
@@ -112,6 +115,7 @@ struct SyncPS {
     struct CE { // Collection Entry 
         Item i_;
         uint8_t s_; // item status
+        std::chrono::milliseconds sprs_{0ms};       // if non-zero, suppress until
 
         constexpr CE(Item&& i, uint8_t s) : i_{std::forward<Item>(i)}, s_{s} {}
         static constexpr uint8_t act = 1;  // 0 = expired, 1 = active
@@ -172,9 +176,9 @@ struct SyncPS {
     std::chrono::milliseconds pubExpirationGB_{maxPubLifetime};
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
     pTimer scheduledCAddId_{std::make_shared<Timer>(getDefaultIoContext())};
-    std::uniform_int_distribution<unsigned short> randInt_{7u, 23u}; // cstate publish delay interval
+    std::uniform_int_distribution<unsigned short> randInt_{7u, 12u}; //  cState delay  randomization
     Nonce  nonce_{};                // nonce of current cState
-    uint32_t publications_{};       // # local publications
+    uint32_t publications_{};       // # locally originated publications
     bool delivering_{false};        // currently processing a cAdd
     bool registering_{true};        // RIT not set up yet
     bool autoStart_{true};          // call 'start()' when done registering
@@ -241,6 +245,8 @@ struct SyncPS {
      *
      * A publication is published at most once and lives for at most pubLifetime.
      * Publications are signed before calling this routine.
+     * Publications from the application always are additions to the collection so
+     * are pushed to the network in response to any cState in PIT
      *
      * @param pub the object to publish
      */
@@ -248,10 +254,10 @@ struct SyncPS {
         auto h = addToActive(std::move(pub), true);
         if (h == 0) return h;
         ++publications_;
-        // new pub may let us respond to pending cState(s).
-        if (! delivering_) {
-            sendCState();
-            handleCStates();
+        // new pub is always sent if 1) not delivering 2) not registering and 3) a cState is in collection
+        // If no cStates, send a cState including this pub at a short random delay
+        if (!delivering_ && !registering_)   {   // don't send publications until completely registered for responses
+            if (sendCAdd() == false) sendCStateSoon();
         }
         return h;
     }
@@ -328,6 +334,7 @@ struct SyncPS {
      * @brief Send a cState describing our publication set to our peers.
      *
      * Creates & sends cState of the form: /<sync-prefix>/<own-IBF>
+     * If called from interest timeout, set to to true
      */
     void sendCState() {
         // if a cState is sent before the initial register is done the reply can't
@@ -337,19 +344,7 @@ struct SyncPS {
         scheduledCStateId_->cancel();
         nonce_ = rand32();
         face_.express(crInterest(collName_/pubs_.iblt().rlEncode(), cStateLifetime_, nonce_),
-                        [this](auto ri, auto rd) { // cAdd response to interest
-                            // print("syncps received cAdd: {}\n", rd.name());
-                            if (! pktSigmgr_.validateDecrypt(rd)) {
-                                // print("syncps invalid cAdd: {}\n", rd.name());
-                                // Got an invalid cAdd so ignore the pubs it contains.  Need to reissue
-                                // our pending cState but delay a bit or we'll get the same thing again.
-                                // XXX may want to track & filter out bad actors to avoid DoS potential here.
-                                if (ri.nonce() == nonce_) sendCStateSoon();
-                                return;
-                            }
-                            onCAdd(ri, rd);
-                        },
-                        [this](auto& /*ri*/) { sendCState(); } // interest timeout
+                        [this](auto& /*ri*/) { sendCState(); } // interest timeout for local cStates
                     );
     }
 
@@ -358,9 +353,9 @@ struct SyncPS {
      * restart the time. (This is used to collect all the cAdds responding to a cState
      * before sending a new cState.)
      */
-    void sendCStateSoon() {
+    void sendCStateSoon(std::chrono::milliseconds dly = 0ms) {
         scheduledCStateId_->cancel();
-        scheduledCStateId_ = schedule(std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
+        scheduledCStateId_ = schedule(dly + std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
     }
 
     auto name2iblt(const rName& name) const noexcept {
@@ -378,10 +373,26 @@ struct SyncPS {
         pubCbs_.erase(hash);
     }
 
-    bool handleCState(const rName& name) {
-        //if a scheduleCAddId_ is set, cancel it
-        scheduledCAddId_->cancel(); // (should I only do this for a network cState?)
+    auto handleDeliveryCb(const auto& iblt) {
+        if (pubCbs_.size()) {
+            for (const auto hash : (pubs_.iblt() - pubCbs_.iblt() - iblt).peel().second) doDeliveryCb(hash, true);
+        }
+    }
 
+    /**
+     * @brief construct a cAdd appropriate for responding to cstate 'csName'
+     *
+     * The cAdd's name is the same as csName except the final component is replaced
+     * with a murmurhash3 32 bit hash of csName which serves as both a compact
+     * representation of csName's iblt and as a PIT key to retrieve the original
+     * iblt should it be needed.
+     */
+    auto makeCAdd(const rName& csName) const noexcept {
+        return crData{crName{csName.first(-1)}.append(tlv::Version, mhashView(csName)).done(),
+                      tlv::ContentType_CAdd};
+    }
+
+    bool handleCState(const rName& name) {
         // The last component of 'name' is the peer's iblt. 'Peeling'
         // the difference between the peer's iblt & ours gives two sets:
         //   have - (hashes of) items we have that they don't
@@ -390,58 +401,122 @@ struct SyncPS {
         // pubCbs_ contains pubs that require delivery callbacks so which the peer already has.
         // pubs_ contains all pubs we have so send the ones we have & the peer doesn't.
         auto iblt{name2iblt(name)};
-        if(pubCbs_.size()) {
-            // remove delivery confirmation pubs from our iblt to see which the peer has (will be in 'need' set)
-            for (const auto hash : (pubs_.iblt() - pubCbs_.iblt() - iblt).peel().second) doDeliveryCb(hash, true);
-        }
+        handleDeliveryCb(iblt);
         auto [have, need] = (pubs_.iblt() - iblt).peel();
-        if (have.size() == 0) return false;
+        if (need.size() == 0 && have.size() == 0 ) return false;    // handled cState same as current local cState
 
+        // scheduledCStateId_->cancel();   // if a CState is scheduled, cancel it
+        // scheduledCAddId_->cancel();     // if a scheduleCAddId_ is set, cancel it
+
+        auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+        auto msNow =  now.time_since_epoch();
         PubVec pv{}, pvOth{};    //vectors of publications I have, local or others
         for (const auto hash : have) {
             //if (const auto& p = pubs_.find(hash); p != pubs_.end()) pv.emplace_back(p->second.i_);
             if (const auto& p = pubs_.find(hash); p != pubs_.end() ) {
-                if(p->second.local()) pv.emplace_back(p->second.i_);
-                else pvOth.emplace_back(p->second.i_);
+                // on a broadcast channel pub suppression is give others time to receive these before resend
+                if (p->second.sprs_ > msNow) continue;     // sent this pub too recently to send again
+                p->second.sprs_ = 0ms;                     // set as unsuppressed
+                if (p->second.local()) pv.emplace_back(p->second.i_);
+                // else pvOth.emplace_back(p->second.i_);
             }
         }
-        if (pv.empty() && pvOth.empty()) return false;
+        auto newPubs = false;
+        if (!pv.empty() || !pvOth.empty()) newPubs = orderPub_(pv, pvOth);
+        if (!newPubs) {
+            if (need.size()) {
+                // next cState should not be suppressed
+                face_.unsuppressCState(rPrefix(collName_/pubs_.iblt().rlEncode()));
+                sendCStateSoon(distDelay);
+            }
+            return false;
+         }
 
-        // if both have & need are non-zero, peer may need our current cState to generate a cAdd
-        if (need.size() != 0 && !delivering_) sendCStateSoon();
-
-        auto newPubs = orderPub_(pv,pvOth);    //order priority returns all pubs to send in pv
-        if(pv.empty()) return false;
-        auto othPubs = false;
+        //auto othPubs = false;
+        auto sprs = msNow + distDelay;   // only set suppression when pub is actually sent
         // send all the pubs that will fit in a cAdd packet, always sending at least one.
-        if (pv.size() > 1) {
-            for (size_t i{}, psize{}; i < pv.size(); ++i) {
-                if (pv[i].size() > maxPubSize) {
-                    // print("pub {} too large: {} {}\n", i, pv[i].size(), pv[i].name());
-                    abort();
-                }
-                if ((psize += pv[i].size()) > maxPubSize) {
-                    if(pubs_.at(hashPub(pv[i])).fromNet())
-                        othPubs = true;
-                    pv.resize(i); break; }
+        assert(pv.size() > 0);
+        for (size_t i{}, psize{}; i < pv.size(); ++i) {
+            assert(pv[i].size() <= maxPubSize);
+            if ((psize += pv[i].size()) > maxPubSize) {
+                //if(pubs_.at(hashPub(pv[i])).fromNet()) othPubs = true;
+                pv.resize(i);
+                break;
             }
+            pubs_.at(hashPub(pv[i])).sprs_ = sprs;
         }
-        auto cAdd = crData{name, tlv::ContentType_CAdd}.content(pv);
+
+        auto cAdd = makeCAdd(name).content(pv);
         // newPubs = true => there's a new local publication in this cAdd
         // othPubs =  true => there are publications from others in this cAdd
-        if(newPubs | !othPubs) {   //both send and resend own with priority
+        if(newPubs && pv.size()) {   //both send and resend own with priority 
             if (pktSigmgr_.sign(cAdd)) face_.send(cAdd);
-        } else if (pktSigmgr_.sign(cAdd)) {   //delay sending others pubs (sign in lambda?)
-            // schedule to send after a delay (cancel sending if new cState shows up)
-            scheduledCAddId_ = schedule(std::chrono::milliseconds(randInt()), [this,cAdd]{ face_.send(cAdd); });
+            // delay long enough for recipients to send cStates
+            // (may be sooner if need.size() != 0 or not at all if these are not new)
+            sendCStateSoon(2*distDelay);
         }
         return true;
     }
 
-    bool handleCStates() {
-        bool res{false};
-        for (const auto& n : face_.pendingInterests(collName_)) res |= handleCState(n);
-        return res;
+    /*
+     * For publishing newly created, unsent publications
+     * No need to go through previously received cStates, any cState will be missing new locally created Pubs
+     * orderPubs puts newest first
+     */
+    bool sendCAdd(const rName name) {
+        scheduledCStateId_->cancel();     // if a scheduleCStateId_ is set, cancel it
+        //  scheduledCAddId_->cancel();     // if a scheduleCAddId_ is set, cancel it
+
+        auto iblt{name2iblt(name)}; // use the retrieved cState's iblt to find new pubs
+        // handleDeliveryCb(iblt); // this should have happened when the cstate first arrived
+        auto [have, need] = (pubs_.iblt() - iblt).peel();
+        if (have.size() == 0) return false;    // no new pubs
+
+        auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+        auto msNow = now.time_since_epoch();
+        PubVec pv{}, sv{};    // vectors of publications I have that were locally created, newest first
+        for (const auto hash : have) {
+            //if (const auto& p = pubs_.find(hash); p != pubs_.end()) pv.emplace_back(p->second.i_);
+            if (const auto& p = pubs_.find(hash); p != pubs_.end() ) {
+                // on a broadcast channel pub suppression is give others time to receive these before resend
+                if (p->second.sprs_ > msNow) continue;     // sent this pub too recently to send again
+                p->second.sprs_ = 0ms;                      // set as unsuppressed
+                if (p->second.local()) pv.emplace_back(p->second.i_);
+            }
+        }
+        if (pv.empty()) return false;
+        if (! orderPub_(pv, sv)) return false;    //order priority returns all pubs to send in pv - puts new pubs first
+        sv.clear();     // use for pubs to send
+
+       auto sprs = msNow + distDelay;   // set suppression for pubs to be sent
+        // send all the newPubs that will fit into a cAdd
+        // skip over a pub that makes the cAdd oversize to see if any others will fit
+        for (size_t i{}, sz{}; i < pv.size(); i++) {
+             if (pv[i].size() > maxPubSize) {
+                    print("sendCAdd: skipping {} which exceeds maxPubSize\n",pv[i].name());
+                    continue;
+                }
+                if (sz + pv[i].size() > maxPubSize) continue;
+                sz += pv[i].size();
+                sv.emplace_back(pv[i]);
+                pubs_.at(hashPub(pv[i])).sprs_ = sprs;
+        }
+        if (sv.empty()) return false;
+
+        auto cAdd = makeCAdd(name).content(pv);
+        if (! pktSigmgr_.sign(cAdd)) return false;
+        face_.send(cAdd);
+        // delay so receiving members can confirm.
+        // if there are more new pubs to send, others' cStates will cause sending
+        sendCStateSoon(2*distDelay);
+        return true;
+    }
+
+    bool sendCAdd() {
+        // look for a cState from network - would like to get most recent one from network
+        const auto name  = face_.bestCState(collName_);
+        if (name.size() == 0) return false;            // wait for a cState
+        return sendCAdd(name);
     }
 
     /**
@@ -451,16 +526,34 @@ struct SyncPS {
      * our list of active publications then notify the
      * application about the updates.
      *
+     * When onCAdd opportunistically processes *all* cAdds for this collection, should compare its iblt
+     * against my current iblt with peel operation before pulling out content. I.e., if I "have"
+     * everything in the iblt, don't process.
+     *
+     * Called for *any* cAdd in the collection, even if no matching cState in PIT
+     * Can result in a change in local cState if any of the pubs are "needed"
+     * A needed pub can also cause a local publication in response to delivering_
+     * If no change in local cState, then the current cState shedule should not be change
+     *
+     * If there's a cState fromNet_, new pub will go out and a new cState should be scheduled soonish
+     * If there's no cState fromNet_, a new cState should be scheduled soonish to let collection members know
+     * "soonish" should be long enough to 1) collect other local cState changes 2) let other members process
+     * the just-sent pub 3) un-suppress the just-sent pub in case it was missed
+     * If keep getting cAdds, may keep pushing out the new cState
+     * but what about a ready-to-send pub without a fromNet_ cState? Try NOT rescheduling cState (unless it is sent)
+     *
      * @param cState   cState for which we got the cAdd
      * @param cAdd     cAdd content
      */
-    void onCAdd(const rInterest& /*cState*/, const rData& cAdd) {
+    void onCAdd(const rInterest& cState, const rData& cAdd) {
+        if (registering_) return;   // don't process cAdds till fully registered
 
         // if publications result from handling this cAdd we don't want to
         // respond to a peer's cState until we've handled all of them.
         delivering_ = true;
         auto initpubs = publications_;
 
+        auto ap = 0;    // added pubs from this cAdd
         for (auto c : cAdd.content()) {
             if (! c.isType(tlv::Data)) continue;
             rData d(c);
@@ -481,27 +574,34 @@ struct SyncPS {
                 // print("addToActive failed: {}\n", d.name());
                 continue;
             }
+            if (++ap == 1)  // add to new pub counter
+                scheduledCStateId_->cancel();  // cancel any cState about to be expressed
             if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) deliver(d, s->second);
             // else print("syncps::onCAdd: no subscription for {}\n", d.name());
         }
+        if (ap == 0) return;  // nothing I need in this cAdd, no change to local cState or its schedule
 
-        // We've delivered all the publications in the cAdd.  There may be
-        // additional in-bound cAdds for the same cState so sending an updated
-        // cState now will result in unnecessary duplicates being sent.
-        // The face is doing Deferred Delete of the PIT entry to collect those
-        // cAdds and its timeout callback will send an updated cState.
-        //
-        // If the cAdd resulted in new outbound pubs, cAdd them to pending peer CStates.
+        /* We've delivered all the publications in the cAdd.  There may be
+         * additional inbound cAdds for the same cState so sending an updated
+         * cState immediately will result in unnecessary duplicates being sent.
+         *
+         * No longer using deferred delete so need to make sure a new cState is sent without
+         * sending before other cAdds responding to the same cState as this one arrive.
+         * sendCStateSoon(0 delays a bit (should be min ~ distribution delay for this subnet) and
+         * this gets canceled and rescheduled by each new cAdd arrival that has pubs I can use.
+         */
+
         delivering_ = false;
-        if (initpubs != publications_) handleCStates();
-        sendCStateSoon();
+        // If the cAdd resulted in new outbound (locally originated) pubs, cAdd them for any pending peer CStates
+        if (initpubs != publications_ && sendCAdd(cState.name())) return;  // sending will schedule an updated cState
+        sendCStateSoon(distDelay); // changed local cState send a confirming cState at a randomized delay
     }
 
     /**
      * @brief Methods to manage the active publication set.
      */
 
-    /*
+    /**
      * @brief ignore a publication by temporarily adding it to the our iblt
      * XXX fix to add hash to pubs_ so dups can be recognized
      */
@@ -517,7 +617,7 @@ struct SyncPS {
      * 'start' starts up the bottom half (network) communication by registering RIT
      * callbacks for cStates matching this collection's prefix then sending an initial
      * 'cState' to solicit/distribute publications. Since the content of cAdd packets
-     * can be encrypted, it's pointless to send a cState before optaining the decryption
+     * can be encrypted, it's pointless to send a cState before obtaining the decryption
      * key. dct_model sets up an appropriate chain of callbacks such that 'start()' is
      * called after all the prerequisites for syncing this collection have been obtained.
      *
@@ -526,11 +626,25 @@ struct SyncPS {
      */
     void start() {
         face_.addToRIT(collName_,
-                       [this, ncomp = collName_.nBlks()+1](auto /*prefix*/, auto i) {
+                       [this, ncomp = collName_.nBlks()+1](auto /*prefix*/, auto i) {   // iCb
                            // cState must have one more name component (an iblt) than the collection name
+                           // if this handleCState results in sending a cAdd, currently won't schedule a cState, may want to change
                            if (auto n = i.name(); n.nBlks() == ncomp) handleCState(n);
                        },
-                       [this](rName) -> void { registering_ = false; sendCState(); });
+                       [this](auto ri, auto rd) { // dCb: cAdd response to any active local cState in collName_
+                            // print("syncps RIT set Cb received cAdd: {}\n", rd.name());
+                            if (! pktSigmgr_.validateDecrypt(rd)) {
+                                // print("syncps invalid cAdd: {}\n", rd.name());
+                                // Got an invalid cAdd so ignore the pubs it contains.
+                                return;
+                            }
+                            onCAdd(ri, rd);
+                        },
+                       [this](rName) -> void {
+                           registering_ = false;
+                           face_.unsuppressCState(rPrefix(collName_/pubs_.iblt().rlEncode())); // force sending initial state
+                           sendCState();
+                       });
     }
 
     auto& autoStart(bool yesNo) { autoStart_ = yesNo; return *this; }

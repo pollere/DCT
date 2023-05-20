@@ -34,6 +34,7 @@
 
 #include "api.hpp"
 #include "lpm.hpp"
+#include "murmurHash3.hpp"  // for hasher mhashView
 
 namespace dct {
 
@@ -50,10 +51,11 @@ namespace dct {
  */
 struct RITentry {
     InterestCb iCb_;
+    DataCb dCb_;
     std::vector<uint8_t>* name_;    // The 'prefix' is supplied as an rName since that's needed for the callback.
                                     // Its backing data is copied to the heap with a pointer here.
 
-    RITentry(const rName& n, InterestCb&& iCb) : iCb_{std::move(iCb)},
+    RITentry(const rName& n, InterestCb&& iCb, DataCb&& dCb) : iCb_{std::move(iCb)}, dCb_{std::move(dCb)},
         name_{new std::vector<uint8_t>{n.m_blk.begin(), n.m_blk.end()}} { }
 };
 
@@ -100,22 +102,22 @@ struct DIT : std::unordered_set<size_t> {
  *
  * PIT entrys are deleted when satisfied by a Data or when they time out.
  *
- * All Interests and Datas are matched against the PIT.
+ * All Interests and Datas are matched against the PIT. The lookup key is a hash of
+ * the interest name.
  */
 struct PITentry {
     using TOptr = std::unique_ptr<Timer>;
 
     std::unique_ptr<std::vector<uint8_t>> idat_{}; // bytes of the interest (backing store for prefix & interest_)
     rInterest i_{};
-    DataCb dCb_{};
-    InterestTO ito_{};
-    TOptr timer_{};
-    bool fromNet_{false};
-    bool ded_{false};
+    InterestTO ito_{};      // Interest time-out callback (also indicates interest locally expressed)
+    TOptr timer_{};         // Interest lifetime timer
+    size_t onNet_{0};
+    bool fromNet_{false};   // Interest was heard from net
 
-    PITentry(const rInterest& i, DataCb&& dCb, InterestTO&& ito) :
+    PITentry(const rInterest& i, InterestTO&& ito) :
                 idat_{std::make_unique<std::vector<uint8_t>>(i.m_blk.begin(), i.m_blk.end())}, i_{*idat_},
-                dCb_{std::move(dCb)}, ito_{std::move(ito)} { }
+                ito_{std::move(ito)} { }
 
     PITentry(const rInterest& i) :
                 idat_{std::make_unique<std::vector<uint8_t>>(i.m_blk.begin(), i.m_blk.end())}, i_{*idat_},
@@ -138,33 +140,44 @@ struct PITentry {
     }
 };
 
-struct PIT : lpmLT<rPrefix, PITentry> {
-    using iterator = lpmLT<rPrefix, PITentry>::iterator;
+using iHash_t = uint32_t;
+struct PIT : std::unordered_map<iHash_t, PITentry> {
+    using base = std::unordered_map<iHash_t, PITentry>;
+    using base::unordered_map;
+    bool found(iterator it) const noexcept { return it != end(); }
+    bool found(const_iterator it) const noexcept { return it != end(); }
+    const_iterator find(const iHash_t ih) const noexcept { return base::find(ih); }
+    iterator find(const iHash_t ih) noexcept { return base::find(ih); }
+    auto find(rName&& n) noexcept { return find(mhashView(n)); }
+    auto find(const rName& n) noexcept { return find(mhashView(n)); }
 
-    auto erase(const rInterest& i) { lpmLT<rPrefix, PITentry>::erase(rPrefix{i.name()}); }
-    auto erase(iterator it) { lpmLT<rPrefix, PITentry>::erase(it); }
+    auto erase(iterator it) { base::erase(it); }
+    auto erase(iHash_t ih) { base::erase(ih); }
+    auto erase(const rInterest& i) { return base::erase(mhashView(i.name())); }
 
     // Interest Time-Out callback
+    // if itCB is false, don't call the pit entry interest time out (which could send a new interest)
     // The PIT entry needs to be deleted and, since the callback might want to reinstate it,
     // the entry has to be removed before the callback
     void itoCB(rInterest i) {
-        auto nh = extract(rPrefix(i.name())); // remove entry from PIT
-        //if (! nh) abort();
-        if (! nh) return;
-        if (auto& pe = nh.mapped(); pe.ito_) pe.ito_(rInterest(*pe.idat_));
+        auto ih = mhashView(i.name());
+        auto pi = find(ih);
+        if (! found(pi)) return;
+        if (pi->second.ito_) {
+            auto nh = extract(ih); // remove entry from PIT
+            if (auto& pe = nh.mapped(); pe.ito_) pe.ito_(rInterest(*pe.idat_));
+        } else {
+            erase(pi);    // non-local
+        }
     }
 
     /**
      * add a pit entry to the PIT. 
      *
      * The entry has to contain a copy of the Interest which may be large (e.g. Sync Interests
-     * names contain an iblt of O(128) bytes) so we want to minimize copying. Also, the key is the
-     * Interest name and we don't want two copies so the entry contains a pointer to a vector
-     * containing the raw Interest and we build build the prefix from that.
+     * names contain an iblt of O(128) bytes) so we want to minimize copying. 
      */
-    auto add(PITentry&& e) {
-        return lpmLT<rPrefix, PITentry>::add(rPrefix{e.i_.name()}, std::move(e));
-    }
+    auto add(PITentry&& e) { return try_emplace(mhashView(e.i_.name()), std::move(e)); }
 
     /**
      * add Interest to PIT.
@@ -179,22 +192,20 @@ struct PIT : lpmLT<rPrefix, PITentry> {
      */
 
     // add locally generated interest to PIT
-    auto add(const rInterest& i, DataCb&& onD, InterestTO&& ito) {
-        if (auto it = find(rPrefix(i.name())); found(it)) {
-            // update existing entry
+    auto add(const rInterest& i, InterestTO&& ito) {
+        if (auto it = find(mhashView(i.name())); found(it)) {
             auto& pe = it->second;
-            pe.dCb_ = std::move(onD);
             pe.ito_ = std::move(ito);
             return std::pair<iterator,bool>{it, false};
         }
-        return add(PITentry{i, std::move(onD), std::move(ito)});
+        return add(PITentry{i, std::move(ito)});
     }
 
     // add network generated interest to PIT
     auto add(const rInterest& i) {
-        if (auto it = find(rPrefix(i.name())); found(it)) {
-            // update existing entry
+        if (auto it = find(mhashView(i.name())); found(it)) {
             it->second.fromNet_ = true;
+            it->second.onNet_++;
             return std::pair<iterator,bool>{it, false};
         }
         return add(PITentry{i});

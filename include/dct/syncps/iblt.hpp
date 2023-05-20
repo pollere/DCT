@@ -53,14 +53,10 @@
 */
 
 #include <array>
-#include <cmath>
-#include <inttypes.h>
 #include <iomanip>
 #include <iostream>
 #include <set>
 #include <sstream>
-#include <string>
-#include <tuple>
 #include <vector>
 
 #include "murmurHash3.hpp"

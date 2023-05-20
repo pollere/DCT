@@ -91,23 +91,21 @@ int main(int argc, char* argv[])
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");
     room = cm.attribute("_roomId");
+    std::vector<std::string> acc;
+    if(id == "hall") {
+        acc = {"light", "door"};
+    } else {
+        acc = {"light", "door", "screen", "temp"};
+    }
+    //subscribe to command topic for all my accessory functions
+    for(auto i=0u; i < acc.size(); i++) {
+        cm.subscribe(acc[i] + "/command/" + id, cmdRecv); // msgs to this instance
+        cm.subscribe(acc[i] + "/command/all", cmdRecv); // msgs to all instances
+    }
 
     // Connect and pass in the handler
     try {
-        cm.connect(    /* main task for this entity */
-            [&cm]() {
-                std::vector<std::string> acc;
-                if(id == "hall") {
-                    acc = {"light", "door"};
-                } else {
-                    acc = {"light", "door", "screen", "temp"};
-                }
-                //subscribe to command topic for all my accessory functions
-                for(auto i=0u; i < acc.size(); i++) {
-                    cm.subscribe(acc[i] + "/command/" + id, cmdRecv); // msgs to this instance
-                    cm.subscribe(acc[i] + "/command/all", cmdRecv); // msgs to all instances
-                }
-            });
+        cm.connect( [&cm]() {});    /* main task for this entity is to wait for messages from subscriptions */
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);

@@ -6,16 +6,16 @@
  * 'compact' (default) and 'full' ('-f' flag). The compact format prints one
  * line packet descriptions like:
  *   ...
- *   17:38:21.170  6.53M  I  59484  136 /localnet/^3346962dd3a36377/cert/^89016d095519cc52..
- *   17:38:21.170  189.u  D  63441  416 /localnet/^3346962dd3a36377/cert/^89016d095519cc52..
+ *   17:38:21.170  6.53M  St  59484  136 /localnet/^3346962dd3a36377/cert/^89016d095519cc52..
+ *   17:38:21.170  189.u  Ad  63441  416 /localnet/^3346962dd3a36377/cert/^89016d095519cc52..
  *   ...
- * This example shows a 136 byte Interest expressed from src port 59484
+ * This example shows a 136 byte cState expressed from src port 59484
  * arriving at time 17:38 after 6.53 Minutes of link idle time.  (Note:
  * suffix 'M' = Minutes; 'm' = milliseconds.) Then, 189us later, a
- * 416 byte Data from src port 63441 satisfies that Interest.
+ * 416 byte cAdd from src port 63441 satisfies that Interest.
  *
  * The fields are: (1) the packet capture time, (2) time delta since last packet,
- * (3) packet type, I (Interest) or D (Data), (4) sender's UDP source port, (5) packet
+ * (3) packet type, St (cState) or Ad (cAdd), (4) sender's UDP source port, (5) packet
  * length in bytes and (6) packet's Name TLV (components containing non-printing characters
  * are shown in hex and '^' is prepended to indicate this. Hex components longer than
  * 10 bytes are truncated to 8 bytes and '..' is appended to indicate this).
@@ -23,8 +23,8 @@
  * The 'full' output format adds a dump of the contents of every TLV in the packet
  * after the one line summary. For example, the Interest above's full output was:
  *
- *   17:38:21.170  6.53M  I  59484  136 /localnet/^3346962dd3a36377/cert/^89016d095519cc52..
- *   5 (Interest) size 134:
+ *   17:38:21.170  6.53M  St  59484  136 /localnet/^3346962dd3a36377/cert/^89016d095519cc52..
+ *   5 (cState) size 134:
  *   | 7 (Name) size 118:
  *   | | 8 (Generic) size 8:  localnet
  *   | | 8 (Generic) size 8:  3346 962d d3a3 6377
@@ -57,7 +57,7 @@
  * meta-characters in ECMAScript REs and need to be escaped with \ to be matched.)
  *
  *
- * Copyright (C) 2021-2 Pollere LLC
+ * Copyright (C) 2021-3 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -86,6 +86,7 @@
 #include "dct/format.hpp"
 #include "dct/sigmgrs/sigmgr.hpp"
 #include "dct/schema/rpacket.hpp"
+#include "dct/syncps/iblt.hpp"
 #include "dissect.hpp"
 #include "watcher.hpp"
 
@@ -153,7 +154,7 @@ static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
     // sys time point and S from it converted to a duration. Ick.
     auto now2 = durmicro(now.time_since_epoch());
     print("{:%H:%M:}{:%S}  {}  {}  {:5} {:4}", now, now2, tfmt(now2), ptype, sport, s);
-    if (hashIBLT) print("  {:08x} ", (uint32_t)std::hash<tlvParser>{}(n));
+    if (hashIBLT) print("  {:08x} ", d[0] != 6? mhashView(n) : n.lastBlk().toNumber());
     print(" {}\n", n);
     return ptype;
 }

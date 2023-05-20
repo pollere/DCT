@@ -56,6 +56,7 @@ static struct option opts[] = {
     {"help", no_argument, nullptr, 'h'},
     {"location", required_argument, nullptr, 'l'},
     {"count", required_argument, nullptr, 'n'},
+    {"quiet", no_argument, nullptr, 'q'},
     {"wait", required_argument, nullptr, 'w'}
 };
 static void usage(const char* cname)
@@ -72,6 +73,7 @@ static void help(const char* cname)
            "  -h |--help        print help then exit\n"
            "  -l location       defaults to 'all'\n"
            "  -n |--count       number of messages to publish\n"
+           "  -q |--quiet       don't print progress messages\n"
            "  -w |--wait        wait (in ms) between sends\n";
 }
 
@@ -82,6 +84,7 @@ static decltype(std::chrono::system_clock::now().time_since_epoch()) lastSend;
 static int Cnt = 0;
 static int nMsgs = 10;
 static int nRcv = 0;
+static bool quiet = false;
 static std::string addr{};
 static std::string capability{"lock"};
 static std::string location{"all"}; // target's location (for operators)
@@ -110,11 +113,12 @@ static void msgPubr(mbps &cm) {
     }
     if constexpr (deliveryConfirmation) {
         cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
-                    auto now = std::chrono::system_clock::now();
-                    auto dt = ticks(now - ts).count() / 1000.;
-                    print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
-                            tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
-                    });
+                    if (! quiet) {
+                        auto now = std::chrono::system_clock::now();
+                        auto dt = ticks(now - ts).count() / 1000.;
+                        print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
+                                tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
+                    } });
     } else {
 //         auto now = std::chrono::system_clock::now();
 //        print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
@@ -155,12 +159,12 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 
     if (role == "device") {
         // devices set their 'state' from the incoming 'arg' value then immediately reply
-        print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
+        if (! quiet) print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
                 now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
                 std::string(msgPayload.begin(), msgPayload.end()));
         myState = mt["topicArgs"] == "lock"? "locked":"unlocked";
         msgPubr(cm);
-    } else {
+    } else if (!quiet) {
         auto rtt = (now - std::chrono::duration_cast<ticks>(lastSend)).count() / 1000.;
         print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit, {:.3}ms rtt): {} {}: {} {} | {}\n",
                 now, role, myId, myPID, dt, rtt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
@@ -181,7 +185,7 @@ int main(int argc, char* argv[])
     std::srand(std::time(0));
     // parse input line
     for (int c;
-        (c = getopt_long(argc, argv, ":a:c:dhl:n:w:", opts, nullptr)) != -1;) {
+        (c = getopt_long(argc, argv, ":a:c:dhl:n:qw:", opts, nullptr)) != -1;) {
         switch (c) {
                 case 'a':
                     addr = optarg;
@@ -200,6 +204,9 @@ int main(int argc, char* argv[])
                     break;
                 case 'n':
                     nMsgs = std::stoi(optarg);    //number of times to publish
+                    break;
+                case 'q':
+                    quiet = true;;
                     break;
                 case 'w':
                     pubWait = std::chrono::milliseconds(std::stoi(optarg));

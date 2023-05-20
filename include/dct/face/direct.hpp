@@ -83,8 +83,8 @@ class DirectFace {
         // Packet receive handler: decode and process as Interest or Data (silently ignore anything else).
         // Since a matching interest might already be in the PIT or there might be
         // no matching interests for a data, don't do anything heavyweight here.
-        if (tlv(pkt[0]) == tlv::Interest) handleInterest({pkt, len});
-        else if (tlv(pkt[0]) == tlv::Data) handleData({pkt, len});
+        if (tlv(pkt[0]) == tlv::Interest) handlecState({pkt, len});
+        else if (tlv(pkt[0]) == tlv::Data) handlecAdd({pkt, len});
     }
 
     auto conCb() -> void {
@@ -121,48 +121,28 @@ class DirectFace {
         timer->async_wait([cb=std::move(cb)](const auto& e) { if (e == boost::system::errc::success) cb(); });
         return timer;
     }
+    std::uniform_int_distribution<unsigned short> randInt_{10, 50}; // cstate publish randomization
+    constexpr auto jitter() { return std::chrono::milliseconds(randInt_(randGen())); }
 
     // schedule or re-schedule PIT Interest Timeout callback
     void schedITO(PITentry& pe) {
         // if the interest is locally generated, the timeout upcall will generate a new pit
-        // entry to replace the one being deleted. Otherwise give the remote peer's replacement
-        // interest some extra time to get to us.
-        auto lt = pe.i_.lifetime();
-        if (! pe.dCb_) lt += 30ms;
-        pe.timer(timeOut(lt, [this, idat=*pe.idat_] () mutable {
+        // entry to replace the one being deleted.
+        pe.timer(timeOut(pe.i_.lifetime() + jitter(), [this, idat=*pe.idat_] () mutable {
                                 auto i = rInterest(idat);
                                 pit_.itoCB(i); }
                          )
                 );
     }
-    // schedule PIT Deferred Entry Delete
-    void schedDED(PITentry& pe) {
-        if (pe.ded_) return;  // already handled
-        pe.ded_ = true;
-        if (pe.timer()->expires_after(30ms) <= 0) return; // timer already expired
-        pe.timer()->async_wait([this, idat=*pe.idat_](const auto& e) {
-                                    if (e == boost::system::errc::success) {
-                                        auto i = rInterest(idat);
-                                        pit_.itoCB(i);
-                                    }
-                                });
-    }
 
-    void pitErase(PIT::iterator it) {
-        if (it->second.timer_) it->second.cancelTimer();
-        pit_.erase(it);
-    };
-
-    void pitErase(const rInterest& i) { if (auto it = pit_.find(rPrefix(i.name())); pit_.found(it)) pitErase(it); };
-
-    /*
+    /**
      * Send packet 'pkt' of length 'len' bytes
      */
     void send(const uint8_t* pkt, size_t len) { io_.send(pkt, len); }
     void send(const std::vector<uint8_t>& v) { send(v.data(), v.size()); }
     void send(const tlvParser& v) { send(v.data(), v.size()); }
 
-    /*
+    /**
      * Handle an interest registration.
      * - add the RIT entry
      * - Registration isn't successful until the network is connected.
@@ -170,42 +150,80 @@ class DirectFace {
      *   list handled on connection complete.
      * - Otherwise just call the regDone CB.
      */
-    void addToRIT(const rName& p, InterestCb&& iCb, RegisterCb&& rCb) {
-        rit_.add(RITentry{p, std::move(iCb)});
+    void addToRIT(const rName& p, InterestCb&& iCb, DataCb&& dCb, RegisterCb&& rCb) {
+        rit_.add(RITentry{p, std::move(iCb), std::move(dCb)});
         if (cSts_ != CONNECTED) {
             // Call back when connected.  Have to copy prefix & rCB since the
             // backing store of p might go away on our return.
-            ccb_.push_back(std::make_pair(p.asVec() ,std::move(rCb)));
+            ccb_.push_back(std::make_pair(p.asVec(), std::move(rCb)));
             return;
         }
         rCb(p);  // connected and all done
     }
 
-    /*
+    /**
      * Handle an interest outgoing from app.
      * - if it's already in the pit (from network peer), add the local origin information.
      * - Add it to the pit & dit then send it. Note that interest has to be sent
      *   even though it was multicast to the net to unblock completion callbacks
      *   at the origin. E.g., during cert dist peer sent this interest followed
      *   by pubs and it needs to hear pubs arrived.
+     *
+     *  suppression experiment
+     *
+     *  May get multiple cStates broadcast if there are members missing different
+     *  pubs after timeout collection subname is i.name().first(-1)
      */
-    auto express(const rInterest& i, DataCb&& onD, InterestTO&& ito) {
+    auto unsuppressCState(const rPrefix& n) {
+        if (auto pi = pit_.find(n); pit_.found(pi)) pi->second.onNet_ = 0;
+    }
+
+     // always sends a newly created cState (a new cState is always created after old one expired)
+     // syncps resets the onNet_ before calling if a currentState must be put onNet
+     // suppress sending if already exists (not the last cState locally received from others) and has been on network twice
+    auto express(const rInterest& i, InterestTO&& ito) {
         if (cSts_ != CONNECTED) throw runtime_error("express: not connected");
-        auto res = pit_.add(i, std::move(onD), std::move(ito));
-        schedITO(res.first->second);
+
+        bool newCS = true;
+        bool suppress = false;
+        if (auto pi = pit_.find(i.name()); pit_.found(pi)) {
+            const auto& pe = pi->second;
+            // suppress if broadcast to domain at least twice (and not "close to" expiry?)
+            if (pe.onNet_ > 1)  suppress = true;
+            if (! pe.ito_)  newCS = false;  // i is the same as last expressed cState
+        }
+        if (newCS) {
+            // i is not the same as last expressed cState
+            // find the previous local cState in PIT for this collection, if any,
+            // and remove its local info so it doesn't get re-expressed at time out
+            const auto c = i.name().first(-1);
+            for (auto& [ih, pe] : pit_) {
+                if (pe.ito_ && c.isPrefix(pe.i_.name())) {
+                    if (pe.fromNet_) { //XXX do we need this test?
+                        pe.ito_ = {};
+                    }
+                    break;
+                }
+            }
+        }
+        auto res = pit_.add(i, std::move(ito)); // add or update with local info
+        schedITO(res.first->second);  //  reschedule timeout
+        if (suppress)  return;
+
         dit_.add(i);
-        send(i);    // XXX add time-based supression (maybe using dit or pit)
+        send(i);
     }
 
     /**
-     * Handle an interest incoming from the network:
+     * Handle a cState incoming from the network:
      *  - if it's a dup of a recent interest, ignore it.
      *  - if there's no RIT match, ignore it
      *  - add it to dup interest table.
      *  - add it to PIT then upcall RIT listener (has to be done in
      *    this order so if upcall results in a Data, PIT entry exists).
      */
-    void handleInterest(rInterest i) {
+    void handlecState(rInterest i) {
+        if (! i.valid()) return;
         auto [isDup, h] = dit_.dupInterest(i);
         if (isDup) return;
 
@@ -217,57 +235,57 @@ class DirectFace {
 
         dit_.add(h);    // detect future copies of i as dups
 
-        // add interest to PIT then give it to RIT's listener.
+        // add to PIT as a from network interest, get iCb from the RIT match and give it to RIT's listener.
         schedITO(pit_.add(i).first->second);
         ri->second.iCb_(rName{*ri->second.name_}, i);
     }
 
     /**
-     * Return all pending interests matching prefix 'p'.
+     * Return the most recent pending interest matching prefix 'p'
      *
      * This is normally used to avoid waiting for the interest re-expression
      * callback when the app has new data to send.
      */
-    auto pendingInterests(const rName& p) const noexcept {
-        std::vector<rName> vec{};
-        pit_.findAll(rPrefix(p), [&vec](const auto& kv) {
-                    const auto& [n, pe] = kv;
-                    if (pe.fromNet_ && !pe.ded_) vec.emplace_back(pe.i_.name());
-                });
-        return vec;
+    auto bestCState(const rPrefix p) const noexcept {
+        if (pit_.begin() == pit_.end()) return rName{};
+        const PITentry* loc{};
+        const PITentry* net{};
+        for (const auto& [ih, pe] : pit_) {
+            if (! p.isPrefix(pe.i_.name())) continue;
+            if (pe.fromNet_ && (!net || pe.timer_->expiry() > net->timer_->expiry())) net = &pe;
+            if (pe.ito_ && (!loc || pe.timer_->expiry() > loc->timer_->expiry())) loc = &pe;
+        }
+        return (net? net:loc)->i_.name();
     }
 
     /**
-     * Handle an outgoing data:
-     * - if it's not in the pit or not marked as 'fromNet', ignore it
-     * - otherwise, delete the pit entry then send the packet.
+     * send an outgoing cAdd
      */
-    void send(rData d) {
-        auto pi = pit_.find(rPrefix(d.name()));
-        if (! pit_.found(pi)) return;
-        pitErase(pi);
-        send(d.data(), d.size());
-    }
+    void send(rData d) { send(d.data(), d.size()); }
 
     /**
-     * Handle an incoming data:
-     *  - if it's not in the PIT ignore it (flow balance and dup suppression)
-     *  - if there's no app callback, delete the pit entry and ignore it
-     *    (data probably satisfied an interest from net)
-     *  - otherwise background the pit entry (flow balance) and do the app callback.
+     * Handle an incoming cAdd:
+     *  - ignore if not structurally valid
+     *  - complain if there's no pit entry for it
+     *  - if the prefix is in the RIT, pass it to the associated data callback
      */
-    void handleData(rData d) {
-        auto pi = pit_.find(rPrefix(d.name()));
-        if (! pit_.found(pi)) return;
-        if (! pi->second.dCb_) { pitErase(pi); return; }
-
-        // let the PIT entry hang around 'in the background' for a short time
-        // to collect additional responses to the interest then delete it.
-        auto& pe = pi->second;
-        schedDED(pe);
-        pe.dCb_(pe.i_, d);
+    void handlecAdd(rData d) {
+        if (! d.valid()) return;
+        // The last component of the name is a hash of the associated cState's name.
+        // This hash is the pit lookup key. The 'valid()' above has checked that this
+        // block exists. Now check that it has the correct type then deserialize it.
+        auto ibh = d.name().lastBlk();
+        if (ibh.size() > 8 || tlv(ibh.typ()) != tlv::Version) return;
+        decltype((mhashView(ibh))) ihash = ibh.toNumber();
+        // use the hash to get the cState PIT entry
+        rInterest i{};
+        if (auto pi = pit_.find(ihash); !pit_.found(pi)) {
+            print("-handlecAdd: no PIT entry for {}\n", d.name());
+        } else {
+            i = pi->second.i_;
+        }
+        if (auto ri = rit_.findLM(rPrefix(d.name())); rit_.found(ri)) ri->second.dCb_(i, d);
     }
-
 };
 
 static inline DirectFace& defaultFace() {
