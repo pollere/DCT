@@ -426,7 +426,7 @@ struct SyncPS {
         if (!newPubs) {
             if (need.size()) {
                 // next cState should not be suppressed
-                face_.unsuppressCState(rPrefix(collName_/pubs_.iblt().rlEncode()));
+                face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
                 sendCStateSoon(distDelay);
             }
             return false;
@@ -642,7 +642,7 @@ struct SyncPS {
                         },
                        [this](rName) -> void {
                            registering_ = false;
-                           face_.unsuppressCState(rPrefix(collName_/pubs_.iblt().rlEncode())); // force sending initial state
+                           face_.unsuppressCState(collName_/pubs_.iblt().rlEncode()); // force sending initial state
                            sendCState();
                        });
     }

@@ -174,7 +174,7 @@ class DirectFace {
      *  May get multiple cStates broadcast if there are members missing different
      *  pubs after timeout collection subname is i.name().first(-1)
      */
-    auto unsuppressCState(const rPrefix& n) {
+    auto unsuppressCState(const rName& n) {
         if (auto pi = pit_.find(n); pit_.found(pi)) pi->second.onNet_ = 0;
     }
 
@@ -190,7 +190,7 @@ class DirectFace {
             const auto& pe = pi->second;
             // suppress if broadcast to domain at least twice (and not "close to" expiry?)
             if (pe.onNet_ > 1)  suppress = true;
-            if (! pe.ito_)  newCS = false;  // i is the same as last expressed cState
+            if (pe.ito_)  newCS = false;  // i is the same as last expressed cState
         }
         if (newCS) {
             // i is not the same as last expressed cState

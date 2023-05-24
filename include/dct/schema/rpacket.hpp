@@ -42,7 +42,7 @@ struct rName : tlvParser {
     constexpr rName& operator=(const rName&) = default;
     constexpr rName& operator=(rName&&) = default;
 
-    constexpr rName(tlvParser n) : tlvParser(n) { }
+    constexpr explicit rName(tlvParser n) : tlvParser(n) { }
     constexpr rName(const std::vector<uint8_t>& v) : tlvParser(v) { }
 
     // a name is valid if its length exactly covers its contained TLVs.
