@@ -1,0 +1,67 @@
+// trust schema for location reporter example
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+
+// Like the iot2 trust schema, this uses a symmetric key AEAD encryption for the
+// "wire" (cAdd) packets, but publisher privacy is enabled by designating a Subscription
+// Group for a collection whose members are the only entities that get the secret
+// key that lets them decrypt the packet.
+
+// trust anchor name associated with this schema
+_domain:    "mesh"
+
+// MBPS Publication definition
+// target and rptr are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
+
+#Pub: _domain/target/rptr/msgID/sCnt/mts
+
+locRprt: #Pub & { target: "loc" } <= locSign
+
+roleCert:   _domain/_role/_roleId/_keyinfo
+signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
+
+// There are different signing chains for monCert & locCerts.
+// locCerts are used to sign location reports published from location apps
+// on mobile devices and do not subscribe to the location reports.
+// If publisher privacy is desired, a subscription group capability
+// is used by a PPAEAD wire signer/validator to ensure that only
+// members of the subscription group get the encryption key.
+// Here, only monitors can be members of a subscriber group.
+// Within the SG, key makers (KM) are responsible for creating and distributing
+// the nonce symmetric encryption keys used to ensure publication privacy
+// and thus provide a service to the entire Collection that
+// needs to be highly available; monitors are expected to be always on.
+// The key maker capability is indicated by the capability
+// argument being a non-zero value
+// The subscriber group has a name that goes into the collection subtopic
+// taken from the _capArg of the SG cert
+
+locSign:    signCert & { _role: "locRptr" } <= locCert
+monSign:    signCert & { _role: "monitor" } <= monCert
+
+locCert:    roleCert <= domCert
+monCert:    roleCert & { _role: "monitor" } <= kmCap
+
+// capability certs (here capabilities granted to roles)
+capCert: _domain/"CAP"/capId/capArg/_keyinfo
+kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert  // allowed to be a key maker (capArg is priority)
+
+domCert: _domain/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= signCert
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _domain
+#pubValidator: "EdDSA"
+
+// used for cAdd PDUs
+#wireValidator: "AEAD"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_

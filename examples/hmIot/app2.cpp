@@ -254,7 +254,8 @@ int main(int argc, char* argv[])
     // Connect and pass in the handler
     try {
         /* main task for this entity */
-        cm.connect([&cm]{ if (role == "operator") msgPubr(cm); });
+        // cm.connect([&cm]{ if (role == "operator") msgPubr(cm); });
+        cm.connect([&cm]{ if (role == "operator") cm.oneTime(pubWait, [&cm](){ msgPubr(cm); }); });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);

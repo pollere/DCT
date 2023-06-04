@@ -87,6 +87,63 @@ struct TransportMulticast final : Transport {
     udp::endpoint our_;
     udp::endpoint sender_;
 
+    // MESHTEST>0 adds special code to test the automatic peer-to-peer meshing
+    // capabilities of DeftT. It does by accumulating a sorted list of all the
+    // peer source address and port tuples. Since all peers will construct the
+    // same list, self-consistent reachability relationships can be enforced
+    // at each perr by some simple 'canHear(peer)' boolean function. For example
+    // a linear chain can be created by saying each peer canHear the peers
+    // immediately adjacent to it in the list.
+#ifndef MESHTEST
+#define MESHTEST 0
+#endif
+#if MESHTEST>0
+    using peerID = std::pair<decltype(sender_.address()),decltype(sender_.port())>;
+    std::vector<peerID> peerSort_{};
+    size_t psid_{};   // this instance's index in peerSort_ 
+
+    auto setLocalPeer() { peerSort_.emplace_back(our_.address(), our_.port()); }
+
+    // a hack for creating topologies on a broadcast media for mesh testing
+    // new peer ids are sorted as they arrive; this member records its vector position psid_
+    // the sorted list position determines which members are considered in-range
+    // returns true for members considered in-range
+    bool canHear(const auto& sender) noexcept {
+        // locate or place sender within the sorted vector. The vector must
+        // already contain this instance so its size must be >0.
+        assert(peerSort_.size() > 0);
+        peerID s{sender.address(), sender.port()};
+        size_t spos = 0;
+        while (1) {
+            if (s == peerSort_[spos]) break;
+            if (s < peerSort_[spos]) {
+                peerSort_.insert(peerSort_.begin() + spos, std::move(s));
+                if (psid_ >= spos) ++psid_;
+                break;
+            }
+            if (++spos >= peerSort_.size()) {
+                peerSort_.push_back(std::move(s));
+                break;
+            }
+        }
+        if constexpr (MESHTEST == 1) {
+            // this test checks if the sender is adjacent in a linear order
+            return (spos == psid_ - 1 || spos == psid_ + 1);
+        } else if constexpr (MESHTEST == 2) {
+            // this test is for bifurcated topo with two members in both sides
+            auto n = peerSort_.size();
+            if (n < 3) return true;
+            n >>= 1;
+            return (psid_ >= n && spos >= n) || (psid_ <= n+1 && spos <= n+1);
+        } else {
+            return true;
+        }
+    }
+#else // MESHTEST == 0
+    auto setLocalPeer() { }
+    constexpr bool canHear(const auto&) const noexcept { return true; }
+#endif
+
     TransportMulticast(std::string_view maddr, boost::asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : Transport(std::move(rcb), std::move(ccb)), rsock_{ioc}, tsock_{ioc} {
 
@@ -97,7 +154,7 @@ struct TransportMulticast final : Transport {
         if (ifaddr.sin6_scope_id == 0) ifaddr.sin6_scope_id = if_nametoindex(defaultIf().c_str());
         dst.scope_id(ifaddr.sin6_scope_id);
         // NFD uses port 56363. Use a different one because NFD doesn't handle multicast well:
-        // lack of working dup suppression combined with its Content Store makes it babel.
+        // lack of working dup suppression combined with its Content Store makes it babble.
         listen_ = udp::endpoint(dst, 56362u);
         // multicast requires separate sockets for receive & transmit
         rsock_.open(listen_.protocol());
@@ -116,6 +173,7 @@ struct TransportMulticast final : Transport {
         // down on some dups but the win is small for the problems it can cause. It would be
         // better to fix the kernel to not loopback to the sending process.
         //tsock_.set_option(multicast::enable_loopback(false));
+        setLocalPeer(); // for mesh testing (if enabled by Makefile)
     }
     TransportMulticast(boost::asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb) :
         TransportMulticast(getenv("DCT_LOCALHOST_MULTICAST")? "ff01::1234":"ff02::1234",
@@ -126,7 +184,7 @@ struct TransportMulticast final : Transport {
             [this](boost::system::error_code ec, std::size_t len) {
                 // multicast loops back packets to the sender so filter them out
                 if (!ec && (sender_.port() != our_.port() || sender_.address() != our_.address())) {
-                    rcb_(rcvbuf_.data(), len);
+                    if (canHear(sender_)) rcb_(rcvbuf_.data(), len);
                 }
                 issueRead();
             });

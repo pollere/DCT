@@ -199,9 +199,7 @@ class DirectFace {
             const auto c = i.name().first(-1);
             for (auto& [ih, pe] : pit_) {
                 if (pe.ito_ && c.isPrefix(pe.i_.name())) {
-                    if (pe.fromNet_) { //XXX do we need this test?
-                        pe.ito_ = {};
-                    }
+                    pe.ito_ = {};
                     break;
                 }
             }
@@ -255,6 +253,7 @@ class DirectFace {
             if (pe.fromNet_ && (!net || pe.timer_->expiry() > net->timer_->expiry())) net = &pe;
             if (pe.ito_ && (!loc || pe.timer_->expiry() > loc->timer_->expiry())) loc = &pe;
         }
+        if (!net && !loc) return rName{};
         return (net? net:loc)->i_.name();
     }
 
@@ -278,13 +277,20 @@ class DirectFace {
         if (ibh.size() > 8 || tlv(ibh.typ()) != tlv::Version) return;
         decltype((mhashView(ibh))) ihash = ibh.toNumber();
         // use the hash to get the cState PIT entry
-        rInterest i{};
-        if (auto pi = pit_.find(ihash); !pit_.found(pi)) {
-            print("-handlecAdd: no PIT entry for {}\n", d.name());
-        } else {
-            i = pi->second.i_;
-        }
+        auto pi = pit_.find(ihash);
+        if (!pit_.found(pi)) return; // we didn't hear this cState
+        const auto& i = pi->second.i_;
         if (auto ri = rit_.findLM(rPrefix(d.name())); rit_.found(ri)) ri->second.dCb_(i, d);
+    }
+
+     // use the name hash to get the cState PIT entry's name
+    auto hash2Name(uint32_t h) {
+        auto pi = pit_.find(h);
+        if (!pit_.found(pi)) {
+            print("hash2Name: no PIT entry for {}\n", h);
+            return rName{};
+        }
+        return pi->second.i_.name();
     }
 };
 
