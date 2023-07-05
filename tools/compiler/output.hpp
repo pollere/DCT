@@ -395,7 +395,7 @@ struct schemaOut {
                     print("error: chain index too large ({} when max is {})\n", c, sizeof(cbm)*8);
                     abort();
                 }
-                cbm |= 1 << c;
+                cbm |= 1ul << c;
             }
             if (lcor == 0xff) lcor = 0;
             discbm |= 1ul << addDiscrim(cbm, tmplt, par, dValList(vals), lcor);

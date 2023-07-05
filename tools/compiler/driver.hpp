@@ -52,7 +52,7 @@ static constexpr int V_DEBUG  = V_DETAIL+1;
 
 //using compSet = std::bitset<64>;
 struct compSet : public boost::dynamic_bitset<> {
-    compSet() : boost::dynamic_bitset<>(128) {}
+    compSet() : boost::dynamic_bitset<>(16384) {}
 
     template<typename UnOp>
     void for_each(UnOp op) const noexcept { for (auto b = find_first(); b != npos; b = find_next(b)) { op(b); }; }

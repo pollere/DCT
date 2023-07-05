@@ -48,8 +48,8 @@ using Publication = crData;  // type of a publication
 using namespace std::literals::chrono_literals;
 
 //default values
-static constexpr int maxPubSize = 1024; // max payload in Data (with 1448B MTU
-                                        // and 424B iblt, 1K left for payload)
+static constexpr size_t maxPubSize = 1452 - 144;// max payload in Data (with 1452B IPv6+UDP MSS
+                                                // minus 144 bytes of required TLVs)
 static constexpr std::chrono::milliseconds maxPubLifetime = 2s;
 static constexpr std::chrono::milliseconds maxClockSkew = 1s;
 
@@ -201,6 +201,8 @@ struct SyncPS {
 
     constexpr auto randInt() { return randInt_(randGen()); }
 
+    constexpr size_t mtu() const noexcept { return face_.mtu(); }
+
     /**
      * @brief constructor
      *
@@ -253,6 +255,7 @@ struct SyncPS {
      * @param pub the object to publish
      */
     PubHash publish(crData&& pub) {
+        if (pub.size() > maxPubSize) return 0;
         auto h = addToActive(std::move(pub), true);
         if (h == 0) return h;
         ++publications_;
@@ -392,58 +395,58 @@ struct SyncPS {
     }
 
     auto handleDeliveryCb(const auto& iblt) {
-        if (pubCbs_.size()) {
+        if (pubCbs_.size())
             for (const auto hash : (pubs_.iblt() - pubCbs_.iblt() - iblt).peel().second) doDeliveryCb(hash, true);
-        }
     }
 
     /**
-     * @brief construct a cAdd appropriate for responding to cstate 'csName'
+     * @brief construct and send a cAdd appropriate for responding to cstate 'csName'
      *
      * The cAdd's name is the same as csName except the final component is replaced
      * with a murmurhash3 32 bit hash of csName which serves as both a compact
      * representation of csName's iblt and as a PIT key to retrieve the original
      * iblt should it be needed.
      */
-    auto makeCAdd(const rName& csName) const noexcept {
-        return crData{crName{csName.first(-1)}.append(tlv::Version, mhashView(csName)).done(),
-                      tlv::ContentType_CAdd};
+    auto shipCAdd(const rName& csName, const PubVec& pv) noexcept {
+        PubVec sv{};
+        auto ht = std::chrono::system_clock::now() + distDelay;   // set hold time for sent pubs
+        // send all the newPubs that will fit into a cAdd
+        for (size_t sz{}; const auto& p : pv) {
+           if (sz + p.size() > mtu()) continue;
+           sz += p.size();
+           sv.emplace_back(p);
+           pubs_.at(hashPub(p)).hold_ = ht;
+        }
+        if (sv.empty()) return false;
+        crData cAdd{crName{csName.first(-1)}.append(tlv::Version, mhashView(csName)).done(), tlv::ContentType_CAdd};
+        cAdd.content(sv);
+        if (! pktSigmgr_.sign(cAdd)) return false;
+        face_.send(cAdd);
+        return true;
     }
 
     // for effective meshing, need to send non-local pubs while avoiding broadcast storms
     // called when a timer expires and proceeds to create a cAdd for eligible pubs, if any
     void sendOthers(uint32_t csId) {
-        // check that the pubs on list are still eligible to send
-        if (auto it = pendOthers_.find(csId); it == pendOthers_.end() ) return;
-        auto& hv = pendOthers_.at(csId);
-        if (!updatePV(hv)) {
-            pendOthers_.erase(csId);
+        // check that the pubs on list are still eligible to send and the
+        // associated cstate still exists.
+        auto it = pendOthers_.find(csId);
+        if (it == pendOthers_.end()) return;
+        auto& hv = it->second;
+        const auto name = face_.hash2Name(csId);
+        if (name.size() == 0 || !updatePV(hv)) {
+            pendOthers_.erase(it);
             return;
         }
 
         // send all the eligible matching non-local origin pubs for csId that fit in a cAdd packet
         // set hold time
-        auto ht = std::chrono::system_clock::now() + 2 * distDelay;
         PubVec sv{};
-        for (size_t i{}, sz{}; i < hv.size(); ++i) {
-            auto& p = pubs_.at(hv[i]);   //existence was checked in updatePV
-            const auto& pub = p.i_;
-            if (pub.size() > maxPubSize) {
-                print("sendOthers: skipping {} which exceeds maxPubSize\n",pub.name());
-                continue;
-            }
-            if (sz + pub.size() > maxPubSize) continue;
-            sz += pub.size();
-            p.hold_ = ht;
-            sv.emplace_back(pub);
-        }
+        for (const auto h : hv) sv.emplace_back(pubs_.at(h).i_);
         if (sv.empty() || !orderPub_(sv)) return;
 
-        if (face_.hash2Name(csId).nBlks() > 0) {
-            auto cAdd = makeCAdd(face_.hash2Name(csId)).content(sv);
-            if (pktSigmgr_.sign(cAdd)) face_.send(cAdd);
-        }
-        pendOthers_.erase(csId);
+        shipCAdd(name, sv);
+        pendOthers_.erase(it);
     }
 
     bool handleCState(const rName& name) {
@@ -455,7 +458,7 @@ struct SyncPS {
         // pubs_ contains all pubs we have so send the ones we have & the peer doesn't.
         auto iblt{name2iblt(name)};
         handleDeliveryCb(iblt);
-        auto [have, need] = (pubs_.iblt() - iblt).peel();
+        const auto& [have, need] = (pubs_.iblt() - iblt).peel();
         if (need.size() == 0 && have.size() == 0 ) return false;    // cState same as local collection
 
         // separate haves into local originated and other-originated
@@ -493,24 +496,9 @@ struct SyncPS {
             return false;
          }
 
-        // local origin Pubs (re)sent at priority in separate cAdds from others
-        // send all the local origin pubs that will fit in a cAdd packet, always sending at least one
-        // pub hold time gives other members time to receive these before sending again for another cState
-        auto ht = now + distDelay;   // set hold time when pub is actually sent
-        // XXXX should skip over pubs that push over maxPubSize to see if any others fit
-        assert(pv.size() > 0);
-        for (size_t i{}, psize{}; i < pv.size(); ++i) {
-            assert(pv[i].size() <= maxPubSize);
-            if ((psize += pv[i].size()) > maxPubSize) {
-                pv.resize(i);
-                break;
-            }
-            pubs_.at(hashPub(pv[i])).hold_ = ht;
-        }
-
-        auto cAdd = makeCAdd(name).content(pv);
-        // XXX should this return false if there's a signing problem?
-        if (pktSigmgr_.sign(cAdd)) face_.send(cAdd);
+        // ship all the local origin pubs that will fit in a cadd packet
+        if (! shipCAdd(name, pv)) return false;
+ 
         auto d = distDelay * 2;
         if (need.size()) {
             // next cState should not be suppressed
@@ -522,19 +510,16 @@ struct SyncPS {
     }
 
     /*
-     * For publishing newly created, unsent publications
-     * No need to go through previously received cStates, any cState will be missing new locally created Pubs
      * orderPubs puts newest first
      */
     bool sendCAdd(const rName name) {
         scheduledCStateId_->cancel();     // if a scheduleCStateId_ is set, cancel it
 
         auto iblt{name2iblt(name)}; // use the retrieved cState's iblt to find new pubs
-        // handleDeliveryCb(iblt); // this should have happened when the cstate first arrived
-        auto [have, need] = (pubs_.iblt() - iblt).peel();
+        const auto& [have, need] = (pubs_.iblt() - iblt).peel();
         if (have.size() == 0) return false;    // no new pubs
 
-        PubVec pv{}, sv{};    // vectors of publications I have that were locally created, newest first       
+        PubVec pv{};    // vector of locally created publications I have, newest first
         auto now = std::chrono::system_clock::now();
         for (const auto hash : have) {
             if (const auto& p = pubs_.find(hash); p != pubs_.end()) {
@@ -544,30 +529,17 @@ struct SyncPS {
         }
         if (! orderPub_(pv)) return false;    //order priority returns all pubs to send in pv - puts new pubs first
 
-       auto ht = now + distDelay;   // set hold time for sent pubs
-        // send all the newPubs that will fit into a cAdd
-        // skip over a pub that makes the cAdd oversize to see if any others will fit
-        for (size_t i{}, sz{}; i < pv.size(); i++) {
-             if (pv[i].size() > maxPubSize) {
-                    print("sendCAdd: skipping {} which exceeds maxPubSize\n",pv[i].name());
-                    continue;
-                }
-                if (sz + pv[i].size() > maxPubSize) continue;
-                sz += pv[i].size();
-                sv.emplace_back(pv[i]);
-                pubs_.at(hashPub(pv[i])).hold_ = ht;
-        }
-        if (sv.empty()) return false;
-
-        auto cAdd = makeCAdd(name).content(pv);
-        if (! pktSigmgr_.sign(cAdd)) return false;
-        face_.send(cAdd);
+        if (shipCAdd(name, pv)) return false;
         // delay so receiving members can confirm.
         // if there are more new pubs to send, others' cStates will cause sending
         sendCStateSoon(2*distDelay);
         return true;
     }
 
+    /*
+     * For publishing newly created, unsent publications
+     * any cState will be missing new locally created Pubs
+     */
     bool sendCAdd() {
         // look for a cState from network - would like to get most recent one from network
         const auto name  = face_.bestCState(collName_);
@@ -627,7 +599,7 @@ struct SyncPS {
                 if (ht.time_since_epoch().count()) pubs_.at(hashPub(d)).hold_ = ht;
                 continue;
             }
-            if (isExpired_(d) || ! pubSigmgr_.validate(d)) {
+            if (d.size() > maxPubSize || isExpired_(d) || ! pubSigmgr_.validate(d)) {
                 // print("pub {}: {}\n", isExpired_(d)? "expired":"failed validation", d.name());
                 // unwanted pubs have to go in our iblt or we'll keep getting them
                 ignorePub(d);

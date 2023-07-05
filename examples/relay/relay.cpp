@@ -1,5 +1,5 @@
 /*
- * basicRelay.cpp relays Publications between different DeftTs (that can be
+ * relay.cpp relays Publications between different DeftTs (that can be
  * attached to different network segments) whose identity bundles have the same trust anchor
  * and compatible trust schemas. A compatible trust schema has the same trust root and can be
  * identical, one a subset of the other, or overlap in a way that allows them to share some
@@ -16,19 +16,19 @@
  * Different relay DeftTs may use different "wire" validators but must all use the same
  * publication validator, even if going to a "pure" relay link
  *
- * After set up, basicRelay waits for a Publication to arrive from one of the transports.
+ * After set up, relay waits for a Publication to arrive from one of the transports.
  * Upon receipt, the Publication is published to all the attached DeftTs. If the DeftTs
  * do not have identical trust schemas, then pubRecv() must use publishValid() rather
  * than publish() when relaying publications. publishValid() applies a DeftT's trust schema
  * to publications which will filter publications not contained in that DeftT's trust schema.
  * (publishValid() can be used in all cases for extra security.)
- * basicRelay also supplies a callback for each transport to call when a new signing
+ * relay also supplies a callback for each transport to call when a new signing
  * cert is added to its cert store; the cert is passed to all the other DeftTs where they are
  * always validated before adding to their own cert stores (and publishing).
- * basicRelay also passes through all publications of a publication distributor to extend the
+ * relay also passes through all publications of a publication distributor to extend the
  * trust domain.
  *
- * basicRelay.cpp is not intended as production code.
+ * relay.cpp is not intended as production code.
  */
 /*
  * Copyright (C) 2020-3 Pollere LLC
@@ -93,23 +93,22 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
 /*
  * pubRecv is the callback passed to subscribe() which is invoked upon arrival of validated (crypto and
  * structural) Publications to DeftT s
- * Publication p is published to all the (other) DeftTs
+ * Publication p is published to all the (other) DeftTs which will silently discard (returns false) if p is not in their schema
  * publish() is used if schema is the same for all DeftTs or if the DeftTs with full schemas only subscribe to publications
  * that are defined in the sub-TSs. Otherwise publishValid() is recommended in order to check structural
  * validation against its schema.
  */
 static void pubRecv(ptps* s, const Publication& p) {
-    /*  auto now = std::chrono::system_clock::now();
+     /* auto now = std::chrono::system_clock::now();
      print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
           (s->label().size()? s->label() : "default"), p.name()); */
     try {
-        for (auto sp : dtList)  
+        for (auto sp : dtList)
             if (sp != s) {
                 if(skipValidatePubs) {
                     // print("\trelayed w/o validate to interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
                     sp->publish(Publication(p));
                 } else {
-                    // print("\trelayed to validate for interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
                     sp->publishValid(Publication(p));
                 }
             }
@@ -130,6 +129,8 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     /* auto now = std::chrono::system_clock::now();
      print("{:%M:%S} {}:{}:{}\trcvd signing cert {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
           (s->label().size()? s->label() : "default"), c.name()); */
+    // hack to keep from relaying relay certs - they aren't needed, only used on cAdds
+    if (c.name()[1].toSv() == "relay"s) return;
     try {
         for (auto sp : dtList)
         if (sp != s) {
@@ -150,13 +151,15 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
  *  determine if a  pub's signer is known (in the cert store) to a shim before it is forwarded there.
  */
 static void keyPubRecv(ptps* s, const Publication& p) {
-    /* auto now = std::chrono::system_clock::now();
-    print("{:%M:%S} {}:{}:{}\trcvd KEYS pub {}", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-         (s->label().size()? s->label() : "default"), p.name()); */
+   /*auto now = std::chrono::system_clock::now();
+    print("{:%M:%S} {}:{}:{}\tkeyPubRcv {}", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
+         (s->label().size()? s->label() : "default"), p.name());*/
     try {
         for (auto sp : dtList)
             if (sp != s) {
-                sp->publishKnown(Publication(p));
+               if (!sp->publishKnown(Publication(p)))
+                    print(" - failed publishKnown\n", p.name()[1].toSv() );
+               //else print(" - successfully relayed\n", p.name()[1].toSv() );
             }
     } catch (const std::exception& e) {}
 }
@@ -179,7 +182,7 @@ static void pubFailure(ptps* s, const Publication& pub) {
 }
 
 /*
- * Main() for the basicRelay application.
+ * Main() for the relay application.
  * First complete set up: parse input line for list of transports for the relay.
  *      IO labels can have the form "protocol:host:port" where protocol is tcp or udp
  *      The "default" Face is selected if no port is specified
@@ -231,7 +234,7 @@ int main(int argc, char* argv[])
     for (const auto& l : dtLabel) {
         size_t m = l.find(" ", 0u);
         if(m == std::string::npos) {
-            std::cerr << "basicRelay main: command line list of labels and id bundles misformatted" << std::endl;
+            std::cerr << "relay main: command line list of labels and id bundles misformatted" << std::endl;
         }
         auto s_id = dtList.size();
         readBootstrap(l.substr(m+1));    // parse the bootstrap file for this DeftT shim
@@ -250,14 +253,14 @@ int main(int argc, char* argv[])
                                            l.substr(0u,m), chainRecv, keyPubRecv, pubFailure} );
             }
         } catch (const std::exception& e) {
-            std::cerr << "basicRelay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;
+            std::cerr << "relay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;
             exit(1);
         }
         auto& s = *dtList.back();
 
         //role must be "relay" (could remove this)
         if(s.attribute("_role") != "relay") {
-                print("basicRelay app got role {} for interFace {} instead of relay\n",
+                print("relay app got role {} for interFace {} instead of relay\n",
                       s.attribute("_role"), s.label());
                 exit(1);
         }
@@ -266,7 +269,7 @@ int main(int argc, char* argv[])
         // Connect and pass in the handler
         try {
             s.connect([&s](){
-                print("basicRelay: DeftT connected on {}:{} interFace\n", s.label(), s.attribute("_roleId"));
+                print("relay: DeftT connected on {}:{} interFace\n", s.label(), s.attribute("_roleId"));
                 s.subscribe(pubRecv);} );
         } catch (const std::exception& e) {
             std::cerr << "main: encountered exception while trying to connect transport " << l << ": " << e.what() << std::endl;

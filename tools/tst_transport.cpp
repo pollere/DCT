@@ -23,7 +23,6 @@
 #include <charconv>
 #include <chrono>
 #include <string_view>
-//#include <utility>
 #include "dct/format.hpp"
 #include "dct/face/default-io-context.hpp"
 #include "dct/face/transport.hpp"
@@ -70,20 +69,42 @@ static dct::Transport* io;
 static auto timer = std::unique_ptr<Timer>{};
 static auto dat = std::vector<uint64_t>(4, 0);
 static int nsend{};
+static int burst{1};
 static bool periodic{false};
 static bool reply{false};
 static bool initial{false};
 
 static void doSend() {
+    if (nsend <= 0) return;
+    if (dat.size() >= 16384/sizeof(dat[0])) dat.pop_back();
     dat.insert(dat.begin(), getSysTime());
-    dat.pop_back();
-    io->send((uint8_t*)dat.data(), dat.size() * sizeof(dat[0]));
-    if (nsend && --nsend <= 0) exit(0);
+    // add a tlv header on the front so testing will work with stream transports
+    // the header is 8 bytes of which 2 or 4 are the hdr and the rest become payload.
+    auto pkt = dat;
+    auto s = dat.size() * sizeof(dat[0]);
+    uint64_t hdr{6};
+    if (s < 253 - 6) {
+        hdr |= (s + 6) << 8;
+    } else {
+        s += 4;
+        hdr |= 253 << 8;
+        hdr |= (s & 0xff00) << 8;
+        hdr |= (s & 0xff) << 24;
+    }
+    pkt.insert(pkt.begin(), hdr);
+    io->send((uint8_t*)pkt.data(), pkt.size() * sizeof(pkt[0]));
+    if (--nsend <= 0) {
+        timer->expires_after(2s);
+        timer->async_wait([](const auto&) { exit(0); });
+    }
 };
+
+static void doSends() { for (int i = burst; --i >= 0; ) doSend(); }
 
 void restartTimer() {
     timer->async_wait([](const auto& e) {
-            if (e == boost::system::errc::success) doSend();
+            if (e == boost::system::errc::success) doSends();
+            if (nsend <= 0) return;
             timer->expires_after(1s);
             restartTimer();
         });
@@ -101,29 +122,38 @@ int main(int argc, const char* argv[]) {
         if (argv[0][1] == 'i') initial = true;
         else if (argv[0][1] == 'p') periodic = true;
         else if (argv[0][1] == 'r') reply = true;
+        else if (argv[0][1] == 's') {
+            dat.resize(std::stoi(std::string{*++argv}) / sizeof(dat[0]));
+            --argc;
+        }
         else if (argv[0][1] == 'n') {
             nsend = std::stoi(std::string{*++argv});
+            --argc;
+        }
+        else if (argv[0][1] == 'b') {
+            burst = std::stoi(std::string{*++argv});
             --argc;
         }
     }
     if (argc > 1) addr = argv[1];
     boost::asio::io_context& ioc{getDefaultIoContext()};
+    timer = std::make_unique<Timer>(ioc, 1s);
+    if (nsend == 0 && reply && !periodic && !initial) nsend = 1000000;
+
     try {
         io = &dct::transport(addr, ioc,
                                 [](auto pkt, auto len) {
-                                    dat.insert(dat.begin(), *(uint64_t*)pkt);
+                                    uint64_t ts;
+                                    std::memcpy(&ts, pkt + 8, 8);
+                                    dat.insert(dat.begin(), ts);
                                     dat.pop_back();
-                                    if (! reply) {
-                                        print("got {} bytes, {} transit, {} rtt\n", len, tfmt(dat[0]), tfmt(dat[1]));
-                                        return;
-                                    }
-                                    print("got {} bytes, {} transit time\n", len, tfmt(dat[0]));
-                                    doSend();
-                                }, []{ if (initial) doSend(); });
-        if (periodic) {
-            timer = std::make_unique<Timer>(ioc, 1s);
-            restartTimer();
-        }
+                                    print("got {} bytes, {} transit, {} rtt\n", len, tfmt(dat[0]), tfmt(dat[1]));
+                                    if (reply) doSend();
+                                },
+                                []{
+                                    if (initial) doSends();
+                                    if (periodic) restartTimer();
+                                });
         io->connect();
         ioc.run();
     } catch (const std::runtime_error& se) { print("error: {}\n", se.what()); }

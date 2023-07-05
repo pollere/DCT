@@ -106,7 +106,7 @@ class DirectFace {
     // Get the asio io_context used by this face
     boost::asio::io_context& getIoContext() const noexcept { return ioContext_; }
 
-    constexpr size_t getMaxPacketSize() const noexcept { return 1500 - 40 - 8; } //XXX
+    constexpr size_t mtu() const noexcept { return io_.mtu(); }
 
     std::shared_ptr<Timer> schedule(std::chrono::microseconds delay, TimerCb&& cb) {
         auto timer = std::make_shared<Timer>(ioContext_, delay);
@@ -168,8 +168,6 @@ class DirectFace {
      *   even though it was multicast to the net to unblock completion callbacks
      *   at the origin. E.g., during cert dist peer sent this interest followed
      *   by pubs and it needs to hear pubs arrived.
-     *
-     *  suppression experiment
      *
      *  May get multiple cStates broadcast if there are members missing different
      *  pubs after timeout collection subname is i.name().first(-1)

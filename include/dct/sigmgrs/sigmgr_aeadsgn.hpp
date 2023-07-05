@@ -178,8 +178,7 @@ struct SigMgrAEADSGN final : SigMgr {
              }
              i = (i + 1) % keyListSize();
         } while (i != m_decryptIndex);
-        print("aeadsgn decrypt failed on: ");
-        print(" {}\n", d.name());
+        // print("aeadsgn decrypt failed on:  {}\n", d.name());
         return false;
        } catch (std::exception& e) { print("aeadsgn decrypt failed\n"); throw runtime_error (e.what()); }
     }

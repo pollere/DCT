@@ -6,6 +6,7 @@ CXXFLAGS = -g -O0 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/includ
 CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=address,undefined
 CXXFLAGS += -ferror-limit=4
+CXXFLAGS += -DMESHTEST=0
 #CXXFLAGS += -fsanitize=leak
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 DEPS = $(HDRS)

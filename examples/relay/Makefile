@@ -12,7 +12,7 @@ CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=address,undefined
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 DEPS = $(HDRS)
-BINS = basicRelay sens cntrl
+BINS = relay sens cntrl
 JUNK = 
 
 # OS dependent definitions
@@ -26,11 +26,11 @@ LIBS += -lsodium
 endif
 
 #all: $(BINS)
-all: basicRelay sens cntrl
+all: relay sens cntrl
 
 .PHONY: clean distclean tags
 
-basicRelay: basicRelay.cpp $(DEPS)
+relay: relay.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 
 sens: sens.cpp $(DEPS)

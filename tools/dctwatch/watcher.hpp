@@ -60,7 +60,8 @@ struct AsIO {
         // scope_id is not handled correctly for 'node_local' so we stick it in as a numeric value
         auto ifaddr = getIp6Addr(defaultIf());
         if (ifaddr.sin6_scope_id == 0) ifaddr.sin6_scope_id = if_nametoindex(defaultIf().c_str());
-        auto dst = boost::asio::ip::make_address_v6(getenv("DCT_LOCALHOST_MULTICAST")? "ff01::1234":"ff02::1234");
+        auto dst = boost::asio::ip::make_address_v6(getenv("DCT_MULTICAST_ADDR")?
+                           getenv("DCT_MULTICAST_ADDR") : "ff02::1234");
         dst.scope_id(ifaddr.sin6_scope_id);
         listen_ = boost::asio::ip::udp::endpoint(dst, 56362u);
         // multicast requires separate sockets for receive & transmit

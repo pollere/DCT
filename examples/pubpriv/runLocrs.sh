@@ -10,6 +10,6 @@ for lr in ${locRs[@]}; do
   ./loc bundles/$lr.bundle &
   echo -n " $lr"
   echo
-  sleep 1
+#  sleep 1
 done
 echo

@@ -40,7 +40,7 @@
 namespace dct {
 
 //if not using syncps defaults, set these here
-static constexpr size_t MAX_CONTENT=768; //max content size in bytes, <= maxPubSize in syncps.hpp
+static constexpr size_t MAX_CONTENT=1024; //max content size in bytes, < maxPubSize + (~300bytes) in syncps.hpp
 static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
 
 /* 

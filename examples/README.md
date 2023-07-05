@@ -6,9 +6,11 @@ These directories are included to illustrate how DCT can be used and to perhaps 
 
 - office: another example, originally developed for a tutorial at the 2021 ACM ICN conference
 
-- lpubpriv: very simple location-based example to illustrate publisher privacy signature managers.
+- pubpriv: very simple location-based example to illustrate publisher privacy signature managers.
 
 - relay: directory for relays and usage examples
+
+- robust: directory  with example for testing robust mesh features in syncps
 
 Writing trust schemas in VerSec's language and creating identity bundles can be somewhat tedious, but both of these should be amenable to automation.
 

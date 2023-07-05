@@ -53,9 +53,9 @@
 #include <dct/utility.hpp>
 #include "km_election.hpp"
 
-namespace dct {
-
 using namespace std::literals::chrono_literals;
+
+namespace dct {
 
 struct DistSGKey {
     using connectedCb = std::function<void(bool)>;
@@ -105,6 +105,7 @@ struct DistSGKey {
     std::chrono::milliseconds m_reKeyInt{3600};
     std::chrono::milliseconds m_keyRand{10};
     std::chrono::milliseconds m_keyLifetime{3600+10};
+    std::chrono::milliseconds m_mrLifetime{200ms};
     kmElection* m_kme{};
     uint32_t m_KMepoch{};      // current election epoch
     bool m_keyMaker{false};     // true if this entity is a key maker
@@ -124,26 +125,14 @@ struct DistSGKey {
              m_sgCap{Cap::checker("SG", pPre, cs)},
              m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
              m_keyLifetime(m_reKeyInt + m_keyRand) {
+        // the associated sync session is started after cert distributor completes  setup
+        m_sync.autoStart(false);
         m_sync.cStateLifetime(253ms);
         m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
         m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),mreq=crPrefix(m_mrPrefix)](const auto& p) {
-                if (mreq.isPrefix(p.name())) return 6000ms; //0ms;
+                if (mreq.isPrefix(p.name())) return m_mrLifetime;
                 return cand.isPrefix(p.name())? 1000ms : m_keyLifetime;
             });
-#if 0
-        // Order publications by ours first then most recent first
-        m_sync.filterPubsCb([](auto& pOurs, auto& pOthers) {
-                if (pOurs.empty()) return; // non-keymakers don't reply
-                const auto cmp = [](const auto& p1, const auto& p2) {
-                    return p1.name().last().toTimestamp() > p2.name().last().toTimestamp();
-                };
-                if (pOurs.size() > 1) std::sort(pOurs.begin(), pOurs.end(), cmp);
-                if(! pOthers.empty()) {
-                    std::sort(pOthers.begin(), pOthers.end(), cmp);
-                    for (auto& p : pOthers) pOurs.push_back(p);
-                }
-            });
-#endif
 
         // get our identity thumbprint, check if we're allowed to make keys, check if we
         // are in subscriber group, then set up our public and private signing keys.
@@ -155,6 +144,7 @@ struct DistSGKey {
     // publish my membership request with updated key: name <m_mrPrefix><timestamp>
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
     void publishMembershipReq() {
+        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay"s)  return;   //XXX hack for relays
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         if(!m_subr) return;     // don't have permission to be a member
         crData p(m_mrPrefix/std::chrono::system_clock::now());
@@ -162,7 +152,7 @@ struct DistSGKey {
         m_keySM.sign(p);    // will put my thumbprint into Publication
         m_mrPending = true;
         m_sync.publish(std::move(p));
-        m_mrRefresh = m_sync.schedule(m_keyLifetime, [this](){ publishMembershipReq(); });
+        m_mrRefresh = m_sync.schedule(m_mrLifetime, [this](){ publishMembershipReq(); });
     }
 
     // Called when a group key has been received and decrypted. Cancel any pending refresh
@@ -241,7 +231,7 @@ struct DistSGKey {
     void initDone() {
         if (m_init) {
             m_init = false;
-      //      m_sync.cStateLifetime(6763ms);
+            // m_sync.cStateLifetime(6763ms);
             m_connCb(true);
         }
     }
@@ -256,6 +246,8 @@ struct DistSGKey {
      */
     void receiveSGKeyRecords(const rPub& p)
     {
+        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay"s)  return;   //XXX hack for relays
+
         if (m_kmpri(p.thumbprint()) <= 0) {
             print("ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
             return;
@@ -263,15 +255,19 @@ struct DistSGKey {
         if (m_keyMaker) {
             // another member claims to be a keyMaker - largest thumbPrint wins
             if (m_tp < p.thumbprint()) {
-                    print("keymaker got keylist from {}\n", m_certs[p].name());
+                    // relinquish keymaker status
                     m_keyMaker = false;
                     m_kmtp = p.thumbprint();
+                    m_curKeyCT = 0;
+                    m_KMepoch = 0;
                     m_sync.unsubscribe(m_mrPrefix);
                     publishMembershipReq();
             }
             return;
         }
+        // there is now a keymaker, publish a membership request
         if(m_init && m_subr && !m_mrPending) {
+            m_kmtp = p.thumbprint();
             publishMembershipReq();
             return;
         }
@@ -294,7 +290,17 @@ struct DistSGKey {
         }
         // check if keymaker has a larger tp than my stored value (can resolve conflict after elections this can happen in
         // relayed domains in particular), if so, (re)set my saved value and cur key ct so I get a new key
-        if (m_kmtp < p.thumbprint())    { m_curKeyCT = 0; m_kmtp = p.thumbprint(); }
+         if (m_kmtp < p.thumbprint())    {
+            m_kmtp = p.thumbprint();    // changing keymaker
+            if (m_curKeyCT > 0 && !m_mrPending) {
+                 // make sure I get this new key (delay as not be needed if on keymaker's list already)
+                m_mrRefresh = m_sync.schedule(m_mrLifetime, [this](){ publishMembershipReq(); });
+                m_mrPending = true;
+            }
+            m_curKeyCT = 0;
+        } else if (m_kmtp > p.thumbprint()) return;   // from a keymaker that has been displaced by one I've already heard from
+
+
 
         // if I'm a subscriber, check if I'm included in this pub
         static constexpr auto less = [](const auto& a, const auto& b) -> bool {
@@ -317,9 +323,11 @@ struct DistSGKey {
             //no secret key for me in this pub
             if (std::cmp_less(m_curKeyCT, newCT) && !m_mrPending) {
                 // new key is being published, make sure keymaker has my membership
-                m_sync.oneTime(2000ms, [this](){ publishMembershipReq(); } ) ;
+                 // make sure I get this new key (delay as not be needed if on keymaker's list already)
+                m_mrRefresh = m_sync.schedule(m_mrLifetime, [this](){ publishMembershipReq(); });
+                m_mrPending = true;
             }
-            return;
+            return; //no key for me in this pub
         }
         std::span<const uint8_t> sgPK{};
         std::span<const uint8_t> sgSK{};
@@ -386,11 +394,14 @@ struct DistSGKey {
     void setup(connectedCb&& ccb) {
         m_connCb = std::move(ccb);
         if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;    // this will need to be changed if put in names for subscriber groups
-        // XXXX Hack to keep a relay from participating in pub group since it doesn't do encryption or decryption
-        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay"s) {
-            initDone();
-            return;
-        }
+
+         // XXXX Hack for relay: doesn't participate in pub group as it doesn't do encryption or decryption
+        // but needs to pass through the sgklists so has a gk distributor active with its own subscription cb
+        // which is set by the ptps shim and the ptps shim also calls the start() for this sync as there are
+        // other conditions which must be met beforehand
+        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay"s) { initDone(); return; }
+
+        m_sync.start();
 
         // build function to get the key maker priority from a signing chain then
         // use it to see if we should join the key maker election
@@ -522,7 +533,7 @@ struct DistSGKey {
         if (m_mbrList.size() == 80*maxKR)   return;
 
         auto tp = p.thumbprint();
-        if(! m_sgMem(tp)) return;  //this signing cert doesn't have SG capability.
+        if(! m_sgMem(tp) || m_mbrList.contains(tp)) return;  //this signing cert doesn't have SG capability or already on list
         // XXXX Test here for request from relay role in /keys/pubs/mr (later would be rejected in validation)
         if(m_pubdist && m_certs[tp].name()[1].toSv() == "relay"s)  return;    //this is a hacky hack
 

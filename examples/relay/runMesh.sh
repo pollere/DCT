@@ -7,8 +7,8 @@
 relays=(1) # 2 3)
 
 for r in ${relays[@]}; do
-  ./basicRelay -l " mesh/mesh$r.bundle, mesh/snet$r.bundle" &
-  echo -n " starting basicRelay$r"
+  ./relay -l " mesh/mesh$r.bundle, mesh/snet$r.bundle" &
+  echo -n " starting relay$r"
   echo -n " "
   sleep 1
 done

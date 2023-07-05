@@ -20,7 +20,7 @@ Additional features and filtering can be added to customize the Basic Relay. Pub
 
 ### Example using hmIoT
 
-A few examples use the hmIot directory's applications with basicRelays and the figure below. DCT/examples/relay directory contains ioth.rules (a copy of examples/hmIot/iot1.rules with relay specification added) and iote.rules, a subset of ioth.rules that *only* contains the frontDoor publications and uses AEAD for cAdds on an "external" interface. A script, mkIotIDs.sh, is included for making identity bundles that illustrate use of relays with the home IoT example. A relay element (*home*) in the home network has a multicast DeftT on the local home network and a unicast DeftT on an external link. A second relay (*away*) has a unicast DeftT on the external side and multicast on the local away side. A roamOp on the away network can produce the same commands as any operator but the away relay will only publish commands for the frontDoor to the external interface as relays use the iote.rules rules for their external DeftT. The external DeftT will not validate (thus will discard) commands to devices other than frontDoor. Looking at the schemas and the script to make the bundles will show:
+A few examples use the hmIot directory's applications with relays and the figure below. DCT/examples/relay directory contains ioth.rules (a copy of examples/hmIot/iot1.rules with relay specification added) and iote.rules, a subset of ioth.rules that *only* contains the frontDoor publications and uses AEAD for cAdds on an "external" interface. A script, mkIotIDs.sh, is included for making identity bundles that illustrate use of relays with the home IoT example. A relay element (*home*) in the home network has a multicast DeftT on the local home network and a unicast DeftT on an external link. A second relay (*away*) has a unicast DeftT on the external side and multicast on the local away side. A roamOp on the away network can produce the same commands as any operator but the away relay will only publish commands for the frontDoor to the external interface as relays use the iote.rules rules for their external DeftT. The external DeftT will not validate (thus will discard) commands to devices other than frontDoor. Looking at the schemas and the script to make the bundles will show:
 
 - The **home** (green in figure) wifi network is using the ioth.rules schema
 
@@ -32,7 +32,7 @@ A few examples use the hmIot directory's applications with basicRelays and the f
 
 ![relay.hmIotex](relay.hmIotex.png)
 
-Note that the subscribe line in *basicRelay.cpp* **may** be changed to:
+Note that the subscribe line in *relay.cpp* **may** be changed to:
 
     s.subscribe("frontdoor", pubRecv)
 
@@ -56,14 +56,14 @@ which creates identity bundles for all the interfaces. This directory should be 
 The relay is started with a list (-l option) of identity bundles and their interfaces. A space in front of the bundle name means a null address which uses the default (UDP multicast) interface. Other interfaces must be specified. (Future plans are to add this to the specifications in the schema.) Start the home relay with its external interface as a passive listener:
 
 ```
-basicRelay -l " hmIoT/home.l.bundle,34567 hmIoT/home.e.bundle"
+relay -l " hmIoT/home.l.bundle,34567 hmIoT/home.e.bundle"
 ```
 
 On away, start a relay and the roaming operator:
 
 ```
-basicRelay -l " hmIoT/away.l.bundle,awayhostname:34567 hmIoT/away.e.bundle"
-../hmIot/app4 ./hmIoT/roamOp.bundle
+relay -l " hmIoT/away.l.bundle,awayhostname:34567 hmIoT/away.e.bundle"
+../hmIot/app3 ./hmIoT/roamOp.bundle
 ```
 
 Although the roaming operator publishes commands to both frontdoor and gate, only publications with a target of frontdoor are published in the sync zone on the external link so that only the home app with the frontdoor bundle will receive any messages from away and only target frontdoor messages will be relayed to the away network. 
@@ -74,7 +74,13 @@ To test on the same machine, make a slightly different schema for the away local
 
 Relays can also be used to extend a single trust domain geographically, with all relay DeftTs using an identical schema (with the possible exception of different cAdd signing/encryption). This would make the *home* and *away* sync zones appear as a single network to its entities. If AEAD signing is selected for the cAdds, each sync zone will be encrypted separately.
 
-To better understand relaying, these variants can be tried while monitoring communications with *dctwatch*.
+To use tcp instead of udp on **unicast** connections, put "tcp:" ahead of addresses, e.g. "tcp:34567" or "tcp:awayhostname:34567".
+
+To better understand relaying, run examples while monitoring communications with *dctwatch*.
+
+### Setting up distinct multicast subnets
+
+To test relays on a single machine or a single broadcast network, subnets using different IPv6 multicast addresses can be used. If not set, a DeftT uses ff01::1234 as the default. The runAway.sh script shows setting the multicast address for the "away" entities to ff01::5678 and setting the away relay's unicast UDP port to use the local 127.0.0.1:34567 port. For testing on a single physical subnet, ff02 can be used. Not that a dctwatch can be set up for the non-default multicast group independently, e.g. (setenv DCT_MULTICAST_ADDR ff01::5678 ; dctwatch -h -n -d)
 
 ### Meshing relays
 
@@ -97,7 +103,7 @@ cntrl mesh/cntrl.bundle
 runMesh.sh
 ```
 
-"killall basicRelay"" can be used to terminate the script.
+"killall relay"" can be used to terminate the script.
 
 ### References and related work
 
@@ -109,4 +115,4 @@ Early thoughts on relays at: http://pollere.net/Pdfdocs/NDNandOT.pdf.
 
 ---
 
-Copyright (C) 2022-3 Pollere LLC 
+##### Copyright (C) 2022-3 Pollere LLC

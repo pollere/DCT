@@ -43,7 +43,7 @@ using connectedCb = std::function<void(bool)>;
 
 /*
  * Key distributor for certs.
- * Parent certstore sets the wirePrefix used for its SyncPubSub (would start with domain and
+ * Parent certstore sets the wirePrefix used for its SyncPubSub (would   with domain and
  * probably include "cert") and sets the pubprefix used for subscription in start().
  * Also passes in a call back for each new received signing cert.
  *
@@ -86,7 +86,7 @@ struct DistCert
      * The dct model calls when it is started.
      * Passed a callback to use when the publication of the signing chain is confirmed.
      * This approach just keeps trying to publish all the keys in m_skv but the application
-     * can set a timeout to exit if m_confCb isn't called after a suitable delay
+     * can set a timeout to exit if m_connCb isn't called after a suitable delay
      */
     void setup(connectedCb&& connCb) { m_connCb = std::move(connCb); }
 
@@ -107,6 +107,14 @@ struct DistCert
         if (! m_initDone && m_initialPubs.empty()) initDone();
         // ensure publication of relayed (or new local) certs
         m_sync.publish(c);
+    }
+
+    // adding for ptps - relayed certs only so don't set m_havePeer
+    void publishCert(const rData c, DelivCb cb) {
+        if (! cb) abort(); // XXX debugging - invalid callback
+        if (! m_initDone && m_initialPubs.empty()) initDone();
+        // ensure publication of relayed (or new local) certs
+        m_sync.publish(c, std::move(cb));
     }
 
     /*

@@ -53,7 +53,8 @@ domCert: _domain/_keyinfo
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain
-#pubValidator: "AEADSGN"
+// #pubValidator: "AEADSGN"
+#pubValidator: "EdDSA"
 
 // validator for cAdds
 #wireValidator: "EdDSA"

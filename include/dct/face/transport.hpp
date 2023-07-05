@@ -56,42 +56,88 @@
 
 namespace dct {
 
-using namespace boost::asio::ip;
+namespace asio = boost::asio;
+using namespace asio::ip;
 
 struct Transport {
+    /*
+     * Arrays are used as buffers so their max size has to known a compile time. Most local
+     * net media can support 9K MTUs though almost all default to 1500 bytes for WAN
+     * interoperability. IPv6 encap requires 40 bytes, UDP requires 8 and TCP requires at
+     * least 32 (basic hdr + timestamp option) and 60 is recommended to leave room for
+     * SACK blocks for efficient loss recovery. Thus 40+60 = 100 bytes of packet header
+     * space are required leaving at least 1400 for payload.
+     */
+    static constexpr size_t max_pkt_size = 8192;
     using onRcv = std::function<void(const uint8_t* pkt, size_t len)>;
     using onConnect = std::function<void()>;
-    //
-    // rcv buffer no smaller than 1500 byte MTU - 40 IPv6 - 8 UDP = 1452 payload
-    // but we hope for 9K MTU for local packets.
-    std::array<uint8_t, 8192> rcvbuf_;
+
     onRcv rcb_;
     onConnect ccb_;
 
     Transport(onRcv&& rcb, onConnect&& ccb) : rcb_{std::move(rcb)}, ccb_{std::move(ccb)} { }
 
+    // XXX replace w/CRTP version
+    virtual constexpr size_t mtu() const noexcept = 0;
     virtual void connect() = 0;
     virtual void send(const uint8_t* pkt, size_t len) = 0;
     virtual void close() = 0;
 
-    static void ehandler(const boost::system::error_code& ec, size_t len) {
-        if (ec.failed() && ec.value() != ECONNREFUSED)
-            throw runtime_error(format("send_to failed: {} len {}", ec.message(), len));
+    static void ehandler(const boost::system::error_code& ec, size_t) {
+        if (ec.failed() && ec.value() != ECONNREFUSED) throw runtime_error(format("send failed: {}", ec.message()));
     }
 };
 
-struct TransportMulticast final : Transport {
-    udp::socket rsock_;
-    udp::socket tsock_;
+struct TransportUdp : Transport {
     udp::endpoint listen_;
+    udp::endpoint sender_;  // sender of most recent datagram
+    udp::endpoint peer_;    // our peer if connected
+    udp::socket sock_;      // socket to peer if connected
+    bool isConnected_{false};
+    bool didCCB_{false};
+
+    // rcv buffer no smaller than 1500 byte MTU - 40 IPv6 - 8 UDP = 1452 payload
+    // but we hope for 9K MTU for local packets.
+    std::array<uint8_t, max_pkt_size> rcvbuf_;
+
+    constexpr size_t mtu() const noexcept final { return 1500 - 40 - 8; }
+
+    TransportUdp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
+        : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
+    TransportUdp(uint16_t port, asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
+        : Transport(std::move(rcb), std::move(ccb)), listen_{udp::v6(), port}, sock_{ioc} { }
+
+    void issueRead() {
+        sock_.async_receive(asio::buffer(rcvbuf_),
+                [this](boost::system::error_code ec, std::size_t len) {
+                    if (ec.failed() && ec.value() != ECONNREFUSED)
+                            throw runtime_error(format("recv failed: {}", ec.message()));
+                    //if (ec.failed()) print("recv failed: {} len {}\n", ec.message(), len);
+                    if (len > 0) rcb_(rcvbuf_.data(), len);
+                    issueRead();
+                });
+    }
+
+    void close() {
+        boost::system::error_code ec;
+        sock_.close(ec);
+    }
+
+    void send(const uint8_t* pkt, size_t len) {
+        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
+        sock_.async_send(asio::buffer(pkt, len), ehandler);
+    }
+};
+
+struct TransportMulticast final : TransportUdp {
+    udp::socket tsock_;
     udp::endpoint our_;
-    udp::endpoint sender_;
 
     // MESHTEST>0 adds special code to test the automatic peer-to-peer meshing
     // capabilities of DeftT. It does by accumulating a sorted list of all the
     // peer source address and port tuples. Since all peers will construct the
     // same list, self-consistent reachability relationships can be enforced
-    // at each perr by some simple 'canHear(peer)' boolean function. For example
+    // at each peer by some simple 'canHear(peer)' boolean function. For example
     // a linear chain can be created by saying each peer canHear the peers
     // immediately adjacent to it in the list.
 #ifndef MESHTEST
@@ -144,8 +190,8 @@ struct TransportMulticast final : Transport {
     constexpr bool canHear(const auto&) const noexcept { return true; }
 #endif
 
-    TransportMulticast(std::string_view maddr, boost::asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
-        : Transport(std::move(rcb), std::move(ccb)), rsock_{ioc}, tsock_{ioc} {
+    TransportMulticast(std::string_view maddr, asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
+        : TransportUdp(ioc, std::move(rcb), std::move(ccb)), tsock_{ioc} {
 
         // XXX boost bug (up to at least 1.79) asio/detail/impl/socket_ops.ipp: inet_pton()
         // scope_id is not handled correctly for 'node_local' so we stick it in as a numeric value
@@ -157,11 +203,11 @@ struct TransportMulticast final : Transport {
         // lack of working dup suppression combined with its Content Store makes it babble.
         listen_ = udp::endpoint(dst, 56362u);
         // multicast requires separate sockets for receive & transmit
-        rsock_.open(listen_.protocol());
-        rsock_.set_option(v6_only(true));
-        rsock_.set_option(udp::socket::reuse_address(true)); // multiple listeners
-        rsock_.bind(listen_);
-        rsock_.set_option(multicast::join_group(dst));
+        sock_.open(listen_.protocol());
+        sock_.set_option(v6_only(true));
+        sock_.set_option(udp::socket::reuse_address(true)); // multiple listeners
+        sock_.bind(listen_);
+        sock_.set_option(multicast::join_group(dst));
 
         tsock_.open(listen_.protocol());
         tsock_.set_option(v6_only(true));
@@ -175,12 +221,12 @@ struct TransportMulticast final : Transport {
         //tsock_.set_option(multicast::enable_loopback(false));
         setLocalPeer(); // for mesh testing (if enabled by Makefile)
     }
-    TransportMulticast(boost::asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb) :
-        TransportMulticast(getenv("DCT_LOCALHOST_MULTICAST")? "ff01::1234":"ff02::1234",
+    TransportMulticast(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb) :
+        TransportMulticast(getenv("DCT_MULTICAST_ADDR")? getenv("DCT_MULTICAST_ADDR") : "ff02::1234",
                             ioc, std::move(rcb), std::move(ccb)) {}
 
     void issueRead() noexcept {
-        rsock_.async_receive_from(boost::asio::buffer(rcvbuf_), sender_,
+        sock_.async_receive_from(asio::buffer(rcvbuf_), sender_,
             [this](boost::system::error_code ec, std::size_t len) {
                 // multicast loops back packets to the sender so filter them out
                 if (!ec && (sender_.port() != our_.port() || sender_.address() != our_.address())) {
@@ -198,39 +244,14 @@ struct TransportMulticast final : Transport {
     }
 
     void close() {
-        rsock_.close();
-        tsock_.close();
+        boost::system::error_code ec;
+        sock_.close(ec);
+        tsock_.close(ec);
     }
 
     void send(const uint8_t* pkt, size_t len) {
-        if (len > sizeof(rcvbuf_)) throw runtime_error( "send: packet too big");
-        tsock_.async_send_to(boost::asio::buffer(pkt, len), listen_, ehandler);
-    }
-};
-
-struct TransportUdp : Transport {
-    udp::endpoint listen_;
-    udp::endpoint sender_;
-    udp::socket sock_;
-
-    TransportUdp(boost::asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
-        : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
-    TransportUdp(uint16_t port, boost::asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
-        : Transport(std::move(rcb), std::move(ccb)), listen_{udp::v6(), port}, sock_{ioc, listen_} { }
-
-    void issueRead() {
-        sock_.async_receive(boost::asio::buffer(rcvbuf_),
-                [this](boost::system::error_code ec, std::size_t len) {
-                    if (!ec && len > 0) rcb_(rcvbuf_.data(), len);
-                    issueRead();
-                });
-    }
-
-    void close() final { sock_.close(); }
-
-    void send(const uint8_t* pkt, size_t len) final {
-        if (len > sizeof(rcvbuf_)) throw runtime_error( "send: packet too big");
-        sock_.async_send(boost::asio::buffer(pkt, len), ehandler);
+        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
+        tsock_.async_send_to(asio::buffer(pkt, len), listen_, ehandler);
     }
 };
 
@@ -238,10 +259,10 @@ struct TransportUdp : Transport {
 // the address and port of a passive peer.
 struct TransportUdpA final : TransportUdp {
 
-    TransportUdpA(std::string_view host, std::string_view port, boost::asio::io_context& ioc,
+    TransportUdpA(std::string_view host, std::string_view port, asio::io_context& ioc,
             onRcv&& rcb, onConnect&& ccb) : TransportUdp(ioc, std::move(rcb), std::move(ccb)) {
         auto dst = udp::resolver(ioc).resolve(host, port, udp::resolver::query::numeric_service);
-        boost::asio::connect(sock_, dst.begin());
+        asio::connect(sock_, dst.begin());
     }
 
     void connect() {
@@ -252,27 +273,230 @@ struct TransportUdpA final : TransportUdp {
     }
 };
 
-// Passive side of a unicast UDP association. Waits for incoming packet to learn address of peer.
+/*
+ * Passive side of a unicast UDP association.
+ *
+ * Logic is similar to passive TCP: Waits for incoming packet to learn address
+ * of peer then 'connects' sock_ to peer and expects future packets to come
+ * from peer's address and port.
+ *
+ * If active side restarts for any reason, its source port will change and the
+ * 'connection' state on this side will be wrong. Passive side can't initiate a
+ * reconnection so anything received from the active side's host but on a
+ * different source port is assumed to be a 'reconnect' and the data socket,
+ * sock_, is 'connected' to that new endpoint. (XXX Our intent is for the initial
+ * packet from the active side to be a QUIC-like DTLS 1.3 0-RTT initial handshake
+ * that both cryptographically identifies the peers and establishes an initial
+ * shared encryption key for the session. Code for this isn't finished yet.)
+ *
+ * This code follows "established-over-unconnected" pattern described in
+ * https://blog.cloudflare.com/everything-you-ever-wanted-to-know-about-udp-sockets-but-were-afraid-to-ask-part-1/
+ */
 struct TransportUdpP final : TransportUdp {
+    udp::socket acceptor_;
 
-    TransportUdpP(uint16_t port, boost::asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
-        : TransportUdp(port, ioc, std::move(rcb), std::move(ccb)) { }
+    TransportUdpP(uint16_t port, asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
+        : TransportUdp(port, ioc, std::move(rcb), std::move(ccb)), acceptor_{ioc, listen_} {
+        acceptor_.set_option(udp::socket::reuse_address(true));
+        sock_.open(listen_.protocol());
+        sock_.set_option(udp::socket::reuse_address(true));
+    }
+
+    void finishRestart() {
+        isConnected_ = true;
+        issueRead();
+        if (! didCCB_) {
+            didCCB_ = true;
+            ccb_();
+        }
+    }
+
+    void startSession() {
+        peer_ = sender_;
+        boost::system::error_code ec;
+        sock_.bind(listen_, ec);
+        sock_.connect(peer_); // associate socket with the new peer_
+        if (! isConnected_) finishRestart();
+    }
 
     // Passive-side datagram socket waits for peer's packet to find out who it's connected to.
     // If incoming packet is acceptable the socket is connected to that peer, connect & receive
     // callbacks are invoked and the next (normal) read initiated..
     void issueInitialRead() {
-        sock_.async_receive_from(boost::asio::buffer(rcvbuf_), sender_,
+        acceptor_.async_receive_from(asio::buffer(rcvbuf_), sender_,
                 [this](boost::system::error_code ec, std::size_t len) {
                     if (ec) throw runtime_error(format("receive_from failed: {} len {}", ec.message(), len));
-                    sock_.connect(sender_);
-                    ccb_();
+                    startSession();
                     rcb_(rcvbuf_.data(), len);
-                    issueRead();
+                    issueInitialRead();
                 });
     }
 
     void connect() { issueInitialRead(); }
+};
+
+struct TransportTcp : Transport {
+    tcp::socket sock_;
+    bool isConnected_{false};
+    bool didCCB_{false};
+
+    // Since packets aren't 1-1 with app-level send units, the receiving side needs to be aware of
+    // the DCT cState/cAdd msg structure and split the incoming byte stream into those units. rcvsb_,
+    // a stream buf bigger than the max DCT msg size for this transport instance, is used for this. 
+    // Since tcp does 'reliable' sequenced delivery, sends can block waiting for tcp to free up
+    // local socket buffer space. sndbuf_ is used to shield the app from this delay but this means
+    // an app-level send while sndb_ is occupied is ignored. This should be rare and syncps will
+    // repair any loss but if it becomes an issue, a more complex buffering model could address it.
+    size_t roff_{0};
+    std::array<uint8_t,max_pkt_size*2> rbuf_;
+
+    // TCP is stream-oriented so max transport unit is fungible. Since the connection is shared
+    // by multiple connections, larger mtu results in more jitter (from head-of-line blocking)
+    // and less fairness while smaller mtu results in less efficiency due to a lower header
+    // to data ratio. DCT's encap cost is ~100 bytes (due almost entirely to signing overhead -
+    // 64 bytes of signature plus 32 bytes of key locator) so an 8K mtu results in 99% efficiency
+    // with 65ms worst-case jitter on a 1Mbps backhaul.
+    constexpr size_t mtu() const noexcept final { return max_pkt_size; }
+
+    TransportTcp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
+        : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
+
+    void close() {
+        roff_ = 0;
+        isConnected_ = false;
+        boost::system::error_code ec;
+        sock_.set_option(asio::socket_base::linger{}, ec);
+        sock_.close(ec);
+    }
+
+    virtual void restart() = 0;
+
+    void finishRestart() {
+        isConnected_ = true;
+        issueRead();
+        if (! didCCB_) {
+            didCCB_ = true;
+            ccb_();
+        }
+    }
+
+    // check that the first byte of buffer 'd' is tlv type cState or cAdd and it plus the
+    // tlv hdr fit in the max_pkt_size. Return the total tlv size if so and 0 otherwise.
+    static constexpr auto tlvLength(const uint8_t* d) {
+        if ((d[0] != 5 && d[0] != 6) || d[1] > 253) return 0ul;
+
+        size_t l = d[1] == 253?  4ul + (d[2] << 8) + d[3] : 2ul + d[1];
+        if (l > max_pkt_size) l = 0;
+        return l;
+    }
+
+    void issueRead() {
+        if (! isConnected_) return;
+        sock_.async_read_some(asio::buffer(rbuf_) + roff_,
+            [this](const boost::system::error_code& ec, std::size_t rdlen) {
+                if (ec) {
+                    restart();
+                    return;
+                }
+                const auto totlen = roff_ + rdlen;
+                auto len = totlen;
+                const uint8_t* d = rbuf_.data();
+                while (len > 4) {
+                    // there's enough data to get tlv type and length
+                    const auto l = tlvLength(d);
+                    if (l == 0) { // invalid TLV - restart connection
+                        restart();
+                        return;
+                    }
+                    if (l > len) break; // don't have complete TLV
+                    rcb_(d, l);
+                    d += l;
+                    len -= l;
+                }
+                if (totlen > len) {
+                    // copy down any leftover tlv frag
+                    if (len > 0) std::memmove(rbuf_.data(), rbuf_.data() + totlen - len, len);
+                    roff_ = len;
+                }
+                issueRead();
+            });
+    }
+
+    void send(const uint8_t* pkt, size_t len) {
+        if (! isConnected_) return;
+        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
+        sock_.async_write_some(asio::buffer(pkt, len),
+                [this, len](const boost::system::error_code& ec, std::size_t sent) {
+                    if (ec.failed()) {
+                        if (ec.value() != EPIPE && ec.value() != ECONNRESET)
+                            throw std::runtime_error(format("send failed: {}", ec.message()));
+                        restart(); // try to reconnect
+                        return;
+                    }
+                    if (sent < len) print("tcp send botch: sent {} of {}\n", sent, len);
+                });
+    }
+};
+
+// Active (initiator) side of a unicast TCP association. Needs the address and port of a passive peer.
+struct TransportTcpA final : TransportTcp {
+    tcp::endpoint peer_{};
+
+    void on_connect(const boost::system::error_code& ec) {
+        if (ec.failed()) {
+            if (ec.value() != ECONNREFUSED) throw runtime_error(format("connect failed: {}", ec.message()));
+            restart();
+            return;
+        }
+        finishRestart();
+    }
+
+    void restart() {
+        close();
+        sock_.async_connect(peer_, [this](const boost::system::error_code& ec){ on_connect(ec); });
+    }
+
+    TransportTcpA(std::string_view host, std::string_view port, asio::io_context& ioc,
+            onRcv&& rcb, onConnect&& ccb) : TransportTcp(ioc, std::move(rcb), std::move(ccb)) {
+        boost::system::error_code ec{};
+        auto dst = tcp::resolver(ioc).resolve(host, port, tcp::resolver::query::numeric_service, ec);
+        if (ec.failed()) throw runtime_error(format("resolve {} failed: {}", host, ec.message()));
+        peer_ = dst.begin()->endpoint(); //XXX maybe try entire list?
+    }
+
+    void connect() {
+        //asio::async_connect(sock_, peer_, [this](auto ec, auto ep){ on_connect(ec, ep); });
+        sock_.async_connect(peer_, [this](auto ec){ on_connect(ec); });
+    }
+};
+
+// Passive side of a unicast TCP association. Waits for incoming packet to learn address of peer.
+struct TransportTcpP final : TransportTcp {
+    tcp::endpoint listen_;
+    tcp::acceptor acceptor_;
+
+    void startSession(tcp::socket& socket) {
+        sock_ = std::move(socket);
+        finishRestart();
+    }
+
+    void doAccept() {
+        acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
+            if (ec.failed()) throw std::runtime_error(format("accept failed: {}", ec.message()));
+
+            startSession(socket);;
+        });
+    }
+
+    void restart() {
+        close();
+        doAccept();
+    }
+
+    TransportTcpP(uint16_t port, asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb) :
+        TransportTcp(ioc, std::move(rcb), std::move(ccb)), listen_{tcp::v6(), port}, acceptor_{ioc, listen_} { }
+
+    void connect() { doAccept(); }
 };
 
 /**
@@ -282,26 +506,37 @@ struct TransportUdpP final : TransportUdp {
  *
  *  null      - IP6 multicast connection on default interface
  *
- *  port      - (passive) unicast UDP connection listening on 'port'. Port
+ *  port      - (passive) unicast connection listening on 'port'. Port
  *              must be a non-zero integer string or an error is thrown.
  *
- *  host:port - (active) unicast UDP connection to given host and port.
+ *  host:port - (active) unicast connection to given host and port.
  *              Host may specified by name or address, port must be a
  *              non-zero integer string.
+ *
+ * The last two forms can be preceded by an optional "udp:" or "tcp:" protocol
+ * specifier. "udp:" is assumed if this is missing.
  */
 //XXX should be constexpr but gcc 11.2 complains
 [[maybe_unused]]
-static Transport& transport(std::string_view addr, boost::asio::io_context& ioc,
+static Transport& transport(std::string_view addr, asio::io_context& ioc,
                             Transport::onRcv&& rcb, Transport::onConnect&& ccb) {
     if (addr.size() == 0) return *new TransportMulticast(ioc, std::move(rcb), std::move(ccb));
 
-    auto sep = addr.find(':');
+    bool isUdp{true};
+    if (addr.starts_with("tcp:") || addr.starts_with("udp:")) {
+        isUdp = addr.starts_with("udp:");
+        addr = addr.substr(4);
+    }
+    // since ipv6 numeric addresses use colons, the last colon delimits the port number
+    auto sep = addr.rfind(':');
     if (sep == addr.npos) {
         uint16_t port{};
         std::from_chars(addr.data(), addr.data()+addr.size(), port);
-        if (port == 0) throw runtime_error(format("invalid Udp listen port {}", addr));
+        if (port == 0) throw runtime_error(format("invalid listen port {}", addr));
+        if (!isUdp) return *new TransportTcpP(port, ioc, std::move(rcb), std::move(ccb));
         return *new TransportUdpP(port, ioc, std::move(rcb), std::move(ccb));
     }
+    if (!isUdp) return *new TransportTcpA(addr.substr(0, sep), addr.substr(sep+1), ioc, std::move(rcb), std::move(ccb));
     return *new TransportUdpA(addr.substr(0, sep), addr.substr(sep+1), ioc, std::move(rcb), std::move(ccb));
 }
 
@@ -318,4 +553,3 @@ static Transport& transport(Transport::onRcv&& rcb, Transport::onConnect&& ccb) 
 } // namespace dct
 
 #endif  // DCT_FACE_TRANSPORT_HPP
-

@@ -62,7 +62,7 @@
 #include "dct/format.hpp"
 
 using sCompString = std::string;
-using sCompId = std::uint8_t;
+using sCompId = std::uint16_t;
 using namespace std::string_literals;
 
 class sComp {
