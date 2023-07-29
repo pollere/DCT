@@ -110,9 +110,15 @@ struct DCTmodelPT final : DCTmodel  {
         if (m_pubDist) m_gkSync = (m_pgkd == NULL)?  &(m_psgkd->m_sync) : &(m_pgkd->m_sync);
 
         // change the cert store's callback so adding a valid cert will relay the signing cert chain
+        // signing keys are published with a confirm/acknowledge callback
         cs_.addCb_ = [this, &ckd=m_ckd] (const dctCert& cert) {
-                           if (wasRelayed(cert.computeThumbPrint())) ckd.publishCert(cert,  m_ackCb);
-                           else {
+                           auto tp = cert.computeTP();
+                           if (wasRelayed(tp)) {
+                               if(isSigningCert(cert))
+                                   ckd.publishRlyCert(cert,  m_ackCb); //cb for signing cert
+                               else
+                                   ckd.publishRlyCert(cert);
+                           } else { //not a relayed cert
                                ckd.publishCert(cert);
                                if (isSigningCert(cert))
                                    m_rlyCertCb(cert, certs());  //pass the signing cert and the cert store containing its chain
@@ -135,23 +141,28 @@ struct ptps
     uint64_t m_success{};
     uint64_t m_fail{};
     std::unordered_set<dct::thumbPrint> m_unackedCerts{};
+    std::unordered_map<dct::thumbPrint,std::vector<Publication>> m_holdKeys{};
     bool m_connected{false};
-    bool m_init{false};
     bool isConnected() const { return m_connected; }
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
 
     // following routine MUST have same type signature as DelivCb
+    // this is used to prevent Publications (specifically in /keys/pubs) from
+    // being forwarded before their signing keys.
+    // When Publication encryption is not used, may want to extend this
+    // to hold Publications in /pubs
     void certAck(const rData& c, bool acked)
     {
-        if (!acked) {   //still want to remove from list
-            print ("addRelayedCert addCert cb fails\n");
-        }
-        if (isConnected()) return;
-        // auto h = std::hash<tlvParser>{}(c);
         auto tp = c.computeTP();
+        if (!acked) { // unlikely as implies cert expired, but remove from list
+            print ("addRelayedCert addCert cb fails for {}\n", c.name());
+            if (m_holdKeys.contains(tp)) m_holdKeys.erase(tp);
+            return;
+        } else if (m_holdKeys.contains(tp)) {
+            for (auto p : m_holdKeys[tp]) m_pb.publishKnownSigner(std::move(p));
+            m_holdKeys.erase(tp);
+        }
         m_unackedCerts.erase(tp);
-        if (m_init && m_unackedCerts.empty())
-            initDone();
     }
 
     ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
@@ -193,27 +204,20 @@ struct ptps
      * application it should set its own timeout.
      */
 
-     void initDone()
-     {
-        m_connected = true;
-        if (m_pb.m_pubDist) {
-            m_pb.m_gkSync->subscribe(m_pb.pubPrefix(),  [this](const rData p){ m_gkCb(this, p);});
-            m_pb.m_gkSync->start(); // XXX pub gk dist must be started after forwarded certs are confirmed - only until get holdKeys working
-         }
-        m_connectCb();
-     }
-
     void connect(connectCb&& scb)
     {
         m_connectCb = std::move(scb);
 
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {
-                if (!success) {
-                    throw runtime_error("ptps failed to initialize connection");
+                if (!success)  throw runtime_error("ptps failed to initialize connection");
+                // do connect
+                m_connected = true;
+                if (m_pb.m_pubDist) {
+                    m_pb.m_gkSync->subscribe(m_pb.pubPrefix(),  [this](const rData p){ m_gkCb(this, p);});
+                    m_pb.m_gkSync->start(); // do this here so subscribe cb is set first
                 }
-                m_init = true;
-                if (m_unackedCerts.empty()) initDone();
+                m_connectCb();
             });
     }
 
@@ -250,7 +254,7 @@ struct ptps
      * p is a complete schema-compliant Publication for the input DeftT
      * A sub-schema can be used to limit Publications that are accepted from relay to DeftT
      * This allows checking of the Publication against this outgoing DeftT's trust schema
-     * Thus "failed to validate" is a desired behavior if using schema to limit some publications
+     * Thus "failed to validate" is a _desired_ behavior if using schema to limit some publications
      *
      * Returns true if p was passed to syncps, false otherwise
      */
@@ -260,18 +264,23 @@ struct ptps
             publish(std::move(p));
             return true;
         } else {
-            // print("publishValid failed to validate {}\n", p.name());     // this pub isn't in the schema for this DeftT
+            // print("publishValid failed to validate {}\n", p.name());     // this pub isn't in the schema for this DeftT or signing cert hasn't arrived
             return false;
         }
     }
       /*
      * p is a complete schema-compliant Publication on the input Face
-     * This is used to pass the publications of a pub gk distributor
-     * This allows checking of the Publication against this outgoing Face's schema
+     * This is used to pass keys/pubs publications
+     * This allows checking of the Publication against this (outgoing) Face's schema
+     * Use of holdKeys keeps from relaying keys/pubs until their signing cert has been ackd/confirmed
      * Returns true if p was passed to gk syncps, false otherwise
      */
     bool publishKnown(Publication&& p)
     {
+        if (m_unackedCerts.contains(p.thumbprint())) {
+            m_holdKeys[p.thumbprint()].emplace_back(std::move(p));  //creates entry if doesn't exist; emplace should copy
+            return true;    // if cert is on list has to be in my cert store so it is a known publication, just on hold
+        }
         return m_pb.publishKnownSigner(std::move(p));
     }
     /*
@@ -308,23 +317,20 @@ struct ptps
      * this is only useful for the case of identical trust schema for all DefTTs so is both
      * less general and not "belt and suspenders" security
      *
-     * m_unackedCerts is for ensuring that any identity chain certs that were relayed to a not-yet-connected
-     * DeftT get their publication acknowledged before ptps calls its shim's connect CB
-     * This is only active before connect but could be used to avoid passing publications with unknown signers
-     * later with more work
+     * m_unackedCerts is for ensuring that relayed identity chains
+     * get their publication acknowledged before ptps sends Publications signed by those certs.
      */
     void addRelayedChain(const rData c, const auto& cs) {
         auto tp = c.computeTP();
         if (m_pb.certs().contains(tp)) return;   //already have this signing chain
+        if (!m_unackedCerts.contains(tp))
+            m_unackedCerts.emplace(tp);
 
         // for each cert on signing chain
         cs.chain_for_each(tp, [this](const auto &c) {
             if (! m_pb.certs().contains(c.computeTP())) {
                 //auto h = std::hash<tlvParser>{}(c);
-                auto ctp = c.computeTP();
-                m_pb.addRelayed(ctp);    // add to list of certs that were (solely) relayed to this DeftT
-                if (!isConnected() && !m_unackedCerts.contains(ctp))
-                    m_unackedCerts.emplace(ctp);
+                m_pb.addRelayed(c.computeTP());    // add to list of certs that were (solely) relayed to this DeftT
                 m_pb.addCert(c);
             }
         });

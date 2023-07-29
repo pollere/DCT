@@ -125,8 +125,6 @@ struct mbps
 
     void connect(connectCb&& scb)
     {
-        //libsodium set up
-        if (sodium_init() == -1) throw error("Connect unable to set up libsodium");
         m_connectCb = std::move(scb);
         m_uniqId = format("{}", rName(m_pb.pubVal("#chainInfo")));
 

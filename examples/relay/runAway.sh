@@ -15,14 +15,13 @@ for i in ${ids[@]}; do
 done
 echo
 
-# use this line with "awayhostname" set to your away host for separate machines
-# ./relay -l " home/away.l.bundle,<awayhostname>:34567 home/away.e.bundle" &
-# use this line for testing relays on the same machine
-./relay -l " home/away.l.bundle,tcp:127.0.0.1:34567 home/away.e.bundle" &
-echo -n " starting away relay"
-sleep 1
-echo
-
-../hmIot/app3 -n 20 home/roamOp.bundle &
 echo -n " starting roamOp"
+../hmIot/app3 -n 10 home/roamOp.bundle &
+
+# use this line with "awayhostname" set to your away host for separate machines
+./relay -l " home/away.l.bundle,<awayhostname>:34567 home/away.e.bundle" &
+# use this line for testing relays on the same machine
+# ./relay -l " home/away.l.bundle,tcp:127.0.0.1:34567 home/away.e.bundle" &
+echo -n " starting away relay"
+echo
 

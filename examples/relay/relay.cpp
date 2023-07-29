@@ -133,10 +133,10 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     if (c.name()[1].toSv() == "relay"s) return;
     try {
         for (auto sp : dtList)
-        if (sp != s) {
-            //print("\trelaying a signing chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
-            sp->addRelayedChain(c, cs);
-        }
+            if (sp != s) {
+                //print("\trelaying a signing chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
+                sp->addRelayedChain(c, cs);
+            }
     } catch (const std::exception& e) { }
 }
 
@@ -157,9 +157,7 @@ static void keyPubRecv(ptps* s, const Publication& p) {
     try {
         for (auto sp : dtList)
             if (sp != s) {
-               if (!sp->publishKnown(Publication(p)))
-                    print(" - failed publishKnown\n", p.name()[1].toSv() );
-               //else print(" - successfully relayed\n", p.name()[1].toSv() );
+               sp->publishKnown(Publication(p));
             }
     } catch (const std::exception& e) {}
 }

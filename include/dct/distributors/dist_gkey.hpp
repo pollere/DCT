@@ -348,8 +348,7 @@ struct DistGKey {
 
         // XXXX Hack for relay: doesn't participate in pub group as it doesn't do encryption or decryption
         // but needs to pass through the gklists so has a gk distributor active with its own subscription cb
-        // which is set by the ptps shim and the ptps shim also calls the start() for this sync as there are
-        // other conditions which must be met beforehand
+        // which is set by the ptps shim which then calls the start() for this sync
         if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay"s) { initDone(); return; }
 
         m_sync.start();

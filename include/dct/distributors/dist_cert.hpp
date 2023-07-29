@@ -105,15 +105,16 @@ struct DistCert
     void publishCert(const rData c) {
         m_havePeer = true;
         if (! m_initDone && m_initialPubs.empty()) initDone();
-        // ensure publication of relayed (or new local) certs
         m_sync.publish(c);
     }
 
     // adding for ptps - relayed certs only so don't set m_havePeer
-    void publishCert(const rData c, DelivCb cb) {
+    void publishRlyCert(const rData c) {
+        m_sync.publish(c);
+    }
+    void publishRlyCert(const rData c, DelivCb cb) {
         if (! cb) abort(); // XXX debugging - invalid callback
-        if (! m_initDone && m_initialPubs.empty()) initDone();
-        // ensure publication of relayed (or new local) certs
+        // ensure publication of relayed cert
         m_sync.publish(c, std::move(cb));
     }
 
