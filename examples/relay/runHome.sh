@@ -5,6 +5,11 @@
 killall relay
 killall app2
 
+DCT_DEFAULT_IF=en0
+export DCT_DEFAULT_IF
+DCT_MULTICAST_ADDR=ff02::1234
+export DCT_MULTICAST_ADDR
+
 # ids=(frontdoor bob gate alice backdoor patio)
 ids=(frontdoor backdoor)
 

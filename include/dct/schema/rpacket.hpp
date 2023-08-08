@@ -291,28 +291,32 @@ struct rCert : rData {
         return true;
     }
 
-    // check that cert's sigInfo is formatted correctly and that it's within its validity period.
-    bool valid() const noexcept {
-        if (! validForm()) return false;
+    // NOTE: the following five routines *assume* that rCert validity has been checked with .validForm()
+    // and will misbehave badly if that is not true.
 
-        // check validity period
-        const auto si = sigInfo().data();
+    auto validAfter() const noexcept { return ((const iso8601*)(sigInfo().data() + 49))->toTP(); }
+    auto validUntil() const noexcept { return ((const iso8601*)(sigInfo().data() + 68))->toTP(); }
+
+    bool expired() const noexcept {
         auto now = iso8601(std::chrono::system_clock::now());
-        if (std::memcmp(now.data(), si+49, now.size()) < 0) return false; // not valid yet
-        if (std::memcmp(si+68, now.data(), now.size()) < 0) return false; // expired
-        return true;
+        return std::memcmp(sigInfo().data()+68, now.data(), now.size()) < 0;
     }
+    bool notValidYet() const noexcept {
+        auto now = iso8601(std::chrono::system_clock::now());
+        return std::memcmp(now.data(), sigInfo().data()+49, now.size()) < 0;
+    }
+    bool validNow() const noexcept {
+        auto now = iso8601(std::chrono::system_clock::now());
+        const auto si = sigInfo().data();
+        return std::memcmp(si+68, now.data(), now.size()) >= 0 && std::memcmp(now.data(), si+49, now.size()) >= 0;
+    }
+
+    // check that cert's sigInfo is formatted correctly and that it's within its validity period.
+    bool valid() const noexcept { return validForm() && validNow(); }
 
     // check that cert is valid and its signing type matches 'sType'
     // (which is usually the schema's required cert signing type).
-    bool valid(uint8_t sType) const noexcept {
-        if (! valid()) return false;
-        return sigType() == sType;
-    }
-    // NOTE: these routines *assume* that rCert validity has been checked with .validForm()
-    // and will misbehave badly if that is not true.
-    auto validAfter() const noexcept { return ((const iso8601*)(sigInfo().data() + 49))->toTP(); }
-    auto validUntil() const noexcept { return ((const iso8601*)(sigInfo().data() + 68))->toTP(); }
+    bool valid(uint8_t sType) const noexcept { return valid() && sigType() == sType; }
 };
 
 } // namespace dct

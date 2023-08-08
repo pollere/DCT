@@ -68,7 +68,7 @@ struct kmElection {
     using sys_micros = std::chrono::sys_time<std::chrono::microseconds>;
 
     const crName prefix_;   // prefix of election publications
-    SigMgr& sigmgr_;        // signs and validates publications
+    const certStore& certs_;
     SyncPS& sync_;          // collection used to communicate with peers
     doneCB done_;           // election done callback
     kmpriCB kmpri_;         // get key maker priority value from a signing chain
@@ -78,13 +78,13 @@ struct kmElection {
     const millis elecDur_;  // election duration
     const uint16_t preSz_;  // leading prefix size of all election pubs
     const uint16_t nmBlks_; // number of components in election pub names
+    bool elecDone_{false};
 
     // build and publish a key maker ('km') publication
     void publishKM(const char* topic) {
         crData p(prefix_ / topic / epoch_ / std::chrono::system_clock::now());
         p.content(std::vector<uint8_t>{});
-        sigmgr_.sign(p);
-        sync_.publish(std::move(p));
+        sync_.signThenPublish(std::move(p));
     }
 
     // This is called when the local election timer times out. If this instance didn't win
@@ -92,9 +92,12 @@ struct kmElection {
     // increments epoch_ then sends an 'elected' pub to tell other candidate KMs that it
     // has won. It then sends a group key list to everyone which will take them out of init state.
     void electionDone() {
+        if (elecDone_) return;
+        elecDone_ = true;
         if (priority_ > 0) {
             ++epoch_;
             publishKM("elec");
+            //print("election {} done\n", epoch_);
         }
         done_(priority_ > 0, epoch_);
     }
@@ -135,13 +138,26 @@ struct kmElection {
         if (n.nBlks() != nmBlks_) return; // bad name format
         auto epoch = n.nextAt(preSz_).toNumber();
         if (epoch_ >= epoch) return; // ignore msg from earlier election
-        if (kmpri_(p.thumbprint()) <= 0) return;
+
+        // if this app has been restarted (epoch_ = 0) and it was the keymaker
+        // for the previous election (the app probably has a new signing key
+        // so this is checked by looking at the thumbprint of the identity
+        // key in the signing key) make it the new keymaker.
+        const auto& tp = p.thumbprint();
+        if (kmpri_(tp) <= 0) return;
+        if (epoch_ == 0 && certs_[tp].thumbprint() == certs_[ourTP_].thumbprint()) {
+            epoch_ = epoch;
+            if (priority_ < 0) priority_ = -priority_;
+            electionDone();
+            return;
+        }
         if (priority_ > 0) priority_ = -priority_;
         epoch_ = epoch;
     }
 
-    kmElection(crName&& pre, SigMgr& sm, SyncPS& sy, doneCB&& done, kmpriCB&& kmv, thumbPrint& tp, millis dur = 100ms)
-        : prefix_{std::move(pre)}, sigmgr_{sm}, sync_{sy}, done_{std::move(done)}, kmpri_{std::move(kmv)}, ourTP_{tp},
+    kmElection(crName&& pre, const certStore& cs, SyncPS& sy, doneCB&& done, kmpriCB&& kmv, thumbPrint& tp,
+                millis dur = 100ms)
+        : prefix_{std::move(pre)}, certs_{cs}, sync_{sy}, done_{std::move(done)}, kmpri_{std::move(kmv)}, ourTP_{tp},
           elecDur_{dur}, preSz_{static_cast<uint16_t>((prefix_/"elec").size())},
           nmBlks_{static_cast<uint16_t>(prefix_.nBlks()+3)} {
 

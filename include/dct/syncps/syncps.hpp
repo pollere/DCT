@@ -283,6 +283,14 @@ struct SyncPS {
     }
 
     /**
+     * @brief sign then publish pub
+     */
+    PubHash signThenPublish(crData&& pub) {
+        pubSigmgr_.sign(pub);
+        return publish(std::move(pub));
+    }
+
+    /**
      * @brief deliver a publication to a subscription's callback
      *
      * Since pub content may be encrypted, handles decrypting a copy

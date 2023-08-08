@@ -80,7 +80,7 @@ To better understand relaying, run examples while monitoring communications with
 
 ### Setting up distinct multicast subnets
 
-To test relays on a single machine or a single broadcast network, subnets using different IPv6 multicast addresses can be used. If not set, a DeftT uses ff01::1234 as the default. The runAway.sh script shows setting the multicast address for the "away" entities to ff01::5678 and setting the away relay's unicast UDP port to use the local 127.0.0.1:34567 port. For testing on a single physical subnet, ff02 can be used. Not that a dctwatch can be set up for the non-default multicast group independently, e.g. (setenv DCT_MULTICAST_ADDR ff01::5678 ; dctwatch -h -n -d)
+To test relays on a single machine or a single broadcast network, subnets using different IPv6 multicast addresses can be used. If not set, a DeftT uses ff01::1234 as the default. The runAway.sh script shows setting the multicast address for the "away" entities to ff01::5678 and setting the away relay's unicast UDP port to use the local 127.0.0.1:34567 port. For testing on a single physical subnet, ff02 can be used. Note that a dctwatch can be set up for the non-default multicast group independently, e.g. (setenv DCT_MULTICAST_ADDR ff01::5678 ; dctwatch -h -n -d)
 
 ### Meshing relays
 
