@@ -33,40 +33,49 @@ enum class tlv : uint16_t {
     Name = 7,
         // name component types
         Generic = 8,
-        ImplicitSha256Digest = 1,
-        ParametersSha256Digest = 2,
-        Keyword = 32,
         Segment = 33,
-        ByteOffset = 34,
-        Version = 35,
+        csID = 35,
         Timestamp = 36,
         SequenceNum = 37,
+        // NDN TLVs that can't be in a DCT Name
+        //Keyword = 32,
+        //ImplicitSha256Digest = 1,
+        //ParametersSha256Digest = 2,
+        //ByteOffset = 34,
 
     // a DCT cState packet contains exactly 3 TLV blocks in the following order:
     //   7 (Name), 10 (Nonce), 12 (InterestLifetime)
-    Interest = 5,
+    cState = 5,
         Nonce = 10,
-        InterestLifetime = 12,
-        CanBePrefix = 33,
-        MustBeFresh = 18,
-        // TLVs that can't be in a DCT Interest
+        Lifetime = 12,
+        // NDN TLVs that can't be in a DCT Interest
+        //CanBePrefix = 33,
+        //MustBeFresh = 18,
         //ForwardingHint = 30,
         //HopLimit = 34,
         //ApplicationParameters = 36,
 
-    // a DCT cAdd packet contains exactly 5 TLV blocks in the following order:
+    // DCT publications, certs and cAdd PDUs contain exactly 5 TLV blocks in the following order:
     //   7 (Name), 20 (Metainfo), 21 (Content), 22 (SignatureInfo), 23 (SignatureValue)
+    //
+    // Metainfo can only contain a content type:
+    //   cAdd PDUs have Metainfo>ContentType>ContentType_CAdd
+    //   pubs have Metainfo>ContentType>ContentType_Blob
+    //   certs have Metainfo>ContentType>ContentType_Key
+    //
+    // A cert's siginfo must contain a validity period, pub and cAdd siginfo must not.
     Data = 6,
         MetaInfo = 20,
             ContentType = 24,
                 // Content types
                 ContentType_Blob = 0,
-                ContentType_Link = 1,
                 ContentType_Key = 2,
-                ContentType_Nack = 3,
-                ContentType_Manifest = 4,
                 ContentType_CAdd = 42,
-            FreshnessPeriod = 25,
+                // NDN content types
+                //ContentType_Link = 1,
+                //ContentType_Nack = 3,
+                //ContentType_Manifest = 4,
+            //FreshnessPeriod = 25,
             //FinalBlockId = 26,
         Content = 21,
         SignatureInfo = 22,

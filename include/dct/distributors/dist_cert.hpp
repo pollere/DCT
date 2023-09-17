@@ -112,9 +112,8 @@ struct DistCert
     void publishRlyCert(const rData c) {
         m_sync.publish(c);
     }
-    void publishRlyCert(const rData c, DelivCb cb) {
-        if (! cb) abort(); // XXX debugging - invalid callback
-        // ensure publication of relayed cert
+    // confirm publication of this cert - used after bootstrap so doesn't set havePeer
+    void publishConfCert(const rData c, DelivCb cb) {
         m_sync.publish(c, std::move(cb));
     }
 

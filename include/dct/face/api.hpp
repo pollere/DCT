@@ -35,10 +35,11 @@ namespace dct {
 using Timer = boost::asio::system_timer;
 using pTimer = std::shared_ptr<Timer>;
 using TimerCb = std::function<void()>;
+using csID_t = uint32_t; // aka csID - 32-bit murmurhash of cState name
 
 using DataCb = std::function<void(const rInterest& i, rData d)>;
 using InterestCb = std::function<void(const rName& n, const rInterest& i)>;
-using InterestTO = std::function<void(const rInterest& i)>;
+using InterestTO = std::function<void(csID_t)>;
 using RegisterCb = std::function<void(const rName& prefix)>;
 
 } // namespace dct

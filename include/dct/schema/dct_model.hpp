@@ -45,6 +45,8 @@ using namespace std::literals;
 
 namespace dct {
 
+static constexpr std::chrono::seconds certOverlap = std::chrono::minutes(10);    // at least twice domain clock skew
+
 //template<typename sPub>
 struct DCTmodel {
     certStore cs_{};        // certificates used by this model instance
@@ -109,6 +111,7 @@ struct DCTmodel {
         std::vector<dctCert> pv{};
         for (auto i = b; i != e; ++i) {
             if (certSigMgr().validate(i->second, cert)) pv.emplace_back(std::move(i->second));
+            else print("checkPendingCerts: {} didn't validate with {}\n", i->second.name(), cert.name());
         }
         pending_.erase(tp);
         for (auto p : pv) addCert(p);
@@ -137,7 +140,6 @@ struct DCTmodel {
 
             const auto& stp = cert.thumbprint();
             if (dctCert::selfSigned(stp)) return; // can't add new root cert
-
             if (cname.size() >= 7 && cname[-6].toSv() == "schema") return; // can't add new schema
  
             // cert is structurally ok so see if it crytographically validates
@@ -171,37 +173,44 @@ struct DCTmodel {
         m_sync.oneTime(std::chrono::duration_cast<std::chrono::microseconds>(delay), std::move(cb));
     }
 
+    // called to get a new signing pair
+    // new SPs are shipped certOverlap/2 after they are made/become valid
+    // and are valid for 2*certOverlap in addition to the certLifetime
+    // Handles adding the new cert to cs_, publishing it, and making it the new signing key  and informing the group key distributors, if any
+    // Waits for a publication confirmation before making this pair the new signing pair and calling the group key distributors
     void getNewSP(const pairCb& spCb) {
         auto sp = spCb();       //new signing key pair
         auto sc = sp.first;     // public cert of pair
         auto now = std::chrono::system_clock::now();
-        auto nt = rCert(sc).validUntil() - 10s;   // reschedule before expiration time
+        auto nt = rCert(sc).validUntil() - dct::certOverlap;   // schedule next rekey for certOverlap before expiration time
         if (nt <= now)
             std::runtime_error("getNewSP was handed an expired cert");
         oneTime(nt-now, [this,spCb]{getNewSP(spCb);});    //schedule re-keying
 
         auto addKP = [this](auto& sp){
             auto sc = sp.first;
-            cs_.add(sc, sp.second);   //add this signing cert
-            // make it a signing chain head
-            if (validateChain(bs_, cs_, sc) < 0) throw schema_error(format("cert {} signing chain invalid", sc.name()));
-            cs_.insertChain(sc);
-            // pass new signing pair to sigmgrs and distributors
-            pubSigMgr().updateSigningKey(sp.second, sc);
-            wireSigMgr().updateSigningKey(sp.second, sc);
-            // update cAdd group key distributors if any
-            if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
-            else if (m_sgkd) m_sgkd->updateSigningKey(sp.second, sc);
-            // update Publication group key distributors if any
-            if (m_pgkd)   m_pgkd->updateSigningKey(sp.second, sc);
-            else if (m_psgkd) m_psgkd->updateSigningKey(sp.second, sc);
+            cs_.addNewSP(sc, sp.second);   //add this signing pair to cs_ but do not publish
+            m_ckd.publishConfCert(sc, [this, sp](const rData& c, bool acked){    //publish with conf cb
+                if (!acked) return;   // unlikely unless became entirely disconnected and cert expired
+                auto sc = sp.first;
+                if (sc.computeTP() != c.computeTP())  std::runtime_error("dct_model:getNewSP:addKP confirmed cert does not match passed in cert");
+                // should be no issue with chain since it hasn't changed so may skip this
+                if (validateChain(bs_, cs_, sc) < 0) throw schema_error(format("getNewSP:addKP cert {} signing chain invalid", sc.name()));
+                cs_.insertChain(sc);                // make it a signing chain head
+                // pass new signing pair to sigmgrs and distributors
+                pubSigMgr().updateSigningKey(sp.second, sc);
+                wireSigMgr().updateSigningKey(sp.second, sc);
+                // update group key distributors for cAdds, if any
+                if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
+                else if (m_sgkd) m_sgkd->updateSigningKey(sp.second, sc);
+                // update Publication group key distributors, if any
+                if (m_pgkd)   m_pgkd->updateSigningKey(sp.second, sc);
+                else if (m_psgkd) m_psgkd->updateSigningKey(sp.second, sc);
+            });
         };
 
-        if (rCert(sc).validAfter() > now) {
-            // schedule usage of the new pair once validity period starts
-            oneTime(rCert(sc).validAfter() - now, [addKP,sp] { addKP(sp); } );
-        } else
-            addKP(sp);  // within new cert validity period, add to certstore and use
+        // schedule usage of the new pair once validity period starts, wait half the overlap to handle clock skew
+        oneTime(rCert(sc).validAfter() - now + certOverlap/2, [addKP,sp] { addKP(sp); } );
     }
 
     // create a new DCTmodel instance and pass the callbacks to access required certs to
@@ -274,7 +283,7 @@ struct DCTmodel {
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
 
         // set up timer to request a new signing pair before this pair expires
-        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - 10s,
+        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - certOverlap,
                  [this, signIdCb] {getNewSP(signIdCb);});
     }
 

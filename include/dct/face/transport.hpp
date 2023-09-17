@@ -26,12 +26,13 @@
 #include <cerrno>
 #include <charconv>
 #include <functional>
+#include <invocable.h>
 #include <memory>
 #include <string>
 #include <string_view>
 
 #include <boost/asio/version.hpp>
-#if BOOST_ASIO_VERSION <= 102600
+#if 1
 // As of Dec 2022, get spurious warnings when include boost asio
 // because sprintf in deprecated (on mac os xcode 12+).
 // Theses pragmas are to prevent the warning from this.
@@ -50,7 +51,7 @@
 #include <boost/asio.hpp>
 #endif
 
-#include <dct/schema/rpacket.hpp>
+#include <dct/schema/crpacket.hpp>
 #include "default-if.hpp"
 #include "default-io-context.hpp"
 
@@ -72,19 +73,33 @@ struct Transport {
     using onRcv = std::function<void(const uint8_t* pkt, size_t len)>;
     using onConnect = std::function<void()>;
 
+    // internal send completion callback. This would go away if c++ ever gets 'generics'
+    using _sendCb = ofats::any_invocable<void(const boost::system::error_code& ec, size_t)>;
+
     onRcv rcb_;
     onConnect ccb_;
 
     Transport(onRcv&& rcb, onConnect&& ccb) : rcb_{std::move(rcb)}, ccb_{std::move(ccb)} { }
 
-    // XXX replace w/CRTP version
     virtual constexpr size_t mtu() const noexcept = 0;
     virtual void connect() = 0;
-    virtual void send(const uint8_t* pkt, size_t len) = 0;
     virtual void close() = 0;
+    virtual void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) = 0;
 
-    static void ehandler(const boost::system::error_code& ec, size_t) {
-        if (ec.failed() && ec.value() != ECONNREFUSED) throw runtime_error(format("send failed: {}", ec.message()));
+    /*
+     * semantics of 'send' is that it takes a container (*not* a view), steals
+     * its contents and async sends them. Since the contents have to stay around
+     * until the send completes, they're stashed in the closure of the completion
+     * lambda so they'll be destructed when the async op completes.
+     */
+    void send(auto&& v) {
+        if (v.size() > max_pkt_size) throw runtime_error( "send: packet too big");
+        send_pkt(v.data(), v.size(),
+                [buf = std::move(v)](const boost::system::error_code& ec, size_t) {
+                    if (ec.failed() && ec.value() != ECONNREFUSED)
+                        //throw runtime_error(format("send failed: {}", ec.message()));
+                        print("send failed: {}", ec.message());
+                });
     }
 };
 
@@ -123,9 +138,8 @@ struct TransportUdp : Transport {
         sock_.close(ec);
     }
 
-    void send(const uint8_t* pkt, size_t len) {
-        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
-        sock_.async_send(asio::buffer(pkt, len), ehandler);
+    void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) {
+        sock_.async_send(asio::buffer(pkt, len), std::move(cb));
     }
 };
 
@@ -249,9 +263,8 @@ struct TransportMulticast final : TransportUdp {
         tsock_.close(ec);
     }
 
-    void send(const uint8_t* pkt, size_t len) {
-        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
-        tsock_.async_send_to(asio::buffer(pkt, len), listen_, ehandler);
+    void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) {
+        tsock_.async_send_to(asio::buffer(pkt, len), listen_, std::move(cb));
     }
 };
 
@@ -351,8 +364,8 @@ struct TransportTcp : Transport {
     std::array<uint8_t,max_pkt_size*2> rbuf_;
 
     // TCP is stream-oriented so max transport unit is fungible. Since the connection is shared
-    // by multiple connections, larger mtu results in more jitter (from head-of-line blocking)
-    // and less fairness while smaller mtu results in less efficiency due to a lower header
+    // by multiple collections, larger mtu results in more jitter from head-of-line blocking
+    // and less fairness while smaller mtu results in less efficiency due to a higher header
     // to data ratio. DCT's encap cost is ~100 bytes (due almost entirely to signing overhead -
     // 64 bytes of signature plus 32 bytes of key locator) so an 8K mtu results in 99% efficiency
     // with 65ms worst-case jitter on a 1Mbps backhaul.
@@ -422,19 +435,18 @@ struct TransportTcp : Transport {
             });
     }
 
-    void send(const uint8_t* pkt, size_t len) {
+    void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) {
         if (! isConnected_) return;
-        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
         sock_.async_write_some(asio::buffer(pkt, len),
-                [this, len](const boost::system::error_code& ec, std::size_t sent) {
-                    if (ec.failed()) {
-                        if (ec.value() != EPIPE && ec.value() != ECONNRESET)
-                            throw std::runtime_error(format("send failed: {}", ec.message()));
-                        restart(); // try to reconnect
-                        return;
-                    }
-                    if (sent < len) print("tcp send botch: sent {} of {}\n", sent, len);
-                });
+                            [len, this, cb = std::move(cb)](const boost::system::error_code& ec, std::size_t sent) {
+                                if (ec.failed()) {
+                                    if (ec.value() != EPIPE && ec.value() != ECONNRESET)
+                                        throw std::runtime_error(format("send failed: {}", ec.message()));
+                                    restart(); // try to reconnect
+                                    return;
+                                }
+                                if (sent < len) print("tcp send botch: sent {} of {}\n", sent, len);
+                            });
     }
 };
 
@@ -521,6 +533,9 @@ struct TransportTcpP final : TransportTcp {
 static Transport& transport(std::string_view addr, asio::io_context& ioc,
                             Transport::onRcv&& rcb, Transport::onConnect&& ccb) {
     if (addr.size() == 0) return *new TransportMulticast(ioc, std::move(rcb), std::move(ccb));
+    if (addr.starts_with("ff01:") || addr.starts_with("ff02:")) {
+        return *new TransportMulticast(addr, ioc, std::move(rcb), std::move(ccb));
+    }
 
     bool isUdp{true};
     if (addr.starts_with("tcp:") || addr.starts_with("udp:")) {

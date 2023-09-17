@@ -83,7 +83,7 @@ class DirectFace {
         // Packet receive handler: decode and process as Interest or Data (silently ignore anything else).
         // Since a matching interest might already be in the PIT or there might be
         // no matching interests for a data, don't do anything heavyweight here.
-        if (tlv(pkt[0]) == tlv::Interest) handlecState({pkt, len});
+        if (tlv(pkt[0]) == tlv::cState) handlecState({pkt, len});
         else if (tlv(pkt[0]) == tlv::Data) handlecAdd({pkt, len});
     }
 
@@ -121,26 +121,21 @@ class DirectFace {
         timer->async_wait([cb=std::move(cb)](const auto& e) { if (e == boost::system::errc::success) cb(); });
         return timer;
     }
-    std::uniform_int_distribution<unsigned short> randInt_{10, 50}; // cstate publish randomization
+    std::uniform_int_distribution<unsigned short> randInt_{10, 60}; // 35ms avg cstate publish randomization
     constexpr auto jitter() { return std::chrono::milliseconds(randInt_(randGen())); }
 
     // schedule or re-schedule PIT Interest Timeout callback
     void schedITO(PITentry& pe) {
         // if the interest is locally generated, the timeout upcall will generate a new pit
-        // entry to replace the one being deleted.
-        pe.timer(timeOut(pe.i_.lifetime() + jitter(), [this, idat=*pe.idat_] () mutable {
+        // entry to replace the one being deleted. Wait a bit to delete entries from the net
+        // in the hope they'll refresh theirs before we have to replace ours.
+        auto to = pe.i_.lifetime();
+        if (pe.fromNet_) to += jitter();
+        pe.timer(timeOut(to, [this, idat=*pe.idat_] () mutable {
                                 auto i = rInterest(idat);
-                                pit_.itoCB(i); }
-                         )
-                );
+                                pit_.itoCB(i);
+                            }));
     }
-
-    /**
-     * Send packet 'pkt' of length 'len' bytes
-     */
-    void send(const uint8_t* pkt, size_t len) { io_.send(pkt, len); }
-    void send(const std::vector<uint8_t>& v) { send(v.data(), v.size()); }
-    void send(const tlvParser& v) { send(v.data(), v.size()); }
 
     /**
      * Handle an interest registration.
@@ -178,8 +173,9 @@ class DirectFace {
 
      // always sends a newly created cState (a new cState is always created after old one expired)
      // syncps resets the onNet_ before calling if a currentState must be put onNet
-     // suppress sending if already exists (not the last cState locally received from others) and has been on network twice
-    auto express(const rInterest& i, InterestTO&& ito) {
+     // suppress sending if already exists (not the last cState locally received from others)
+     // and has been on network twice
+    auto express(crInterest&& i, InterestTO&& ito) {
         if (cSts_ != CONNECTED) throw runtime_error("express: not connected");
 
         bool newCS = true;
@@ -204,10 +200,10 @@ class DirectFace {
         }
         auto res = pit_.add(i, std::move(ito)); // add or update with local info
         schedITO(res.first->second);  //  reschedule timeout
-        if (suppress)  return;
+        if (suppress) return;
 
         dit_.add(i);
-        send(i);
+        io_.send(std::move(i));
     }
 
     /**
@@ -247,9 +243,10 @@ class DirectFace {
         const PITentry* loc{};
         const PITentry* net{};
         for (const auto& [ih, pe] : pit_) {
-            if (! p.isPrefix(pe.i_.name())) continue;
-            if (pe.fromNet_ && (!net || pe.timer_->expiry() > net->timer_->expiry())) net = &pe;
-            if (pe.ito_ && (!loc || pe.timer_->expiry() > loc->timer_->expiry())) loc = &pe;
+            if (!pe.timer_ || !p.isPrefix(pe.i_.name())) continue;
+            auto e = pe.timer_->expiry();
+            if (pe.fromNet_ && (!net || e > net->timer_->expiry())) net = &pe;
+            if (pe.ito_ && (!loc || e > loc->timer_->expiry())) loc = &pe;
         }
         if (!net && !loc) return rName{};
         return (net? net:loc)->i_.name();
@@ -258,7 +255,7 @@ class DirectFace {
     /**
      * send an outgoing cAdd
      */
-    void send(rData d) { send(d.data(), d.size()); }
+    void send(crData&& d) { io_.send(std::move(d)); }
 
     /**
      * Handle an incoming cAdd:
@@ -272,7 +269,7 @@ class DirectFace {
         // This hash is the pit lookup key. The 'valid()' above has checked that this
         // block exists. Now check that it has the correct type then deserialize it.
         auto ibh = d.name().lastBlk();
-        if (ibh.size() > 8 || tlv(ibh.typ()) != tlv::Version) return;
+        if (ibh.size() > 8 || tlv(ibh.typ()) != tlv::csID) return;
         decltype((mhashView(ibh))) ihash = ibh.toNumber();
         // use the hash to get the cState PIT entry
         auto pi = pit_.find(ihash);

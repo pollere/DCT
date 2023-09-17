@@ -97,7 +97,7 @@ struct kmElection {
         if (priority_ > 0) {
             ++epoch_;
             publishKM("elec");
-            //print("election {} done\n", epoch_);
+            //print("kmElection:electionDone: election {} done\n", epoch_);
         }
         done_(priority_ > 0, epoch_);
     }

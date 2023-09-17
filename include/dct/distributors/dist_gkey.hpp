@@ -119,7 +119,7 @@ struct DistGKey {
              m_keyLifetime(m_reKeyInt + m_keyRand) {
        // the associated sync session is started after cert distributor completes  setup
        m_sync.autoStart(false);
-       m_sync.cStateLifetime(253ms);
+       m_sync.cStateLifetime(6763ms);
        m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
        m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),mreq=crPrefix(m_mrPrefix)](const auto& p) {
             if (mreq.isPrefix(p.name())) return m_mrLifetime;
@@ -139,9 +139,9 @@ struct DistGKey {
     // issue requests and relays cannot be members of a pub distributor (only pdu).
     void publishMembershipReq() {
         if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay")  return;   //XXX hack for relays - shouldn't get called
-        /*using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-        auto now = std::chrono::system_clock::now();
-        print("{:%M:%S} {} publishes a {} membership request\n",  ticks(now.time_since_epoch()), m_certs[m_tp].name(), m_sync.collName_.last().toSv());*/
+        // using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+        // auto now = std::chrono::system_clock::now();
+        // print("{:%M:%S} {} publishes a {} membership request\n",  ticks(now.time_since_epoch()), m_certs[m_tp].name(), m_sync.collName_.last().toSv());
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         crData p(m_mrPrefix/std::chrono::system_clock::now());
         p.content(std::vector<uint8_t>{});
@@ -189,6 +189,8 @@ struct DistGKey {
         if (m_init) return;
 
         if (! m_keyMaker) {
+            // print("DistGKey::updateSigningKey new SP for member {}\n", pubCert.name() );
+            m_kmtp.fill(0);     // reset my record of keymaker so that GK received for my previous SP will be overwritten
              publishMembershipReq();
              return;
         }
@@ -196,13 +198,13 @@ struct DistGKey {
         if (m_kmpri(m_tp) <= 0) std::runtime_error("DistGKey::updateSigningKey keymaker capability change indicates bad signing chain");
         m_kmtp = m_tp;
         ++m_KMepoch;
+        // print("DistGKey::updateSigningKey new SP for keymaker {} epoch = {}\n", pubCert.name(), m_KMepoch);
         makeGKey(); // redo this so gklists are under the new signing cert
     }
 
     void initDone() {
         if (m_init) {
             m_init = false;
-            //m_sync.cStateLifetime(6763ms);
             m_connCb(true);
         }
     }
@@ -220,20 +222,20 @@ struct DistGKey {
     void receiveGKeyList(const rPub& p) {
         if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay")  return;   //XXX hack for relays
 
-        if (m_kmpri(p.thumbprint()) <= 0) {
-            print("ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
+        const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
+        if (m_kmpri(tp) <= 0) {
+            print("DistGKey:receiveGKeyList ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
             return;
         }
+
         auto n = p.name();
         auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
-        // another member claims to be a keyMaker - largest thumbPrint wins
         if (m_keyMaker) {
-            const auto& tp = p.thumbprint();
-            if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
-                // ignore keylist from earlier signing key of same identity
-                return;
-            }
-            if (m_tp < tp || epoch > m_KMepoch) {
+            // if keylist is from earlier signing key of same identity, ignore
+            if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) return;
+
+            // another member claims to be a keyMaker - largest thumbPrint and most recent epoch wins
+            if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
                 // relinquish keymaker status
                 m_keyMaker = false;
                 m_kmtp = tp;
@@ -244,13 +246,15 @@ struct DistGKey {
             }
             return;
         }
-        // set this gklist sender as my keymaker, publish a membership request
+
+        // still in m_init; set this gklist sender as my keymaker, publish a membership request
         if (m_init && !m_mrPending) {
-            m_kmtp = p.thumbprint();
+            m_kmtp = tp;
             m_KMepoch = epoch;
             publishMembershipReq();
             return;
         }
+
         /*
          * I am a member and have an outstanding membership request that this gklist may service.
          * Parse the name and make checks to determine if this key record publication should be used.
@@ -259,21 +263,20 @@ struct DistGKey {
          */
         if (epoch != m_KMepoch) {
             if (epoch < m_KMepoch) { // XXX change this when re-elections supported
-                print("keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
+                print("DistGKey:receiveGKeyList  keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
                 return;
             }
-            //assert(m_KMepoch == 0);
             m_KMepoch = epoch;
             m_kmtp.fill(0);     //new epoch, reset my record of keymaker tp so I'll change km below
         }
-        // check if keymaker has a larger tp than my stored value (can resolve conflict after elections though can happen in
-        // relayed domains in particular), if so, (re)set my saved value and cur key ct so I get a new key and publish MRs until
-        // get a good gk
-        // XXXX if keyMaker rekeys itself with a smaller tp it should set a new epoch so member clear members' m_kmtp values
-        if (m_kmtp < p.thumbprint())    {
-            m_kmtp = p.thumbprint();    // changing keymaker
+        // check if this keymaker has a larger tp than my previous km (stored)
+        // (can resolve conflict after elections though can happen in relayed domains in particular)
+        // if so, (re)set my km and curkey ct records so I get a new key and publish MRs until get a good gk
+        // if keyMaker rekeys itself with a smaller tp it sets a new epoch so members reset their m_kmtp values
+        if (m_kmtp < tp)    {
+            m_kmtp = tp;    // changing keymaker
             m_curKeyCT = 0;
-        } else if (m_kmtp > p.thumbprint()) return;   // from a keymaker that has been displaced by one I've already heard from
+        } else if (m_kmtp > tp) return;   // from a keymaker that has been displaced by one I've already heard from
 
         static constexpr auto less = [](const auto& a, const auto& b) -> bool {
             auto asz = a.size();
@@ -319,9 +322,8 @@ struct DistGKey {
         // decrypt and save the key
         const auto& nk = it->second;
         uint8_t m[aeadKeySz];
-        if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
-            return;
-        }
+        if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) return;
+
         m_curKeyCT = newCT;
         m_curKey = std::vector<uint8_t>(m, m + aeadKeySz);
         m_newKeyCb(m_curKey, m_curKeyCT);   // call back parent with new key
@@ -383,9 +385,8 @@ struct DistGKey {
                 m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); });
                 gkeyTimeout();  //create a group key and reschedule group key creation
         };
-        // start election. elections need to be longer for relayed trust domains
-        m_kme = new kmElection(m_prefix/"km", m_certs, m_sync, std::move(eDone), std::move(kmpri), m_tp,
-                                m_pubdist? 5s : 500ms);
+        // start election. election durations should be ~10 dist delays
+        m_kme = new kmElection(m_prefix/"km", m_certs, m_sync, std::move(eDone), std::move(kmpri), m_tp, 500ms);
     }
 
     /*** Following methods are used by the keymaker to distribute and maintain the group key list ***/
@@ -411,7 +412,6 @@ struct DistGKey {
      * If in init state and there are group members, call initDone to exit init and callback to start
     */
     void makeGKey() {
-        //make a new key
         m_curKey.resize(aeadKeySz); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
         crypto_aead_xchacha20poly1305_ietf_keygen(m_curKey.data());
         //print("{} makes a new {} GK\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
@@ -486,20 +486,22 @@ struct DistGKey {
         // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members.
         if (m_mbrList.size() == 80*maxKR) return;
 
-        auto tp = p.thumbprint();
-        if (m_mbrList.contains(tp))     return;  // already a member
+        auto tp = p.thumbprint();   // thumbprint of the signer of the member request
         // XXXX Test here for a member request (mr) from relay role when this is a "pubs" distributor (later would be rejected in validation)
         if (m_pubdist && m_certs[tp].name()[1].toSv() == "relay") return;  //this is a hacky hack
 
-        auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
-        // convert pk to form that can be used to encrypt and add to member list
-        if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0) {
-            m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
-            return;
+        if (!m_mbrList.contains(tp)) {     // not already a member, add to list
+            auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
+            // convert pk to form that can be used to encrypt and add to member list
+            if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0) {
+                m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
+                return;
+            }
         }
+
         if(!m_curKeyCT)    return;  // haven't made first group key
 
-        //publish the group key for this new peer
+        //publish the group key for this member: if new, first time, if already a member, republish in response to this mr
         encGK egKey;
         crypto_box_seal(egKey.data(), m_curKey.data(), m_curKey.size(), m_mbrList[tp].data());
         std::vector<gkr> ek{ {tp, egKey} };

@@ -123,36 +123,26 @@ struct PITentry {
                 idat_{std::make_unique<std::vector<uint8_t>>(i.m_blk.begin(), i.m_blk.end())}, i_{*idat_},
                 fromNet_{true} { }
 
-    auto& cancelTimer() {
-        if (timer_) {
-            timer_->cancel();
-            timer_.reset();
-        }
-        return *this;
-    }
-
     auto& timer() const noexcept { return timer_; }
 
     auto& timer(TOptr&& t) {
-        cancelTimer();
         timer_ = std::move(t);
         return *this;
     }
 };
 
-using iHash_t = uint32_t;
-struct PIT : std::unordered_map<iHash_t, PITentry> {
-    using base = std::unordered_map<iHash_t, PITentry>;
+struct PIT : std::unordered_map<csID_t, PITentry> {
+    using base = std::unordered_map<csID_t, PITentry>;
     using base::unordered_map;
     bool found(iterator it) const noexcept { return it != end(); }
     bool found(const_iterator it) const noexcept { return it != end(); }
-    const_iterator find(const iHash_t ih) const noexcept { return base::find(ih); }
-    iterator find(const iHash_t ih) noexcept { return base::find(ih); }
+    const_iterator find(const csID_t ih) const noexcept { return base::find(ih); }
+    iterator find(const csID_t ih) noexcept { return base::find(ih); }
     auto find(rName&& n) noexcept { return find(mhashView(n)); }
     auto find(const rName& n) noexcept { return find(mhashView(n)); }
 
     auto erase(iterator it) { base::erase(it); }
-    auto erase(iHash_t ih) { base::erase(ih); }
+    auto erase(csID_t ih) { base::erase(ih); }
     auto erase(const rInterest& i) { return base::erase(mhashView(i.name())); }
 
     // Interest Time-Out callback
@@ -163,12 +153,9 @@ struct PIT : std::unordered_map<iHash_t, PITentry> {
         auto ih = mhashView(i.name());
         auto pi = find(ih);
         if (! found(pi)) return;
-        if (pi->second.ito_) {
-            auto nh = extract(ih); // remove entry from PIT
-            if (auto& pe = nh.mapped(); pe.ito_) pe.ito_(rInterest(*pe.idat_));
-        } else {
-            erase(pi);    // non-local
-        }
+        auto ito = pi->second.ito_;
+        erase(pi);
+        if (ito) ito(ih);
     }
 
     /**

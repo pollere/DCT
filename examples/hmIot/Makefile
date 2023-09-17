@@ -8,11 +8,12 @@
 INCLUDES = ../../include
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 CXXFLAGS = -g -O0 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
-CXXFLAGS += -fsanitize=address
 CXXFLAGS += -DMESHTEST=0
+## Note: on a Mac sanitize=address and sanitize=leak are mutually exclusive
+CXXFLAGS += -fsanitize=address
+#CXXFLAGS += -fsanitize=leak
 #CXXFLAGS += -fsanitize=address,undefined
 #CXXFLAGS += -ferror-limit=4
-#CXXFLAGS += -fsanitize=leak
 DEPS = $(HDRS)
 BINS = app1 app2 app3
 JUNK = 

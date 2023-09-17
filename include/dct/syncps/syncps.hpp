@@ -357,7 +357,7 @@ struct SyncPS {
         scheduledCStateId_->cancel();
         nonce_ = rand32();
         face_.express(crInterest(collName_/pubs_.iblt().rlEncode(), cStateLifetime_, nonce_),
-                        [this](auto& /*ri*/) { sendCState(); } // interest timeout for local cStates
+                        [this](auto /*csid*/) { sendCState(); } // interest timeout for local cStates
                     );
     }
 
@@ -426,10 +426,10 @@ struct SyncPS {
            pubs_.at(hashPub(p)).hold_ = ht;
         }
         if (sv.empty()) return false;
-        crData cAdd{crName{csName.first(-1)}.append(tlv::Version, mhashView(csName)).done(), tlv::ContentType_CAdd};
+        crData cAdd{crName{csName.first(-1)}.append(tlv::csID, mhashView(csName)).done(), tlv::ContentType_CAdd};
         cAdd.content(sv);
         if (! pktSigmgr_.sign(cAdd)) return false;
-        face_.send(cAdd);
+        face_.send(std::move(cAdd));
         return true;
     }
 
@@ -621,13 +621,13 @@ struct SyncPS {
                 // print("addToActive failed: {}\n", d.name());
                 continue;
             }
-            if (++ap == 1)  // add to new pub counter
-                scheduledCStateId_->cancel();  // on first pub add, cancel any cState about to be expressed
+            ++ap;  // add to new pub counter
             // don't really need the test, since just placed it in actives
             if (auto p = pubs_.find(ph); p != pubs_.end())  p->second.hold_ = ht;
             if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) deliver(d, s->second);
             // else print("syncps::onCAdd: no subscription for {}\n", d.name());
         }
+        delivering_ = false;
         if (ap == 0) return;  // nothing I need in this cAdd, no change to local cState or its schedule
 
         /* We've delivered all the publications in the cAdd.  There may be
@@ -641,7 +641,6 @@ struct SyncPS {
          *  XXX possibly need to not keep pushing cState out if this member has unsatisfied needs
          */
 
-        delivering_ = false;
         // If the cAdd resulted in new outbound (locally originated) pubs, cAdd them for any pending peer CStates
         if (initpubs != publications_ && sendCAdd(cState.name())) return;  // sending will schedule an updated cState
         sendCStateSoon(distDelay); // changed local cState, send a confirming cState at a randomized delay

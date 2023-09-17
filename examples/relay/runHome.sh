@@ -14,7 +14,7 @@ export DCT_MULTICAST_ADDR
 ids=(frontdoor backdoor)
 
 for i in ${ids[@]}; do
-  ../hmIot/app2 -n 10 home/$i.bundle &
+  ../hmIot/app2 -n 0 -q home/$i.bundle &
   echo -n " starting $i"
   echo ""
   sleep 1

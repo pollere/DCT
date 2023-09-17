@@ -127,6 +127,21 @@ struct certStore {
         return it;
     }
 
+    // add a new signing pair after update. Publishing is handled by calling routine
+    // so by passes the addCb_ which would normally handle that
+    auto addNewSP(const dctCert& c, const keyVal& k) {
+        if (! c.valid()) {
+            print("cert {} invalid\n", c.name());
+            return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
+        }
+        auto it = certs_.try_emplace(c.computeThumbPrint(), c);
+        if (k.size() && it.second) {
+            const auto& [tp, cert] = *it.first;
+            key_.try_emplace(tp, k);
+        }
+        return it;
+    }
+
     struct chainIter {
         const thumbPrint* tp_;
         const certStore& cs_;

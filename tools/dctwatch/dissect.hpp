@@ -41,7 +41,7 @@ struct Dissect {
     inline static Dict blockTLV = {
         {tlv::Content, {"Content", false, cFmt::unknown}},
         {tlv::Data, {"Data", false, cFmt::unknown}},
-        {tlv::Interest, {"Interest", false, cFmt::unknown}},
+        {tlv::cState, {"cState", false, cFmt::unknown}},
         {tlv::KeyDigest, {"KeyDigest", true, cFmt::unknown}},
         {tlv::KeyLocator, {"KeyLocator", false, cFmt::unknown}},
         {tlv::MetaInfo, {"MetaInfo", false, cFmt::unknown}},
@@ -52,44 +52,44 @@ struct Dissect {
     };
     inline static Dict nameTLV = {
         {tlv::Generic, {"Generic", true, cFmt::unknown}},
-        {tlv::Keyword, {"Keyword", false, cFmt::unknown}},
+        //{tlv::Keyword, {"Keyword", false, cFmt::unknown}},
         {tlv::Segment, {"Segment", true, cFmt::unknown}},
-        {tlv::ByteOffset, {"ByteOffset", true, cFmt::unknown}},
-        {tlv::Version, {"Version", true, cFmt::unknown}},
+        //{tlv::ByteOffset, {"ByteOffset", true, cFmt::unknown}},
+        {tlv::csID, {"csID", true, cFmt::unknown}},
         {tlv::Timestamp, {"Timestamp", true, cFmt::tstamp}},
         {tlv::SequenceNum, {"SequenceNum", true, cFmt::unknown}},
-        {tlv::ImplicitSha256Digest, {"ImplicitSha256Digest", true, cFmt::bin}},
-        {tlv::ParametersSha256Digest, {"Sha256Digest", true, cFmt::bin}},
+        //{tlv::ImplicitSha256Digest, {"ImplicitSha256Digest", true, cFmt::bin}},
+        //{tlv::ParametersSha256Digest, {"Sha256Digest", true, cFmt::bin}},
     };
-    inline static Dict interestTLV = {
+    inline static Dict cStateTLV = {
         {tlv::Nonce, {"Nonce", true, cFmt::bin}},
-        {tlv::InterestLifetime, {"Lifetime", true, cFmt::num}},
-        {tlv::MustBeFresh, {"MustBeFresh", true, cFmt::unknown}},
-        {tlv::CanBePrefix, {"CanBePrefix", true, cFmt::unknown}},
-        {tlv(30), {"ForwardingHint", false, cFmt::unknown}},
-        {tlv(34), {"HopLimit", false, cFmt::unknown}},
-        {tlv(36), {"ApplicationParameters", false, cFmt::unknown}},
+        {tlv::Lifetime, {"Lifetime", true, cFmt::num}},
+        //{tlv::MustBeFresh, {"MustBeFresh", true, cFmt::unknown}},
+        //{tlv::CanBePrefix, {"CanBePrefix", true, cFmt::unknown}},
+        //{tlv(30), {"ForwardingHint", false, cFmt::unknown}},
+        //{tlv(34), {"HopLimit", false, cFmt::unknown}},
+        //{tlv(36), {"ApplicationParameters", false, cFmt::unknown}},
         // obsolete stuff
-        {tlv(9), {"Selectors", false, cFmt::unknown}},
-        {tlv(13), {"MinSuffixComponents", true, cFmt::unknown}},
-        {tlv(14), {"MaxSuffixComponents", true, cFmt::unknown}},
-        {tlv(15), {"PublisherPublicKeyLocator", false, cFmt::unknown}},
-        {tlv(16), {"Exclude", false, cFmt::unknown}},
-        {tlv(17), {"ChildSelector", false, cFmt::unknown}},
-        {tlv(19), {"Any", false, cFmt::unknown}},
+        //{tlv(9), {"Selectors", false, cFmt::unknown}},
+        //{tlv(13), {"MinSuffixComponents", true, cFmt::unknown}},
+        //{tlv(14), {"MaxSuffixComponents", true, cFmt::unknown}},
+        //{tlv(15), {"PublisherPublicKeyLocator", false, cFmt::unknown}},
+        //{tlv(16), {"Exclude", false, cFmt::unknown}},
+        //{tlv(17), {"ChildSelector", false, cFmt::unknown}},
+        //{tlv(19), {"Any", false, cFmt::unknown}},
     };
     inline static Dict metainfoTLV = {
         {tlv::ContentType, {"ContentType", true, cFmt::num}},
-        {tlv::FreshnessPeriod, {"Freshness", true, cFmt::num}},
-        {tlv(26), {"FinalBlockId", false, cFmt::unknown}},
+        //{tlv::FreshnessPeriod, {"Freshness", true, cFmt::num}},
+        //{tlv(26), {"FinalBlockId", false, cFmt::unknown}},
     };
     inline static Dict contentTypeTLV = {
         // content types
         {tlv::ContentType_Blob, {"Blob", true, cFmt::num}},
-        {tlv::ContentType_Link, {"Link", true, cFmt::num}},
+        //{tlv::ContentType_Link, {"Link", true, cFmt::num}},
         {tlv::ContentType_Key, {"Key", true, cFmt::num}},
-        {tlv::ContentType_Nack, {"Nack", true, cFmt::num}},
-        {tlv::ContentType_Manifest, {"Manifest", true, cFmt::num}},
+        //{tlv::ContentType_Nack, {"Nack", true, cFmt::num}},
+        //{tlv::ContentType_Manifest, {"Manifest", true, cFmt::num}},
         {tlv::ContentType_CAdd, {"CAdd", true, cFmt::num}},
         {tlv(131), {"TrustSchema", true, cFmt::num}},
         {tlv(5), {"PrefixAnn", true, cFmt::num}},
@@ -136,7 +136,7 @@ struct Dissect {
     };
     inline static const std::unordered_map<tlv, Dict*> dicts = {
         {tlv::Name, &nameTLV},
-        {tlv::Interest, &interestTLV},
+        {tlv::cState, &cStateTLV},
         {tlv::MetaInfo, &metainfoTLV},
         {tlv::ContentType, &contentTypeTLV},
         {tlv::SignatureInfo, &sigInfoTLV},

@@ -317,10 +317,10 @@ struct crPrefix : crTLV<rPrefix,tlv::Name> {
     crPrefix(const crName& n) : crTLV{n.v_} { }
 };
 
-struct crInterest : crTLV<rInterest,tlv::Interest> {
+struct crInterest : crTLV<rInterest,tlv::cState> {
     crInterest(crName&& n, std::chrono::milliseconds lt, uint32_t non = rand32()) : crTLV{std::move(n)} {
         append(tlv::Nonce, std::array{uint8_t(non), uint8_t(non >> 8), uint8_t(non >> 16), uint8_t(non >> 24)});
-        append(tlv::InterestLifetime, lt.count());
+        append(tlv::Lifetime, lt.count());
         done();
     }
 };

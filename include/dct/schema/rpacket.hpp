@@ -140,6 +140,63 @@ constexpr auto rName::operator<=>(const rName& rhs) const noexcept { return rPre
 constexpr bool rName::isPrefix(const rName& nm) const noexcept { return rPrefix(*this).isPrefix(rPrefix(nm)); }
 constexpr auto rName::first(int comp) const { return rPrefix(*this).first(comp); }
 
+} // namespace dct
+
+template<> struct std::hash<dct::rName> {
+    size_t operator()(const dct::rName& c) const noexcept { return std::hash<dct::tlvParser>{}(c); }
+};
+template<> struct std::hash<dct::rPrefix> {
+    size_t operator()(const dct::rPrefix& c) const noexcept { return std::hash<dct::tlvParser>{}(c); }
+};
+
+
+/* ---------
+ * Name formatters are defined here since later routines in this header want
+ * to use them. They have to be defined outside of the dct namespace so we
+ * leave it then re-enter it after these defs.
+ */
+
+template<> struct fmt::formatter<dct::rPrefix>: fmt::dynamic_formatter<> {
+    template <typename FormatContext>
+    auto format(const dct::rPrefix& p, FormatContext& ctx) const -> decltype(ctx.out()) {
+        auto np = [](auto s) -> bool { for (auto c : s) if (c < 0x20 || c >= 0x7f) return true; return false; };
+        auto out = ctx.out();
+        for (auto blk : dct::rPrefix{p}) {
+            auto s = blk.rest();
+            // if there are any non-printing characters, format as hex. Otherwise format as a string.
+            if (np(s)) {
+                //XXX look for 'tagged' timestamps (should change to TLV and get rid of this)
+                if (s.size() > 10) {
+                    out = fmt::format_to(out, "/^{:02x}..", fmt::join(s.begin(), s.begin()+8, ""));
+                } else if (s.size() == 9 && s[0] == 0xfc && s[1] == 0) {
+                    auto us = ((uint64_t)s[2] << 48) | ((uint64_t)s[3] << 40) | ((uint64_t)s[4] << 32) |
+                              ((uint64_t)s[5] << 24) | ((uint64_t)s[6] << 16) | ((uint64_t)s[7] << 8) | s[8];
+                    auto ts = std::chrono::system_clock::time_point(std::chrono::microseconds(us));
+                    if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
+                        out = fmt::format_to(out, "/@{:%H:%M:}{:%S}", ts, ts.time_since_epoch());
+                    } else {
+                        out = fmt::format_to(out, "/{:%g-%m-%d@%R}", ts);
+                    }
+                } else {
+                    out = fmt::format_to(out, "/^{:02x}", fmt::join(s, ""));
+                }
+            } else {
+                out = fmt::format_to(out, "/{}", std::string_view((char*)s.data(), s.size()));
+            }
+        }
+        return out;
+    }
+};
+
+template<> struct fmt::formatter<dct::rName>: formatter<dct::rPrefix> {
+    template <typename FormatContext>
+    auto format(const dct::rName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
+        return format_to(ctx.out(), "{}", dct::rPrefix(n));
+    }
+};
+
+namespace dct {
+
 struct rInterest : tlvParser {
     constexpr rInterest() = default;
     rInterest(const rInterest&) = default;
@@ -161,7 +218,7 @@ struct rInterest : tlvParser {
             auto n = rName(t.nextBlk(tlv::Name));
             if (! n.valid() || n.nBlks() < 3 || n[-1].size() == 0) return false;
             t.nextBlk(tlv::Nonce);
-            t.nextBlk(tlv::InterestLifetime);
+            t.nextBlk(tlv::Lifetime);
             if (! t.eof()) return false;
         } catch (const runtime_error& e) { return false; }
         return true;
@@ -177,8 +234,8 @@ struct rInterest : tlvParser {
     }
     auto lifetime() const {
         tlvParser t(*this);
-        auto lt = t.findBlk(tlv::InterestLifetime).toNumber();
-        if (lt == 0 || lt > 1000*3600) throw runtime_error("interest lifetime invalid");
+        auto lt = t.findBlk(tlv::Lifetime).toNumber();
+        if (lt == 0 || lt > 1000*3600) throw runtime_error("cState lifetime invalid");
         return std::chrono::milliseconds(lt);
     }
     auto operator<=>(const rInterest& rhs) const noexcept { return name() <=> rhs.name(); }
@@ -287,7 +344,10 @@ struct rCert : rData {
         static const std::array<uint8_t,4> si64{253, 0, 255, 15};
         const auto si = sigInfo().data();
         if (std::memcmp(si+0, si0.data(), si0.size()) || std::memcmp(si+5, si5.data(), si5.size()) ||
-            std::memcmp(si+41, si41.data(), si41.size()) || std::memcmp(si+64, si64.data(), si64.size())) return false; 
+            std::memcmp(si+41, si41.data(), si41.size()) || std::memcmp(si+64, si64.data(), si64.size())) {
+            print("validForm: {} invalid\n", name());
+            return false; 
+        }
         return true;
     }
 
@@ -308,7 +368,16 @@ struct rCert : rData {
     bool validNow() const noexcept {
         auto now = iso8601(std::chrono::system_clock::now());
         const auto si = sigInfo().data();
-        return std::memcmp(si+68, now.data(), now.size()) >= 0 && std::memcmp(now.data(), si+49, now.size()) >= 0;
+        if (std::memcmp(now.data(), si+49, now.size()) < 0) {
+            print("validNow: {} not valid until {}\n", name(), validAfter());
+            return false;
+        }
+        if (std::memcmp(si+68, now.data(), now.size()) < 0) {
+            print("validNow: {} expired {}\n", name(), validUntil());
+            return false;
+        }
+        return true;
+        //return std::memcmp(si+68, now.data(), now.size()) >= 0 && std::memcmp(now.data(), si+49, now.size()) >= 0;
     }
 
     // check that cert's sigInfo is formatted correctly and that it's within its validity period.
@@ -316,55 +385,12 @@ struct rCert : rData {
 
     // check that cert is valid and its signing type matches 'sType'
     // (which is usually the schema's required cert signing type).
-    bool valid(uint8_t sType) const noexcept { return valid() && sigType() == sType; }
+    bool valid(uint8_t sType) const noexcept {
+        if (sigType() != sType) print("rcert::valid: signing type is {} should be {}\n", sigType(), sType);
+        return valid() && sigType() == sType;
+    }
 };
 
 } // namespace dct
-
-template<> struct std::hash<dct::rName> {
-    size_t operator()(const dct::rName& c) const noexcept { return std::hash<dct::tlvParser>{}(c); }
-};
-template<> struct std::hash<dct::rPrefix> {
-    size_t operator()(const dct::rPrefix& c) const noexcept { return std::hash<dct::tlvParser>{}(c); }
-};
-
-template<> struct fmt::formatter<dct::rPrefix>: fmt::dynamic_formatter<> {
-    template <typename FormatContext>
-    auto format(const dct::rPrefix& p, FormatContext& ctx) const -> decltype(ctx.out()) {
-        auto np = [](auto s) -> bool { for (auto c : s) if (c < 0x20 || c >= 0x7f) return true; return false; };
-        auto out = ctx.out();
-        for (auto blk : dct::rPrefix{p}) {
-            auto s = blk.rest();
-            // if there are any non-printing characters, format as hex. Otherwise format as a string.
-            if (np(s)) {
-                //XXX look for 'tagged' timestamps (should change to TLV and get rid of this)
-                if (s.size() > 10) {
-                    out = fmt::format_to(out, "/^{:02x}..", fmt::join(s.begin(), s.begin()+8, ""));
-                } else if (s.size() == 9 && s[0] == 0xfc && s[1] == 0) {
-                    auto us = ((uint64_t)s[2] << 48) | ((uint64_t)s[3] << 40) | ((uint64_t)s[4] << 32) |
-                              ((uint64_t)s[5] << 24) | ((uint64_t)s[6] << 16) | ((uint64_t)s[7] << 8) | s[8];
-                    auto ts = std::chrono::system_clock::time_point(std::chrono::microseconds(us));
-                    if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
-                        out = fmt::format_to(out, "/@{:%H:%M:}{:%S}", ts, ts.time_since_epoch());
-                    } else {
-                        out = fmt::format_to(out, "/{:%g-%m-%d@%R}", ts);
-                    }
-                } else {
-                    out = fmt::format_to(out, "/^{:02x}", fmt::join(s, ""));
-                }
-            } else {
-                out = fmt::format_to(out, "/{}", std::string_view((char*)s.data(), s.size()));
-            }
-        }
-        return out;
-    }
-};
-
-template<> struct fmt::formatter<dct::rName>: formatter<dct::rPrefix> {
-    template <typename FormatContext>
-    auto format(const dct::rName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
-        return format_to(ctx.out(), "{}", dct::rPrefix(n));
-    }
-};
 
 #endif  // RPACKET_HPP

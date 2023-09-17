@@ -4,17 +4,16 @@
 # set "-n xxx" for a number of runs other than 10 (default)
 # or "-n 0" for run forever
 
-# members=(gate frontdoor backdoor patio bob)
-members=(gate patio frontdoor backdoor)
+members=(gate frontdoor backdoor patio bob)
 
 #get rid of any leftovers
 killall app2
 DCT_DEFAULT_IF=en0
 export DCT_DEFAULT_IF
-DCT_MULTICAST_ADDR=ff02::5678
+DCT_MULTICAST_ADDR=ff02::1234
 export DCT_MULTICAST_ADDR
 for mbr in ${members[@]}; do
-  ./app2 -n 10 id2/$mbr.bundle &
+  ./app2 -n 0 -q id2/$mbr.bundle &
   echo -n " $mbr"
   echo
 #  sleep .1 

@@ -51,7 +51,7 @@ struct pubValidator {
                     ptmplts_{std::move(pt)}, ptm_{std::move(ptm)}, ptok_{std::move(ptok)}, pstab_{std::move(pstab)} {
         // specialize templates for validation (vs construction)
         for (auto& pt : ptmplts_) {
-            //assert(pt.dpar_ != maxTok || pt.vs_.to_ulong() == 0ul);
+            //assert(pt.dpar_ != maxTok || pt.vs_.to_ullong() == 0ull);
             for (auto& c : pt.tmplt_) {
                 //assert(! isCor(c));
                 //XXX eventually want type checking here
@@ -94,7 +94,7 @@ struct pubValidator {
         for (const auto& pt : ptmplts_) {
             if (ncomp != pt.tmplt_.size()) continue;
             // if template has a discriminator check it first
-            if (pt.vs_.to_ulong() > 1ul) {
+            if (pt.vs_.to_ullong() > 1ull) {
                 if (auto t = compToTok(bs, nm.nthBlk(pt.dpar_).toSv()); t == maxTok || !pt.vs_[t]) continue;
             }
             if (matchComps(bs, nm, pt)) return true;

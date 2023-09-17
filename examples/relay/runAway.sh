@@ -3,7 +3,7 @@
 # do "killall relay" to terminate 
 
 # these lines set the multicast address to be used
-DCT_MULTICAST_ADDR=ff01::5678
+DCT_MULTICAST_ADDR=ff02::5678
 export DCT_MULTICAST_ADDR
 
 ids=(gate)

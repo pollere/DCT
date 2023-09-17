@@ -134,7 +134,7 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     try {
         for (auto sp : dtList)
             if (sp != s) {
-                //print("\trelaying a signing chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
+                // print("\trelaying a signing chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
                 sp->addRelayedChain(c, cs);
             }
     } catch (const std::exception& e) { }

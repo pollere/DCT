@@ -115,7 +115,7 @@ struct DCTmodelPT final : DCTmodel  {
                            auto tp = cert.computeTP();
                            if (wasRelayed(tp)) {
                                if(isSigningCert(cert))
-                                   ckd.publishRlyCert(cert,  m_ackCb); //cb for signing cert
+                                   ckd.publishConfCert(cert,  m_ackCb); //cb for signing cert
                                else
                                    ckd.publishRlyCert(cert);
                            } else { //not a relayed cert
@@ -142,6 +142,7 @@ struct ptps
     uint64_t m_fail{};
     std::unordered_set<dct::thumbPrint> m_unackedCerts{};
     std::unordered_map<dct::thumbPrint,std::vector<Publication>> m_holdKeys{};
+    std::unordered_map<dct::thumbPrint,std::vector<Publication>> m_holdPubs{};
     bool m_connected{false};
     bool isConnected() const { return m_connected; }
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
@@ -149,18 +150,25 @@ struct ptps
     // following routine MUST have same type signature as DelivCb
     // this is used to prevent Publications (specifically in /keys/pubs) from
     // being forwarded before their signing keys.
-    // When Publication encryption is not used, may want to extend this
-    // to hold Publications in /pubs
     void certAck(const rData& c, bool acked)
     {
         auto tp = c.computeTP();
         if (!acked) { // unlikely as implies cert expired, but remove from list
             print ("addRelayedCert addCert cb fails for {}\n", c.name());
             if (m_holdKeys.contains(tp)) m_holdKeys.erase(tp);
+            if (m_holdPubs.contains(tp)) m_holdKeys.erase(tp);
             return;
-        } else if (m_holdKeys.contains(tp)) {
+        }
+
+        if (m_holdKeys.contains(tp)) {
+            // print ("addRelayedCert addCert cb for {} finds keys on hold\n", c.name());
             for (auto p : m_holdKeys[tp]) m_pb.publishKnownSigner(std::move(p));
             m_holdKeys.erase(tp);
+        }
+        if (m_holdPubs.contains(tp)) {
+            // print ("addRelayedCert addCert cb for {} finds pubs on hold\n", c.name());
+            for (auto p : m_holdPubs[tp]) m_pb.publishKnownSigner(std::move(p));
+            m_holdPubs.erase(tp);
         }
         m_unackedCerts.erase(tp);
     }
@@ -238,10 +246,15 @@ struct ptps
 
     /*
      * p is a complete trust-schema compliant Publication on the input Face and goes directly to the syncps
-     * Call this if the same trust schema (or a superset) is applied on the output Face
+     * Can call this if the same schema (or a superset) is applied on the output Face
+     * Use of holdKeys keeps from relaying keys/pubs until their signing cert has been ackd/confirmed
      */
     void publish(Publication&& p)
     {
+        if (m_unackedCerts.contains(p.thumbprint())) {
+            m_holdPubs[p.thumbprint()].emplace_back(std::move(p));  //creates entry if doesn't exist; emplace should copy
+            return;    //if called from publishValid() it is a valid publication, just on hold before publish
+        }
         if(m_failCb) {    //if a fail callback is set, request confirmation
             m_pb.publish(std::move(p), [this](auto p, bool s){confirmPublication(Publication(p), s);});
             // [ch=std::move(ch)](auto p, bool s) { ch(p,s);});
