@@ -88,7 +88,7 @@ struct DistGKey {
     connectedCb m_connCb{[](auto) {}};
     kmpriCB m_kmpri;
     thumbPrint m_tp{};
-    thumbPrint m_kmtp{};        // thumbprint of the keymaker
+    thumbPrint m_kmtp{};        // thumbprint of the keymaker  
     keyVal m_pDecKey{};         // transformed pk used to encrypt group key; use with
     keyVal m_sDecKey{};         // transformed sk used to decrypt group key
     keyVal m_curKey{};          // current group key
@@ -106,6 +106,7 @@ struct DistGKey {
     bool m_init{true};                  // key maker status unknown while in initialization
     bool m_pubdist = false;        // true indicates this is a pub group key distributor (not pdu)
     bool m_mrPending{false};    //member request pending
+    Cap::capChk m_relayChk; // method to return true if the identity chain has the relay (RLY) capability
     pTimer m_mrRefresh{std::make_shared<Timer>(getDefaultIoContext())};
 
     DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& gkeyCb, const certStore& cs,
@@ -115,8 +116,10 @@ struct DistGKey {
              m_prefix{pPre}, m_gkPrefix{pPre/"gk"}, m_mrPrefix{pPre/"mr"},
              m_sync(face, dPre, m_keySM.ref(), m_keySM.ref()),
              m_certs{cs}, m_newKeyCb{std::move(gkeyCb)}, //called when a (new) group key arrives or is created
-             m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
-             m_keyLifetime(m_reKeyInt + m_keyRand) {
+             m_reKeyInt(reKeyInterval),
+             m_keyRand(reKeyRandomize),
+             m_keyLifetime(m_reKeyInt + m_keyRand),
+             m_relayChk{Cap::checker("RLY", pPre, cs)} {
        // the associated sync session is started after cert distributor completes  setup
        m_sync.autoStart(false);
        m_sync.cStateLifetime(6763ms);
@@ -132,16 +135,16 @@ struct DistGKey {
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
     }
 
+    auto isRelay(const thumbPrint& tp) { return m_relayChk(tp).first; }    // identity 'tp' has RLY capability?
+
     // publish my membership request with updated key: name <m_mrPrefix><timestamp>
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
     // Member requests have a lifetime same order as a gkey so don't have to keep reissuing
-    //XXXX  when distributor rules get added to trust schemas, then only members will be able to
-    // issue requests and relays cannot be members of a pub distributor (only pdu).
     void publishMembershipReq() {
-        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay")  return;   //XXX hack for relays - shouldn't get called
-        // using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-        // auto now = std::chrono::system_clock::now();
-        // print("{:%M:%S} {} publishes a {} membership request\n",  ticks(now.time_since_epoch()), m_certs[m_tp].name(), m_sync.collName_.last().toSv());
+        if (m_pubdist && isRelay(m_tp))  return;   // relays don't publish mrs (shouldn't get here)
+        /*using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+        auto now = std::chrono::system_clock::now();
+        print("{:%M:%S} {} publishes a {} membership request\n",  ticks(now.time_since_epoch()), m_certs[m_tp].name(), m_sync.collName_.last().toSv());*/
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         crData p(m_mrPrefix/std::chrono::system_clock::now());
         p.content(std::vector<uint8_t>{});
@@ -220,7 +223,7 @@ struct DistGKey {
      * gk names <m_gkPrefix><epoch><low tpId><high tpId><timestamp>
      */
     void receiveGKeyList(const rPub& p) {
-        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay")  return;   //XXX hack for relays
+        if (m_pubdist && isRelay(m_tp))  return;   // relays don't get pub keys
 
         const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
         if (m_kmpri(tp) <= 0) {
@@ -346,10 +349,10 @@ struct DistGKey {
         m_connCb = std::move(ccb);
         if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;
 
-        // XXXX Hack for relay: doesn't participate in pub group as it doesn't do encryption or decryption
+        // relay doesn't participate in pub group as it doesn't do encryption or decryption
         // but needs to pass through the gklists so has a gk distributor active with its own subscription cb
         // which is set by the ptps shim which then calls the start() for this sync
-        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay") { initDone(); return; }
+        if (m_pubdist && isRelay(m_tp)) { initDone(); return; }
 
         m_sync.start();
 
@@ -487,8 +490,7 @@ struct DistGKey {
         if (m_mbrList.size() == 80*maxKR) return;
 
         auto tp = p.thumbprint();   // thumbprint of the signer of the member request
-        // XXXX Test here for a member request (mr) from relay role when this is a "pubs" distributor (later would be rejected in validation)
-        if (m_pubdist && m_certs[tp].name()[1].toSv() == "relay") return;  //this is a hacky hack
+        if (m_pubdist && isRelay(tp)) return;  // identities with RLY don't get pub keys
 
         if (!m_mbrList.contains(tp)) {     // not already a member, add to list
             auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint

@@ -133,7 +133,6 @@ static auto tfmt(durmilli now) {
 }
 
 static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
-    auto now = std::chrono::system_clock::now();
     rName n{};
     const char* ptype{};
     switch (d[0]) {
@@ -148,38 +147,38 @@ static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
             ptype = "Ad";
             break;
     }
-    //XXX work-around for fmt chrono problems - want to print seconds to ms resolution but
-    // fmt will only do this for durations with a floating pt rep. But chrono prints hours
-    // for durations as if they were gmtime but we want localtime so we do H & M from the
-    // sys time point and S from it converted to a duration. Ick.
-    auto now2 = durmicro(now.time_since_epoch());
-    print("{:%H:%M:}{:%S}  {}  {}  {:5} {:4}", now, now2, tfmt(now2), ptype, sport, s);
+    //std::chrono::local_time<durmicro> now = durmicro(std::chrono::system_clock::now().time_since_epoch());
+    auto now = durmicro(std::chrono::system_clock::now().time_since_epoch());
+    print("{:%H:%M:%S}  {}  {}  {:5} {:4}", now, tfmt(now), ptype, sport, s);
     if (hashIBLT) print("  {:08x} ", d[0] != 6? mhashView(n) : n.lastBlk().toNumber());
     print(" {}\n", n);
     return ptype;
 }
 
-static void fullPrint(const uint8_t* d, size_t s, uint16_t sport) {
-    if (! compactPrint(d, s, sport)) return;
-    di.dissect(std::cout, tlvParser(d, s));
-    std::cout << '\n';
-}
-
-static void namePrint(const uint8_t* d, size_t s, uint16_t sport) {
-    compactPrint(d, s, sport);
-    if (d[0] != 6) return;
+static auto namePrint(const uint8_t* d, size_t s, uint16_t sport) {
+    auto pt = compactPrint(d, s, sport);
+    if (!pt || d[0] != 6) return pt;
 
     try {
         auto rd = rData(d, s);
-        if (SigMgr::encryptsContent(rd.sigType())) return;
+        if (SigMgr::encryptsContent(rd.sigType())) return pt;
 
         for (const auto c : rd.content()) {
-            if (! c.isType(6)) return;
+            if (! c.isType(6)) return pt;
             rData p{c};
-            if (! p.valid()) return;
+            if (! p.valid()) return pt;
             print(" | {}\n", p.name());
         }
     } catch (const std::runtime_error&) { }
+    return pt;
+}
+
+static auto fullPrint(const uint8_t* d, size_t s, uint16_t sport) {
+    auto pt = namePrint(d, s, sport);;
+    if (! pt) return pt;
+    di.dissect(std::cout, tlvParser(d, s));
+    std::cout << '\n';
+    return pt;
 }
 
 static void handlePkt(const uint8_t* d, size_t s, uint16_t sport) {

@@ -4,7 +4,7 @@
 // certificate that is signed and validatable.
 
 // trust anchor name associated with this schema
-_domain:    "rlygrp"
+_domain:    "mesh"
 
 // MBPS Publication definition
 // target, topic, args are set using application parameters
@@ -19,23 +19,25 @@ sensCmd: #Pub & { target: "sens", topic: "cmd", args: "read" | "reset" } <= cntr
 // sensAck: #Pub & { target: "sens", topic: "ack" } <= signCert & ( _role: "sensor" }
 
 roleCert:   _domain/_role/_roleId/_keyinfo
+rlyCert:   _domain/_role/_roleId/_keyinfo
 signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 
 // There are different signing chains for sensCert & cntrlCerts.
 // "key makers" (authorized by the KM capability, kmCap) are
 // responsible for creating and distributing the nonce
-// symmetric encryption keys.
-// Giving relay Cert that capability if AEAD is selected
+// symmetric encryption keys for PDU validators
+// Relays may have the KM capability for PDUs if AEAD is selected
 
-sensSign:   signCert & { _role: "sensor" }  <= sensCert
-cntrlSign:  signCert & { _role: "controller" } <= mbrCert
-rlySign:    signCert & { _role: "relay" } <= mbrCert
-sensCert:   roleCert & { _role: "sensor" } <= domCert
-mbrCert:    roleCert <= domCert | kmCap
+sensSign:   signCert & { _role: "sensor" }  <= roleCert
+cntrlSign:  signCert & { _role: "controller" } <= roleCert
+roleCert <= domCert
+rlySign:    signCert <= rlyCert
+rlyCert <= rlyCap
 
 // capability certs (capabilities granted to roles)
 capCert: _domain/"CAP"/capId/capArg/_keyinfo
 kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert    // allowed to be a key maker (capArg is priority)
+rlyCap:  capCert & { capId: "RLY", capArg: _ } <= domCert | kmCap
 
 domCert: _domain/_keyinfo
 
@@ -46,6 +48,7 @@ domCert: _domain/_keyinfo
 #pubPrefix:    _domain
 #pubValidator: "EdDSA"
 
+#certValidator: "EdDSA"
 // used for cAdds
 #wireValidator: "AEAD"
 

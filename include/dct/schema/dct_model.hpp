@@ -45,13 +45,13 @@ using namespace std::literals;
 
 namespace dct {
 
-static constexpr std::chrono::seconds certOverlap = std::chrono::minutes(10);    // at least twice domain clock skew
 
 //template<typename sPub>
 struct DCTmodel {
     certStore cs_{};        // certificates used by this model instance
     std::unordered_multimap<thumbPrint,dctCert> pending_{};
-    const bSchema& bs_;     // trust schema for this model instance
+    const bSchema& bs_;     // communications schema for this model instance
+    DirectFace face_;
     pubBldr<false> bld_;    // publication builder/verifier
     SigMgrAny psm_;         // publication signing/validation
     SigMgrAny csm_;         // cert signing/validation (XXXX currently limited to EdDSA)
@@ -174,15 +174,14 @@ struct DCTmodel {
     }
 
     // called to get a new signing pair
-    // new SPs are shipped certOverlap/2 after they are made/become valid
-    // and are valid for 2*certOverlap in addition to the certLifetime
+    // new SPs are shipped certOverlap/2 after they become valid and are valid for certOverlap in addition to the certLifetime
     // Handles adding the new cert to cs_, publishing it, and making it the new signing key  and informing the group key distributors, if any
     // Waits for a publication confirmation before making this pair the new signing pair and calling the group key distributors
     void getNewSP(const pairCb& spCb) {
         auto sp = spCb();       //new signing key pair
         auto sc = sp.first;     // public cert of pair
         auto now = std::chrono::system_clock::now();
-        auto nt = rCert(sc).validUntil() - dct::certOverlap;   // schedule next rekey for certOverlap before expiration time
+        auto nt = rCert(sc).validUntil() - certOverlap;   // schedule next rekey for certOverlap before expiration time
         if (nt <= now)
             std::runtime_error("getNewSP was handed an expired cert");
         oneTime(nt-now, [this,spCb]{getNewSP(spCb);});    //schedule re-keying
@@ -210,21 +209,30 @@ struct DCTmodel {
         };
 
         // schedule usage of the new pair once validity period starts, wait half the overlap to handle clock skew
+        // if certs are made valid certOverlap/2 in the past, this should execute immediately
         oneTime(rCert(sc).validAfter() - now + certOverlap/2, [addKP,sp] { addKP(sp); } );
+
+        // this would be a good time to check my cert store for expired certs
+        for (auto it = cs_.begin(); it != cs_.end(); ++it)
+            if (rCert(it->second).validUntil() <= now)  pv_.erase(it->first);
+        cs_.removeExpired();
     }
+
+    using strCb = std::function<std::string_view()>;
 
     // create a new DCTmodel instance and pass the callbacks to access required certs to
     // "bootstrap" this new transport instance
-    // optional string for face name
-    DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, DirectFace& face = defaultFace()) :
+    // Pass in a face address callback or default to empty for default face
+    DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, strCb addrCb) :
             bs_{validateBootstrap(rootCb, schemaCb, idChainCb, signIdCb, cs_)},
+            face_{addrCb()},
             bld_{pubBldr(bs_, cs_, bs_.pubName(0))},
             psm_{getSigMgr(bs_)},
             csm_{getCertSigMgr(bs_)},
             wsm_{getWireSigMgr(bs_)},
             syncSm_{psm_.ref(), bs_, pv_},
-            m_sync{face, wirePrefix()/"pubs", wireSigMgr(), syncSm_},
-            m_ckd{ face, pubPrefix(), wirePrefix()/"cert",
+            m_sync{face_, wirePrefix()/"pubs", wireSigMgr(), syncSm_},
+            m_ckd{ face_, pubPrefix(), wirePrefix()/"cert",
                    [this](auto cert){ addCert(cert);},  [](auto /*p*/){return false;} }
     {
         // pub sync session is started after distributor(s) have completed their setup
@@ -234,14 +242,14 @@ struct DCTmodel {
                 throw schema_error("Encrypted CAdds require that some entity(s) have KeyMaker capability");
             }
             if (! wsm_.ref().subscriberGroup()) {
-                m_gkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
+                m_gkd = new DistGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pdus",
                              [this](auto gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
             } else {
                 if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                     // schema doesn't contain an SG member so PP won't work XXXX should extract name of group from schema
                     throw schema_error("PPSIGNED/PPAEAD require that some entity(s) have Subscriber capability");
                 }
-                m_sgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys"/"pdus",
+                m_sgkd = new DistSGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pdus",
                              [this](auto gpk, auto gsk, auto ct){ wsm_.ref().addKey(gpk, gsk, ct);}, certs());
             }
         }
@@ -257,10 +265,10 @@ struct DCTmodel {
                     throw schema_error("PPSIGNED requires that some entity(s) have Subscriber capability");
                 }
                 // XXXX instead of pubs could be name of subscriber group
-                m_psgkd = new DistSGKey(face, pubPrefix(), wirePrefix()/"keys"/"pubs",
+                m_psgkd = new DistSGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pubs",
                              [this](auto gpk, auto gsk, auto ct){ psm_.ref().addKey(gpk, gsk, ct);}, certs());
             } else {
-                m_pgkd = new DistGKey(face, pubPrefix(), wirePrefix()/"keys"/"pubs",
+                m_pgkd = new DistGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pubs",
                              [this](auto gk, auto gkt){ psm_.ref().addKey(gk, gkt);}, certs());
             }
         }
@@ -282,10 +290,15 @@ struct DCTmodel {
         // SPub need access to builder's 'index' function to translate component names to indices
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
 
-        // set up timer to request a new signing pair before this pair expires
-        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - certOverlap,
+        // set up timer to request a new signing pair before this pair expires (getNewSP sets up subsequent rekeys)
+        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - dct::certOverlap,
                  [this, signIdCb] {getNewSP(signIdCb);});
     }
+
+ DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr = "") :
+    DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, [a=addr]{ return a;}  ) {}
+
+    const auto& getFace() { return face_; }
 
     // export the syncps API
  

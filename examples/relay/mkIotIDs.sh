@@ -9,6 +9,7 @@ PATH=../../../tools:$PATH
 
 device=(frontdoor backdoor gate patio)
 operator=(alice bob roamOp)
+# the first relay will be the server side for external link
 relay=(home away)
 
 if [ -z "$1" ]; then echo "-$0: must supply a .rules schema filename"; exit 1; fi;
@@ -23,13 +24,18 @@ SchemaCert=$Schema.schema
 KMCapCert=
 KMPCapCert=
 DeviceSigner=$RootCert
-RelaySigner=$RootCert
 
 schemaCompile -o $Bschema $1
 schemaCompile -o $Eschema ../iote.rules
 
 PubPrefix=iot
 CertValidator=EdDSA
+LLM=llm:ff02::1234
+PROTO=udp:
+PORT=34567
+SRVR=169.254.56.36:
+
+echo $PROTO$SRVR$PORT
 
 make_cert -s $CertValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
@@ -42,7 +48,7 @@ if [[ $(schema_info -t $Bschema "#pubValidator") != $(schema_info -t $Eschema "#
 fi;
 
 #
-# This part is for the multicast subdomains (that use Bschema)
+# This part makes certs needed for member deftts of the multicast subdomains (that use Bschema)
 #
 if [[ $(schema_info -t $Bschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KM") ]; then
@@ -73,12 +79,16 @@ if [[ $(schema_info -t $Bschema "#pubValidator") =~ AEADSGN|PPSIGN ]]; then
     DeviceSigner=$KMPCapCert
 fi;
 
-# make the device certs
+LocRelayCap=locRly.cap
+# make a local multicast relay capability cert (assumes same for both local subnets)
+make_cert -s $CertValidator -o $LocRelayCap $PubPrefix/CAP/RLY/$LLM $RootCert
+
+# make the device identity certs
 for nm in ${device[@]}; do
     make_cert -s $CertValidator -o $nm.cert $PubPrefix/device/$nm $DeviceSigner
 done
 
-# make the operator certs
+# make the operator identity certs
 for nm in ${operator[@]}; do
     make_cert -s $CertValidator -o $nm.cert $PubPrefix/operator/$nm $RootCert
 done
@@ -90,7 +100,7 @@ done
 # The other certs don't (and shouldn't) have signing keys.
 
 # make the ID bundles. If the schema uses AEAD encryption, devices are
-# given "KM (Key Maker) capability but not operators. 
+# given "KM (Key Maker) capability while operators are not. 
 for nm in ${operator[@]}; do
     make_bundle -v -o $nm.bundle $RootCert $SchemaCert +$nm.cert
 done
@@ -109,16 +119,18 @@ done
 
 # make the relay certs and bundles for local interfaces
 # in this example, the relays can never be keymakers for the multicast subdomain's wireValidator
+# so the Loc Relay capability cert is signed by the RootCert
+subdom=Loc
 for nm in ${relay[@]}; do
-    make_cert -s $CertValidator -o $nm.l.cert $PubPrefix/relay/$nm.l $RootCert
-    make_bundle -v -o $nm.l.bundle $RootCert $SchemaCert +$nm.l.cert
+    echo $nm$subdom
+    make_cert -s $CertValidator -o $nm$subdom.cert $PubPrefix/relay/$nm$subdom $LocRelayCap
+    make_bundle -v -o $nm$subdom.bundle $RootCert $SchemaCert $LocRelayCap +$nm$subdom.cert
 done
 
 #
 # This part is for the external unicast subdomains (that uses Eschema)
 # In this example, at least one external relay link will need to be a
 # keymaker for the wireValidator of that subdomain
-#
 KMCapCert=
 if [[ $(schema_info -t $Eschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
     if [ -z $(schema_info -c $Eschema "KM") ]; then
@@ -128,18 +140,27 @@ if [[ $(schema_info -t $Eschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
 	exit 1;
     fi;
     # make a 'key maker' capability cert for the external subdomain
-    KMCapCert=kme.cap
+    KMCapCert=km.cap
     make_cert -s $CertValidator -o $KMCapCert $PubPrefix/CAP/KM/1 $RootCert
-    RelaySigner=$KMCapCert
 fi;
-
+# Need relay certs for both the client and server ends of the unicast link
+# make external relay capability certs (client and server)
+#
+RelayCert=rlySrvr.cap
+ADDR=$PROTO$PORT
+subdom=Ext
 # make the relay external link certs and bundles
 for nm in ${relay[@]}; do
+    echo $nm$subdom
     if [ -n "$KMCapCert" ]; then
-    make_cert -s $CertValidator -o $nm.e.cert $PubPrefix/relay/$nm.e $KMCapCert
-    make_bundle -v -o $nm.e.bundle $RootCert iote.schema $KMCapCert +$nm.e.cert
+    make_cert -s $CertValidator -o $RelayCert $PubPrefix/CAP/RLY/$ADDR $KMCapCert
+    make_cert -s $CertValidator -o $nm$subdom.cert $PubPrefix/relay/$nm$subdom $RelayCert
+    make_bundle -v -o $nm$subdom.bundle $RootCert iote.schema $KMCapCert $RelayCert +$nm$subdom.cert
     else
-    make_cert -s $CertValidator -o $nm.e.cert $PubPrefix/relay/$nm.e $RootCert
-    make_bundle -v -o $nm.e.bundle $RootCert iote.schema +$nm.e.cert
+    make_cert -s $CertValidator -o $RelayCert $PubPrefix/CAP/RLY/$ADDR $RootCert
+    make_cert -s $CertValidator -o $nm$subdom.cert $PubPrefix/relay/$nm$subdom $RelayCert
+    make_bundle -v -o $nm$subdom.bundle $RootCert iote.schema $RelayCert +$nm$subdom.cert
     fi
+    ADDR=$PROTO$SRVR$PORT #client needs the server address
+    RelayCert=rlyClient.cap
 done

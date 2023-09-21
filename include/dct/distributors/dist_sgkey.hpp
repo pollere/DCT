@@ -92,7 +92,7 @@ struct DistSGKey {
     connectedCb m_connCb{[](auto) {}};
     kmpriCB m_kmpri;   // to check a signing chain for key maker capability
     sgmCB m_sgMem;    //to check signing chain for sub group capability for this keys subcollection
-    Cap::capChk m_sgCap;   // routine to check a signing chain for subscriber capability
+    Cap::capChk m_relayChk; // method to return true if the identity chain has the relay (RLY) capability
     thumbPrint m_tp{};
     thumbPrint m_kmtp{};
     keyVal m_pDecKey{}; //local public signing key converted to X and
@@ -121,7 +121,7 @@ struct DistSGKey {
              m_prefix{pPre}, m_krPrefix{pPre/"kr"}, m_mrPrefix{pPre/"mr"}, m_keyColl{dPre.last().toSv()},
              m_sync(face, dPre, m_keySM.ref(), m_keySM.ref()),
              m_certs{cs}, m_newKeyCb{std::move(sgkeyCb)}, //called when a (new) group key arrives or is created      
-             m_sgCap{Cap::checker("SG", pPre, cs)},
+             m_relayChk{Cap::checker("RLY", pPre, cs)},
              m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
              m_keyLifetime(m_reKeyInt + m_keyRand) {
         // the associated sync session is started after cert distributor completes  setup
@@ -140,10 +140,12 @@ struct DistSGKey {
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
     }
 
+    auto isRelay(const thumbPrint& tp) { return m_relayChk(tp).first; }    // identity 'tp' has RLY capability?
+
     // publish my membership request with updated key: name <m_mrPrefix><timestamp>
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
     void publishMembershipReq() {
-        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay")  return;   //XXX hack for relays
+        if (m_pubdist && isRelay(m_tp))  return;   // relays don't get pub encryption keys
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         if(!m_subr) return;     // don't have permission to be a member
         crData p(m_mrPrefix/std::chrono::system_clock::now());
@@ -243,7 +245,7 @@ struct DistSGKey {
      */
     void receiveSGKeyRecords(const rPub& p)
     {
-        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay") return;   //XXX hack for relays
+        if (m_pubdist && isRelay(m_tp)) return;   // relays don't get keys
 
         const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
         if (m_kmpri(tp) <= 0) {
@@ -388,11 +390,11 @@ struct DistSGKey {
         m_connCb = std::move(ccb);
         if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;    // this will need to be changed if put in names for subscriber groups
 
-         // XXXX Hack for relay: doesn't participate in pub group as it doesn't do encryption or decryption
-        // but needs to pass through the sgklists so has a gk distributor active with its own subscription cb
+         // relay: doesn't participate in pub group as it doesn't do encryption or decryption
+        // but needs to pass through the sgklists so has a sgk distributor active with its own subscription cb
         // which is set by the ptps shim and the ptps shim also calls the start() for this sync as there are
         // other conditions which must be met beforehand
-        if (m_pubdist && m_certs[m_tp].name()[1].toSv() == "relay") { initDone(); return; }
+        if (m_pubdist && isRelay(m_tp) ) { initDone(); return; }
 
         m_sync.start();
 
@@ -529,8 +531,8 @@ struct DistSGKey {
 
         auto tp = p.thumbprint();   // thumbprint of the signer of the member request
         if(! m_sgMem(tp)) return;  //this signing cert doesn't have SG capability
-        // XXXX Test here for request from relay role in /keys/pubs/mr (later would be rejected in validation)
-        if(m_pubdist && m_certs[tp].name()[1].toSv() == "relay")  return;    //this is a hacky hack
+        // Test here for request  in /keys/pubs/mr  from a RLY identity
+        if(m_pubdist && isRelay(tp))  return;
 
         if (!m_mbrList.contains(tp))  //if not already a member, add to list
         {

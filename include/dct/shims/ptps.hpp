@@ -67,10 +67,12 @@ using chnCb = std::function<void(ptps*, const rData, const certStore&)>;
 struct DCTmodelPT final : DCTmodel  {
     SigMgrPT ptPubSm_;     // sigmgr for validating but not decrypting pubs
     SyncPS* m_gkSync{};
+    DirectFace m_face;      // construct face here instead of shim
     std::unordered_map<thumbPrint,bool> m_rlyCerts {};
     bool m_pubDist;
     addChnCb m_rlyCertCb{}; //used to relay validated cert chain to shim
     DelivCb m_ackCb{};      //used to confirm relayed certs
+    thumbPrint m_tp{};          // for testing for capability
 
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
     void addRelayed(thumbPrint tp) { m_rlyCerts[tp] = true;}
@@ -81,7 +83,7 @@ struct DCTmodelPT final : DCTmodel  {
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(pub));
             return pubval.matchTmplt(bs_, pub.name());
-        } catch (std::exception&) {}
+        } catch (std::exception&) { print("DCTmodelPT:isValidPub: no pub validator found for signer\n"); }
         return false;
     }
     // ensure publication's signer is in cert store of this outgoing DeftT
@@ -93,12 +95,24 @@ struct DCTmodelPT final : DCTmodel  {
         return false;
     }
 
+    // checks if capability c is present and, if so, returns its argument (as a stringview)
+    auto capArgument(std::string_view c) {
+        const auto& tp = cs_.Chains()[0];  // thumbprint of newest signing cert
+        // returns empty span if capability wasn't found or has bad argument content
+       auto arg = (Cap::getval(c, pubPrefix(), cs_)(tp)).toSv();
+        if (arg.empty()) std::runtime_error("DCTmodelPT: no RLY capability or no address in RLY capability cert");
+        if (!arg.starts_with("tcp:") && !arg.starts_with("udp:") && !arg.starts_with("ff0")) arg = "";  //XXXX hack for testing without transport.hpp changes
+        return arg;
+    }
+
   // create a DCTmodelPT instance using the certs in the bootstrap bundle file 'bootstrap'
-  // optional string for face name
+
     DCTmodelPT(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
-               DirectFace& face, DelivCb&& acb = nullptr, addChnCb&& rcb = nullptr) :
-            DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, face), ptPubSm_{psm_.ref()}
+               std::string_view addrLoc, DelivCb&& acb = nullptr, addChnCb&& rcb = nullptr) :
+            DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, [this,a=addrLoc]{ return capArgument(a);}  ),
+            ptPubSm_{psm_.ref()}
     {
+        m_tp = cs_.Chains()[0]; // thumbprint of signing cert
         // reset  m_sync.pubSigmgr_ to syncPTSm_ to use the pass-through version
         syncSm_.setSigMgr(ptPubSm_);
         // callbacks to relay for certs and pub key distributors
@@ -130,14 +144,13 @@ struct DCTmodelPT final : DCTmodel  {
 struct ptps
 {   
     connectCb m_connectCb;
-    DirectFace m_face;
     DCTmodelPT m_pb;
     crName m_pubpre{};     // full prefix for Publications
     Timer* m_timer;
     chnCb m_chCb;                 // call back to app when this DefTT's cert distributor gets a fully validated signing cert that arrived from its syncps
     pubCb m_gkCb;            // call back for Publication group key distributor pubs
     pubCb m_failCb;           // call back to app when publication fails if confirmation was requested on publication
-    std::string m_label;        // label for the transport to be used by this face
+    Cap::capChk m_relayChk; // true if the identity chain has the relay (RLY) capability
     uint64_t m_success{};
     uint64_t m_fail{};
     std::unordered_set<dct::thumbPrint> m_unackedCerts{};
@@ -174,23 +187,31 @@ struct ptps
     }
 
     ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
-             const std::string& fl, const chnCb& certHndlr = {}, const pubCb& distCb = {}, const pubCb& failCb={}) :
-        m_face{fl},
-        m_pb{rootCb, schemaCb, idChainCb, signIdCb, m_face,  [this](auto c, auto s){ certAck(c, s); },
+             std::string_view addrLoc, const chnCb& certHndlr = {}, const pubCb& distCb = {}, const pubCb& failCb={}) :
+        m_pb{rootCb, schemaCb, idChainCb, signIdCb, addrLoc,  [this](auto c, auto s){ certAck(c, s); },
             [this](const rData c, const certStore& cs){ m_chCb(this, c, cs); } },
         m_pubpre{m_pb.pubPrefix()},
         m_chCb{certHndlr},
         m_gkCb{distCb},
         m_failCb{failCb},
-        m_label{fl.size()? fl : "default"} {}
+        m_relayChk{Cap::checker("RLY", m_pubpre, m_pb.cs_)} {}
 
     void run() { m_pb.run(); }
     const auto& pubPrefix() const noexcept { return m_pubpre; }
-    const std::string& label() { return m_label; }
-    const auto& face() { return m_face; }
+    const auto& face() { return m_pb.getFace(); }
     auto failCnt() { return m_fail; }
+    auto label() { return m_pb.pubVal("#chainInfo", "_roleId"); }
     auto successCnt() { return m_success; }
     void clearFailures() { m_fail = 0; }
+    auto isRelay(const thumbPrint& tp) { return m_relayChk(tp).first; }    // identity 'tp' has RLY capability?
+    auto relayTo()
+    {
+        // checks if RLY capability is present and, if so, returns its argument (where relaying to)
+        // return empty span if RLY  capability wasn't found or has bad argument content
+        const auto& tp = m_pb.cs_.Chains()[0];  // thumbprint of newest signing cert
+        auto toNet = Cap::getval("RLY", m_pubpre, m_pb.cs_);
+        return toNet(tp).toSv();
+    }
 
     // relies on trust schema using convention of collecting all the signing chain
     // identity information (e.g., _role, _roleId) in pseudo-pub "#chainInfo" so

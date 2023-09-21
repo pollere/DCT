@@ -66,19 +66,14 @@ struct DistCert
     DistCert(DirectFace& face, const Name& pPre, const Name& wPre, addCertCb&& addCb, IsExpiredCb&& eCb) :
         m_pubPrefix{pPre},
         m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref())
-        //m_addCertCb{std::move(addCb)}
     {
         m_sync.cStateLifetime(4789ms);
-        m_sync.pubLifetime(0ms); // pubs don't auto expire
+        m_sync.pubLifetime(0ms); // cert lifetime comes from its validity period
+        m_sync.getLifetimeCb([](auto p) {
+                auto lt = rCert(p).validUntil() - std::chrono::system_clock::now();
+                return std::chrono::duration_cast<std::chrono::milliseconds>(lt);
+            });
         m_sync.isExpiredCb(std::move(eCb));
-#if 0
-        m_sync.filterPubsCb([](auto& pOurs, auto& pOthers) mutable {
-                    // certs are small so send everything that will fit in a packet
-                    pOurs.insert(pOurs.end(), pOthers.begin(), pOthers.end());
-                    return pOurs;
-                });
-#endif
-
         m_sync.subscribe(m_pubPrefix, std::move(addCb));
     }
 

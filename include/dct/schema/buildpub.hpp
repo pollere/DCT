@@ -53,9 +53,12 @@ template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 template<>
-struct fmt::formatter<dct::paramVal>: fmt::dynamic_formatter<> {
-    template <typename FormatContext>
-    auto format(const dct::paramVal& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+struct fmt::formatter<dct::paramVal> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
+        return ctx.end();
+    }
+    auto format(const dct::paramVal& v, format_context& ctx) const -> format_context::iterator {
         return std::visit(overloaded {
             [&](const std::monostate&) { return fmt::format_to(ctx.out(), "(empty)"); },
             [&](const auto& val) { return fmt::format_to(ctx.out(), "{}", val); },

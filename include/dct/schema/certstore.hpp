@@ -58,6 +58,10 @@ struct certStore {
 
     auto begin() const { return certs_.cbegin(); }
     auto end() const { return certs_.cend(); }
+    auto removeExpired() {  // remove expired certs
+        auto now = std::chrono::system_clock::now();
+        std::erase_if(certs_, [now](const auto& kv) { return rCert(kv.second).validUntil() <= now; });
+    }
 
     // lookup a cert given its thumbprint
     const dctCert& get(const thumbPrint& tp) const { return certs_.at(tp); }

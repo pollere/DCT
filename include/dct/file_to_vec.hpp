@@ -37,8 +37,8 @@ static auto fileToVec(std::string_view fname) {
     std::string f{fname};
     std::ifstream is(f, std::ios::binary|std::ios::ate);
     if (! is) throw std::runtime_error(format("can't open file {}", fname));
-    auto sz = is.tellg();
-    if (sz < 2 || sz > 65536) {
+    int64_t sz = is.tellg();
+    if (sz < 4 || sz > 65536) {
         throw std::runtime_error(format("{} file size unreasonable ({} bytes)\n", fname, sz));
     }
     is.seekg(0);

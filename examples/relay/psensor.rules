@@ -4,7 +4,7 @@
 // certificate that is signed and validatable.
 
 // trust anchor name associated with this schema
-_domain:    "rlygrp"
+_domain:    "mesh"
 
 // MBPS Publication definition
 // target, topic, args are set using application parameters
@@ -15,28 +15,31 @@ _domain:    "rlygrp"
 #Pub: _domain/target/topic/args/msgID/sCnt/mts
 
 sensRprt: #Pub & { target: "sens", topic: "rpt", args: _roleId } <= sensSign
-sensCmd: #Pub & { target: "sens", topic: "cmd", args: "reset" | "read" } <= cntrlSign
+sensCmd: #Pub & { target: "sens", topic: "cmd", args: "read" | "reset" } <= cntrlSign
 // sensAck: #Pub & { target: "sens", topic: "ack" } <= sensSign
 
 roleCert:   _domain/_role/_roleId/_keyinfo
+rlyCert:   _domain/_role/_roleId/_keyinfo
 signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 
 // There are different signing chains for sensCert & cntrlCerts.
 // "key makers" (authorized by the KMP capability, kmpCap) are
 // responsible for creating and distributing the nonce
-// symmetric encryption keys.
-// Giving relay Cert that capability if AEAD is selected
+// symmetric encryption keys for Pub validators
+// Members with relay capability can never have KMP capability
+// Giving cntrl Cert that capability if AEADSGN is selected
 
-sensSign:   signCert & { _role: "sensor" } <= sensCert
-cntrlSign:  signCert & { _role: "controller" } <= mbrCert
-rlySign:    signCert & { _role: "relay" } <= mbrCert
-
+sensSign:   signCert & { _role: "sensor" }  <= sensCert
 sensCert:   roleCert & { _role: "sensor" } <= domCert
-mbrCert:    roleCert <= domCert | kmpCap
+cntrlSign:  signCert & { _role: "controller" } <= cntrlCert
+cntrlCert:  roleCert & { _role: "controller" } <= domCert | kmpCap
+rlySign:    signCert <= rlyCert
+rlyCert <= rlyCap
 
 // capability certs (capabilities granted to roles)
 capCert: _domain/"CAP"/capId/capArg/_keyinfo
-kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domCert    // allowed to be a key maker (capArg is priority)
+kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domCert
+rlyCap:  capCert & { capId: "RLY", capArg: _ } <=  domCert
 
 domCert: _domain/_keyinfo
 
@@ -47,6 +50,7 @@ domCert: _domain/_keyinfo
 #pubPrefix:    _domain
 #pubValidator: "AEADSGN"
 
+#certValidator: "EdDSA"
 // used for cAdds
 #wireValidator: "EdDSA"
 

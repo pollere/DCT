@@ -7,20 +7,21 @@
  *
  * The relay creates two or more transports with a ptps shim.
  * ptps does a "pass through" of publications and certificates unaltered.
- * A DeftT is created for each network interface in command line args. These
- * are listed as strings of the form "protocol:host:<opt>port" or "default"
- * paired with their bootstrap information (or identiy bundle).
- * The identity bundle has a role of "relay" so the trust schema needs
- * a signing key definition for that role (because the wire packets must be signed).
+ * A DeftT is created for each identity bundle in command line args. The
+ * bundles contain the bootstrap information including which network interface
+ * to use, passed as an argument to a RLY capability. Network interfaces are
+ * specified in strings of the form "protocol:<opt>host:port" where protocol is
+ * udp, tcp, or llm (link layer multicast - udp) and host is provided for the active
+ * member of a tcp or udp connection.
  *
  * Different relay DeftTs may use different "wire" validators but must all use the same
  * publication validator, even if going to a "pure" relay link
  *
  * After set up, relay waits for a Publication to arrive from one of the transports.
  * Upon receipt, the Publication is published to all the attached DeftTs. If the DeftTs
- * do not have identical trust schemas, then pubRecv() must use publishValid() rather
- * than publish() when relaying publications. publishValid() applies a DeftT's trust schema
- * to publications which will filter publications not contained in that DeftT's trust schema.
+ * do not have identical schemas, then pubRecv() must use publishValid() rather
+ * than publish() when relaying publications. publishValid() applies a DeftT's schema
+ * to publications which will filter publications not contained in that DeftT's schema.
  * (publishValid() can be used in all cases for extra security.)
  * relay also supplies a callback for each transport to call when a new signing
  * cert is added to its cert store; the cert is passed to all the other DeftTs where they are
@@ -82,7 +83,7 @@ static void help(const char* cname)
 
 /* Globals */
 
-static std::vector<ptps*> dtList{};
+static std::vector<ptps*> transList{};  //list of transports for this relay
 bool skipValidatePubs = false;      // if set true, may skip validate on publish if DeftTs have the same trust schema
 uint32_t failThresh = 0;   //defaults to not set
 using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
@@ -99,14 +100,14 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  * validation against its schema.
  */
 static void pubRecv(ptps* s, const Publication& p) {
-     /* auto now = std::chrono::system_clock::now();
+      /* auto now = std::chrono::system_clock::now();
      print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
           (s->label().size()? s->label() : "default"), p.name()); */
     try {
-        for (auto sp : dtList)
+        for (auto sp : transList)
             if (sp != s) {
                 if(skipValidatePubs) {
-                    // print("\trelayed w/o validate to interFace {}:{}\n", sp->label(), sp->attribute("_roleId"));
+                    // print("\trelayed w/o validate to interFace {}:{}\n", sp->label(), sp->relayTo());
                     sp->publish(Publication(p));
                 } else {
                     sp->publishValid(Publication(p));
@@ -126,15 +127,12 @@ static void pubRecv(ptps* s, const Publication& p) {
  *  Also it may be more costly to filter the cert chain than to forward it.
  */
 static void chainRecv(ptps* s, const rData c, const certStore& cs) {
-    /* auto now = std::chrono::system_clock::now();
-     print("{:%M:%S} {}:{}:{}\trcvd signing cert {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-          (s->label().size()? s->label() : "default"), c.name()); */
-    // hack to keep from relaying relay certs - they aren't needed, only used on cAdds
-    if (c.name()[1].toSv() == "relay"s) return;
+    // don't pass through relay certs - only useful on their subnet
+    if (s->isRelay(c.computeTP()))  return;
     try {
-        for (auto sp : dtList)
+        for (auto sp : transList)
             if (sp != s) {
-                // print("\trelaying a signing chain to interFace {}:{}\n", (sp->label().size()? sp->label() : "default"), sp->attribute("_roleId"));
+                //print("\trelaying a signing chain to interFace {}:{}\n", sp->label(), sp->relayTo());
                 sp->addRelayedChain(c, cs);
             }
     } catch (const std::exception& e) { }
@@ -151,11 +149,10 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
  *  determine if a  pub's signer is known (in the cert store) to a shim before it is forwarded there.
  */
 static void keyPubRecv(ptps* s, const Publication& p) {
-   /*auto now = std::chrono::system_clock::now();
-    print("{:%M:%S} {}:{}:{}\tkeyPubRcv {}", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-         (s->label().size()? s->label() : "default"), p.name());*/
+   /* auto now = std::chrono::system_clock::now();
+    print("{:%M:%S} relay:{}:{}\tkeyPubRcv {}", ticks(now.time_since_epoch()), s->label(), s->relayTo(), p.name()); */
     try {
-        for (auto sp : dtList)
+        for (auto sp : transList)
             if (sp != s) {
                sp->publishKnown(Publication(p));
             }
@@ -170,7 +167,7 @@ static void keyPubRecv(ptps* s, const Publication& p) {
  * or when there's a success)
  */
 static void pubFailure(ptps* s, const Publication& pub) {
-    print("pubFailure: {} timed out on DeftT interFace {}:{}\n", pub.name(), s->label(), s->attribute("_roleId"));
+    print("pubFailure: {} timed out on DeftT interFace {}:{}\n", pub.name(), s->label(), s->relayTo());
     if(failThresh && s->failCnt() > failThresh) {
         // [future] republish p on alternate link, set up alternate to be used
         // auto p = Publication(pub);  //save on republish list
@@ -181,27 +178,23 @@ static void pubFailure(ptps* s, const Publication& pub) {
 
 /*
  * Main() for the relay application.
- * First complete set up: parse input line for list of transports for the relay.
- *      IO labels can have the form "protocol:host:port" where protocol is tcp or udp
- *      The "default" Face is selected if no port is specified
- *      identity bundles are of the form <>.bundle and are separated from their label by a space
- *      IO label <sp> <>.bundle are separated by ","s
- *      Note that there will be no label, just <sp><>.bundle for the default face
- * Then make the ptps DeftT and connect.
- * Run the context.
+ * First complete set up: parse input line for list of transport bundles for the relay.
+ *      identity bundles are of the form <>.bundle and are comma separated
+ * Next make the ptps DeftT and connect.
+ * Finally, run the context.
  */
 
 static int debug = 0;
 
 int main(int argc, char* argv[])
 {
-    std::string ccList{};
+    std::string csList{};
     // parse input line
     for (int c;
         (c = getopt_long(argc, argv, "l:dh", opts, nullptr)) != -1;) {
         switch (c) {
                 case 'l':
-                    ccList = optarg;
+                    csList = optarg;
                     break;
                 case 'd':
                     ++debug;
@@ -211,69 +204,62 @@ int main(int argc, char* argv[])
                     exit(0);
         }
     }
-    if (ccList.size() == 0) {   //make sure there is a comma separated list
+    if (csList.size() == 0) {   //make sure there was a comma separated list of bundles
         usage(argv[0]);
         exit(1);
     }
 
-    // parse ccList string of comma-separated specifications for each DeftT
-    // list of pairs of labels with bootstrap trust bundles for each DeftT for this relay
-    std::vector<std::string> dtLabel;
+    // parse csList string of comma-separated bundles and extract the identity bundles
+    std::vector<std::string> idBun;
     size_t start = 0u;
     size_t end = 0u;
-    while((end = ccList.find(",", start)) != std::string::npos) {
-        dtLabel.push_back(ccList.substr(start,end-start));
+    while((end = csList.find(",", start)) != std::string::npos) {
+        idBun.push_back(csList.substr(start,end-start));
         start = ++end;  //skip over comma
     }
-    dtLabel.push_back(ccList.substr(start,ccList.size()-start));
-    //for each entry on list, create a ptps
+    idBun.push_back(csList.substr(start,csList.size()-start));  // final list entry
+
+    // create a transport for each identity bundle
     // (for failovers, might consider only creating a deftt when it is needed, depends on application)
-    dtList.reserve(dtLabel.size());
-    for (const auto& l : dtLabel) {
-        size_t m = l.find(" ", 0u);
-        if(m == std::string::npos) {
-            std::cerr << "relay main: command line list of labels and id bundles misformatted" << std::endl;
-        }
-        auto s_id = dtList.size();
-        readBootstrap(l.substr(m+1));    // parse the bootstrap file for this DeftT shim
+    transList.reserve(idBun.size());
+    for (const auto& l : idBun) {
+        auto s_id = transList.size();
+        readBootstrap(l);    // parse the bootstrap file for this transport - parse only, doesn't validate
+        // get the transport's type and address from its RLY capability (error if none present)
         try {
             if(!deliveryConfirmation) {
-                dtList.push_back( new ptps{rootCert,
+                transList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
                                            [i=s_id]{return getSigningPair(i);},
-                                           l.substr(0u,m), chainRecv, keyPubRecv} );
+                                           "RLY", chainRecv, keyPubRecv} );
             } else {
-                dtList.push_back( new ptps{rootCert,
+                transList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
                                            [i=s_id]{return getSigningPair(i);},
-                                           l.substr(0u,m), chainRecv, keyPubRecv, pubFailure} );
+                                           "RLY", chainRecv, keyPubRecv, pubFailure} );
             }
         } catch (const std::exception& e) {
             std::cerr << "relay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;
             exit(1);
         }
-        auto& s = *dtList.back();
+        auto& s = *transList.back();    // reach here implies must have RLY capability
 
-        //role must be "relay" (could remove this)
-        if(s.attribute("_role") != "relay") {
-                print("relay app got role {} for interFace {} instead of relay\n",
-                      s.attribute("_role"), s.label());
-                exit(1);
-        }
+        print("relay:: created transport {} to {}\n", s.label(), s.relayTo());
+
         //single callback for all Publications in pubs
        // s.subscribe(pubRecv);
         // Connect and pass in the handler
         try {
             s.connect([&s](){
-                print("relay: DeftT connected on {}:{} interFace\n", s.label(), s.attribute("_roleId"));
+                print("relay: DeftT transport {} relaying to {} is connected\n", s.label(), s.relayTo());
                 s.subscribe(pubRecv);} );
         } catch (const std::exception& e) {
-            std::cerr << "main: encountered exception while trying to connect transport " << l << ": " << e.what() << std::endl;
+            std::cerr << "main: encountered exception while trying to connect transport " << s.label() << " relaying to " << s.relayTo() << " (bundle " << l << "): " << e.what() << std::endl;
             exit(1);
         } catch (int conn_code) {
-            std::cerr << "main: transport " << l << " failed to connect with code " << conn_code << std::endl;
+            std::cerr << "main: transport from bundle " << l << " failed to connect with code " << conn_code << std::endl;
             exit(1);
         } catch (...) {
             std::cerr << "default exception";
@@ -281,11 +267,11 @@ int main(int argc, char* argv[])
         }
     }
     //check if a "sub" trust schema is in use on a DeftT (thumbprint will differ)
-    const auto& tp = dtList.front()->schemaTP();
+    const auto& tp = transList.front()->schemaTP();
     // this could be more complex with different DeftT shims checked for pub compatiblity before passing pubs
     // between them, but the trust schema will take care of this, silently discarding non-conforming pubs
     // This test is only done if skipValidatePubs is set true initially. Offered as a non-recommended option.
     if (skipValidatePubs)
-        skipValidatePubs = std::all_of(dtList.begin(), dtList.end(), [&tp](const auto i){ return i->schemaTP() == tp;});
-    dtList[0]->run();
+        skipValidatePubs = std::all_of(transList.begin(), transList.end(), [&tp](const auto i){ return i->schemaTP() == tp;});
+    transList[0]->run();
 }

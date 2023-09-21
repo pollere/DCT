@@ -67,15 +67,15 @@ struct Cap {
     using capVal = std::function<tlvParser(const thumbPrint&)>;
     using sv = std::string_view;
 
-    static inline auto checker(const char* cap, const crName& prefix, const certStore& cs) {
+    static inline auto checker(const std::string_view cap, const crName& prefix, const certStore& cs) {
         return [&cs = cs, p = crPrefix{prefix / "CAP" / cap}] (const thumbPrint& tp) -> std::pair<bool,rData> {
                     return cs.chainMatch(tp, [&p](rData c){ return p.isPrefix(c.name()); }); };
     }
-    static inline auto checker(const char* cap, const std::string& prefix, const certStore& cs) {
+    static inline auto checker(const std::string_view cap, const std::string& prefix, const certStore& cs) {
         return checker(cap, crName(prefix), cs);
     }
 
-    static inline auto getval(const char* c, const crName& p, const certStore& cs) {
+    static inline auto getval(const std::string_view c, const crName& p, const certStore& cs) {
         return [&cs = cs, pre = crPrefix{p/"CAP"/c}] (const thumbPrint& tp) -> compVal {
                 // if the capability cert isn't found in tp's chain or doesn't have
                 // a value return an empty span. Otherwise return a span covering the value.

@@ -224,7 +224,7 @@ struct SyncPS {
      * @brief add a new local or network publication to the 'active' pubs set
      */
     auto addToActive(crData&& p, bool localPub) {
-        //print("addToActive {:x} {} {}: {}\n", hashPub(p), p.size(), p.name(), localPub);
+        //print("{:%M:%S} addToActive {} {}: {}\n", std::chrono::system_clock::now(), p.name(), p.size(), localPub);
         auto lt = getLifetime_(p);
         auto hash = localPub? pubs_.addLocal(std::move(p)) : pubs_.addNet(std::move(p));
         if (hash == 0 || lt == decltype(lt)::zero()) return hash;
@@ -240,7 +240,10 @@ struct SyncPS {
 
         if (localPub) oneTime(lt, [this, hash]{ if (pubCbs_.size() > 0) doDeliveryCb(hash, false); });
         oneTime(lt + maxClockSkew, [this, hash]{ pubs_.deactivate(hash); });
-        oneTime(lt + pubExpirationGB_, [this, hash]{ pubs_.erase(hash); });
+        oneTime(lt + pubExpirationGB_, [this, hash]{
+                //if (auto p = pubs_.find(hash); p != pubs_.end()) {
+                    //print("syncps expiring {} at {:%T}\n", p->second.i_.name(), std::chrono::system_clock::now()); }
+                pubs_.erase(hash); });
         return hash;
     }
 
@@ -257,6 +260,7 @@ struct SyncPS {
     PubHash publish(crData&& pub) {
         if (pub.size() > maxPubSize) return 0;
         auto h = addToActive(std::move(pub), true);
+        //print("{:%M:%S} publish {:x} d {} r {}\n", std::chrono::system_clock::now(), h, delivering_, registering_);
         if (h == 0) return h;
         ++publications_;
         // new pub is always sent if 1) not delivering 2) not registering and 3) a cState is in collection
@@ -430,6 +434,7 @@ struct SyncPS {
         cAdd.content(sv);
         if (! pktSigmgr_.sign(cAdd)) return false;
         face_.send(std::move(cAdd));
+        //print("{:%M:%S} sent {}\n", std::chrono::system_clock::now(), cAdd.name());;
         return true;
     }
 
@@ -585,6 +590,12 @@ struct SyncPS {
      * @param cAdd     cAdd content
      */
     void onCAdd(const rInterest& cState, const rData& cAdd) {
+        // entry invariants:
+        // - this routine is an upcall from the incoming pdu handler so shouldn't
+        //   be called recursively. 'delivering_' is only true while this routine's
+        //   main loop is executing so assert that it's not true on entry.
+        assert(!delivering_);
+
         if (registering_) return;   // don't process cAdds till fully registered
 
         // if publications result from handling this cAdd we don't want to
@@ -621,7 +632,7 @@ struct SyncPS {
                 // print("addToActive failed: {}\n", d.name());
                 continue;
             }
-            ++ap;  // add to new pub counter
+            ++ap;
             // don't really need the test, since just placed it in actives
             if (auto p = pubs_.find(ph); p != pubs_.end())  p->second.hold_ = ht;
             if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) deliver(d, s->second);

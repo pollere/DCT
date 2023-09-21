@@ -35,9 +35,9 @@ opSign:  signCert & { _role: "operator" } <= opCert
 devSign: signCert & { _role: "device" } <= devCert
 rlySign: signCert & { _role: "relay" } <= rlyCert
 
-rlyCert: roleCert <= domCert | kmCap
 devCert: roleCert <= domCert | kmCap | kmpCap
 opCert: roleCert <= domCert
+rlyCert: roleCert <= rlyCap
 
 // This is included in case an encryption Validator is specified
 // In this trust schema, only relays can be PDU ("wire") keymakers
@@ -45,6 +45,7 @@ opCert: roleCert <= domCert
 capCert: _domain/"CAP"/capId/capArg/_keyinfo
 kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert
 kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domCert | kmCap
+rlyCap: capCert & { capId: "RLY", capArg: _ } <= domCert | kmCap
 
 domCert: _domain/_keyinfo
 
@@ -53,12 +54,13 @@ domCert: _domain/_keyinfo
 
 // schema's Publication prefix and validator type
 #pubPrefix:    _domain
-// #pubValidator: "AEADSGN"
-#pubValidator: "EdDSA"
+#pubValidator: "AEADSGN"
+//#pubValidator: "EdDSA"
 
 // validator for cAdds
 #wireValidator: "EdDSA"
 
+#certValidator: "EdDSA"
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version
 _keyinfo: "KEY"/_/"dct"/_

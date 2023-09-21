@@ -65,9 +65,9 @@ static inline dctCert schemaCert(int i=0) { return schema[i]; }
 static inline std::vector<dctCert> identityChain(int i=0) { return idChain[i]; }
 
 /*
- * XXXX new signing pairs are set up to be made certOverlap (set in dct_model.hpp) before the end of the current pair's validity
- * period (see the oneTime method in the dct_model constructor and in getNewSp() in dct_model.hpp). These, certOverlap in
- * particular, need to be set somewhere convenient to app maker
+ * new signing pairs are set up to be made certOverlap (set in cert_bundle.hpp) before the end of the current pair's validity
+ * period (see the oneTime method in the dct_model constructor and in getNewSp() in dct_model.hpp).
+ * XXXX These, certOverlap in particular, need to be set somewhere convenient to installer in future
  */
 static constexpr std::chrono::seconds certLifetime = std::chrono::hours(24);     // XXX signing key lifetime should come from schema
 
@@ -133,6 +133,7 @@ static inline certItem currentSigningPair(int i=0) {
 // Note that currently can only create a new signing pair with the same name and an updated validity period
 // since changing signing chain requires a new DeftT
 // In setting the validity start period for a future time, make sure you know what you are doing
+// To handle clock skew, certOverlap is set to at least twice the worst clock skew
 
 static inline certItem getSigningPair( int i=0) {
     if(std::cmp_greater(idChain.size(), i)) {   //must be an identity chain for i
@@ -147,7 +148,7 @@ static inline certItem getSigningPair( int i=0) {
             // Not currently a way to separately set the validity period start time (that is, starts now) in the library
             // Extract the component used in the signing cert (here "sgn") from the schema in future
             // If the last element (the start time) is not set, it uses now
-           return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), certLifetime+2*certOverlap); // , std::chrono::system_clock::now());
+           return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), certLifetime+certOverlap, std::chrono::system_clock::now()-certOverlap/2);
          } catch (const std::runtime_error& se)     { print("getSigningPair runtime error: {}\n", se.what()); }
     } else  {
         print ("getSigningPair called with out-of-range identity chain id {}\n", i);

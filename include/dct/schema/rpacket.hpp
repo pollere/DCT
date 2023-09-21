@@ -156,15 +156,25 @@ template<> struct std::hash<dct::rPrefix> {
  * leave it then re-enter it after these defs.
  */
 
-template<> struct fmt::formatter<dct::rPrefix>: fmt::dynamic_formatter<> {
-    template <typename FormatContext>
-    auto format(const dct::rPrefix& p, FormatContext& ctx) const -> decltype(ctx.out()) {
+template<> struct fmt::formatter<dct::rPrefix> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
+        return ctx.end();
+    }
+    auto format(const dct::rPrefix& p, format_context& ctx) const -> format_context::iterator {
         auto np = [](auto s) -> bool { for (auto c : s) if (c < 0x20 || c >= 0x7f) return true; return false; };
         auto out = ctx.out();
         for (auto blk : dct::rPrefix{p}) {
             auto s = blk.rest();
-            // if there are any non-printing characters, format as hex. Otherwise format as a string.
-            if (np(s)) {
+            if (blk.isType(dct::tlv::Timestamp)) {
+                auto ts = blk.toTimestamp();
+                if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
+                    out = fmt::format_to(out, "/@{:%H:%M:%S}", ts.time_since_epoch());
+                } else {
+                    out = fmt::format_to(out, "/{:%g-%m-%d@%R}", ts);
+                }
+            } else if (np(s)) {
+                // if there are any non-printing characters, format as hex. Otherwise format as a string.
                 //XXX look for 'tagged' timestamps (should change to TLV and get rid of this)
                 if (s.size() > 10) {
                     out = fmt::format_to(out, "/^{:02x}..", fmt::join(s.begin(), s.begin()+8, ""));
@@ -173,7 +183,7 @@ template<> struct fmt::formatter<dct::rPrefix>: fmt::dynamic_formatter<> {
                               ((uint64_t)s[5] << 24) | ((uint64_t)s[6] << 16) | ((uint64_t)s[7] << 8) | s[8];
                     auto ts = std::chrono::system_clock::time_point(std::chrono::microseconds(us));
                     if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
-                        out = fmt::format_to(out, "/@{:%H:%M:}{:%S}", ts, ts.time_since_epoch());
+                        out = fmt::format_to(out, "/@{:%H:%M:%S}", ts.time_since_epoch());
                     } else {
                         out = fmt::format_to(out, "/{:%g-%m-%d@%R}", ts);
                     }
@@ -188,9 +198,12 @@ template<> struct fmt::formatter<dct::rPrefix>: fmt::dynamic_formatter<> {
     }
 };
 
-template<> struct fmt::formatter<dct::rName>: formatter<dct::rPrefix> {
-    template <typename FormatContext>
-    auto format(const dct::rName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
+template<> struct fmt::formatter<dct::rName> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
+        return ctx.end();
+    }
+    auto format(const dct::rName& n, format_context& ctx) const -> format_context::iterator {
         return format_to(ctx.out(), "{}", dct::rPrefix(n));
     }
 };

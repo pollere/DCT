@@ -81,7 +81,6 @@ using MsgCache = std::unordered_map<MsgID,MsgSegs>;
 struct mbps
 {   
     connectCb m_connectCb;
-    DirectFace m_face;
     DCTmodel m_pb;
     crName m_pubpre{};        // full prefix for Publications
     std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids
@@ -92,7 +91,7 @@ struct mbps
     Timer* m_timer;
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr)
-        : m_face{addr}, m_pb{rootCb, schemaCb, idChainCb, signIdCb, m_face},
+        : m_pb{rootCb, schemaCb, idChainCb, signIdCb, addr},
           m_pubpre{m_pb.pubPrefix()}  { }
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb)

@@ -289,9 +289,12 @@ class DirectFace {
     }
 };
 
-static inline DirectFace& defaultFace() {
+static inline DirectFace& defaultFace(const std::string& addr = "") {
     static DirectFace* face{};
-    if (face == nullptr) face = new DirectFace();
+    if (face == nullptr) {
+        if(addr.empty()) face = new DirectFace();
+        else face = new DirectFace(addr);
+    }
     return *face;
 }
 

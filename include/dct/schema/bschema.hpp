@@ -290,23 +290,33 @@ struct bSchema {
 } // namespace dct
 
 template<>
-struct fmt::formatter<dct::bschema::corItem>: fmt::dynamic_formatter<> {
-    template <typename FormatContext>
-    auto format(const dct::bschema::corItem& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+struct fmt::formatter<dct::bschema::corItem> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
+        return ctx.end();
+    }
+    auto format(const dct::bschema::corItem& v, format_context& ctx) const -> format_context::iterator {
         return fmt::format_to(ctx.out(), "{}.{}={}.{}", v.ct1, v.co1, v.ct2, v.co2);
     }
 };
 template<>
-struct fmt::formatter<dct::bschema::tDiscrim>: fmt::dynamic_formatter<> {
-    template <typename FormatContext>
-    auto format(const dct::bschema::tDiscrim& v, FormatContext& ctx) const -> decltype(ctx.out()) {
-        return fmt::format_to(ctx.out(), "(chns#{}, tmpl={}, comp={}, vals={}, cor={})", v.cbm, v.tmpl, v.disc, v.vl, v.cor);
+struct fmt::formatter<dct::bschema::tDiscrim> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
+        return ctx.end();
+    }
+    auto format(const dct::bschema::tDiscrim& v, format_context& ctx) const -> format_context::iterator {
+        return fmt::format_to(ctx.out(), "(chns#{}, tmpl={}, comp={}, vals={}, cor={})",
+                    v.cbm, v.tmpl, v.disc, v.vl, v.cor);
     }
 };
 template<>
-struct fmt::formatter<dct::bschema::tPub>: fmt::dynamic_formatter<> {
-    template <typename FormatContext>
-    auto format(const dct::bschema::tPub& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+struct fmt::formatter<dct::bschema::tPub> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
+        return ctx.end();
+    }
+    auto format(const dct::bschema::tPub& v, format_context& ctx) const -> format_context::iterator {
         return fmt::format_to(ctx.out(), "(par#{:x}, disc#{:x}, tok={}, tags={})", v.par, v.d, v.pub, v.tag);
     }
 };

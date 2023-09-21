@@ -302,24 +302,21 @@ struct schemaOut {
          * but different paths through the signing DAG (e.g., if their
          * components are determined via parent correspondences but different
          * parents have different signing chains). The duplicate(s) are not
-         * placed in certvec_ so their parent dependencies have to be added to the
-         * DAG to get a correct topological ordering.
+         * placed in certvec_ so an artificial dependencies from a later cert
+         * with the same cert name have to be added to the DAG to get a correct
+         * topological ordering. The later cert then has to become parent of
+         * a same named cert later than it and so on.
          */
         auto dag = drv_.certDag_;
         auto rdag = dag.reverse();
+        std::map<sName,sComp> n2c{}; // cert components to name map
         for (const auto& cert : dag.topo()) {
-            if (! needed.contains(cert)) continue;
-            // since a node may be represented by its base class, make sure any signing
-            // dependencies include the base class of the signer.
-            for (const auto& signer : dag.links(cert)) {
-                for (const auto& base : rdag.links(signer)) {
-                    if (dag.attr(base) == 1 && !dag.linked(base, cert)) {
-                        dag.add(cert, base);
-                        //print(" \"{}\" -> \"{}\";\n", drv_.to_string(cert), drv_.to_string(base));
-                    }
-                }
-            }
+            if (!needed.contains(cert)) continue;
+            const auto& nm = drv_.certs_.at(cert)[0];
+            if (n2c.contains(nm)) dag.add(cert, n2c[nm]);
+            n2c[nm] = cert;
         }
+        //drv_.printGraph(dag, dag.topo()); // for debugging
         for (const auto& cert : dag.topo()) {
             if (! needed.contains(cert)) continue;
             const auto& nm = drv_.certs_.at(cert)[0];

@@ -1,10 +1,10 @@
 # Relays connect trust domains
 
-Everything on the same subnet may not be in the same trust domain (TD) and entities in the same TD may not be on the same subnet. A single DeftT instance handles the former case; cState and cAdd PDUs of different TDs are differentiated by the leading trust domain id (thumbprint of the signed schema cert) component so a DeftT instance can ignore PDUs with different TD ids. 
+Everything on the same subnet may not be in the same trust domain (TD) and entities in the same TD may not be on the same subnet. A single DeftT instance handles the former case; cState and cAdd PDUs of different TDs are differentiated by the leading trust domain id (thumbprint of the signed schema cert) component so a DeftT instance can ignore PDUs with different TD ids. Relays "pass through" Publications and never decrypt decrypt them nor are they given the keys to do so. The pass-through DeftTs of relaying applications must have a RLY capability in their identity chain whose argument specifies where they can "relay to" (e.g., a udp or tcp unicast link or a IPv6 link layer multicast address).
 
  In the second case, each subnet has a different sync zone (SZ), i.e., cStates and cAdds are not propagated off a subnet. A *relay* that has a DeftT instance in each subnet moves the Publications between SZs of the same trust domain (or overlapping subdomains).  When a trust domain needs to extend beyond a single subnet, Publications are relayed between SZs using identical schemas (though different signing/encryption may be specified for the cAdds).  Signing identities can be associated with an entire TD (including subsets), but cAdd encryption is specific to a particular subnet. The same relay set up can be used to connect trust sub-domains, where some of the subnets implement only some of the trust rules in their schemas. Relays handle the three sync collections of every DeftT: **pubs** which contains the information exchanged by applications, **cert** which contains the signing identity chains of member, and **keys** which contains all the information needed for group key encryption. The **keys** collection has two sub-collections, *keys/pdus* for encryption of cAdds and *keys/pubs* for encryption of the Publications in **pubs**. Pub encryption is across a trust domain so must be passed on by relays but relays cannot join the encryption group and pass encrypted Publications without decrypting. Encryption of cAdds is local to a subnet so *keys/pdus* is never relayed and relays must be members of any local cAdd encryption group.
 
-Current work has focused on relaying between different networks in order to extend a trust domain (same trust root) with the same schema everywhere and relaying between different networks where some DeftTs are using schemas that are subsets of another schema. Relays can filter publications or just pass them through but a “default deny” has been most useful where the schema of each DeftT is used.
+Current work has focused on relaying between different networks in order to extend a trust domain (same trust root) with the same schema everywhere and relaying between different networks where some DeftTs are using schemas that are subsets of another schema. Relays can filter publications or just pass them through but a “default deny” has been most useful where the subschema of each DeftT is used.
 
 One motivating case is pictured. A homeowner wants to gain access to their smart home from work, an internet cafe or perhaps from a second home. There must be a relay on each network. In the home, the relay needs one DeftT that is on the home wifi, part of that trust domain and in the same sync collection. The other DefT of the relay is connected through the Internet to a relay in another physical network. This connection is a unicast TCP or UDP connection. The other relay can be an application on the homeowner's phone which may not connect to a trust domain on its wifi network (e.g., the case of a work or cafe network). The home relay's externally facing DeftT can be using a limited subset of the house's schema for extra security.
 
@@ -40,7 +40,7 @@ for the away multicast DeftT to reduce the work of relaying publications that th
 
 Testing requires that the *home* and *away* networks be isolated so they are not able to overhear each other's multicast, or "local" side. (If the two test machines are on the same broadcast networks, this can be accomplished by setting to use loopback as in the scripts runHome.sh and runAway.sh.) Here, the two machines are referred to as *home* and *away*.
 
-Create a subdirectory on *home* for the identity bundles under relay (here hmIoT), change to that directory and run
+Edit the mkIotIDs.sh script to set the SRVR, PORT, and PROTO variables as needed for your set up. Create a subdirectory on *home* for the identity bundles under relay (here hmIoT), change to that directory and run
 
 ```
 ../mkIotIDs.sh ../ioth.rules
@@ -53,16 +53,16 @@ which creates identity bundles for all the interfaces. This directory should be 
 ../hmIot/app2 ./hmIot/gate.bundle
 ```
 
-The relay is started with a list (-l option) of identity bundles and their interfaces. A space in front of the bundle name means a null address which uses the default (UDP multicast) interface. Other interfaces must be specified. (Future plans are to add this to the specifications in the schema.) Start the home relay with its external interface as a passive listener:
+The relay is started with a list (-l option) of identity bundles, one for each interface. Start the home relay:
 
 ```
-relay -l " hmIoT/home.l.bundle,34567 hmIoT/home.e.bundle"
+relay -l "hmIoT/home.l.bundle,hmIoT/home.e.bundle"
 ```
 
 On away, start a relay and the roaming operator:
 
 ```
-relay -l " hmIoT/away.l.bundle,awayhostname:34567 hmIoT/away.e.bundle"
+relay -l "hmIoT/away.l.bundle,hmIoT/away.e.bundle"
 ../hmIot/app3 ./hmIoT/roamOp.bundle
 ```
 
@@ -74,7 +74,7 @@ To test on the same machine, make a slightly different schema for the away local
 
 Relays can also be used to extend a single trust domain geographically, with all relay DeftTs using an identical schema (with the possible exception of different cAdd signing/encryption). This would make the *home* and *away* sync zones appear as a single network to its entities. If AEAD signing is selected for the cAdds, each sync zone will be encrypted separately.
 
-To use tcp instead of udp on **unicast** connections, put "tcp:" ahead of addresses, e.g. "tcp:34567" or "tcp:awayhostname:34567".
+To use tcp instead of udp on **unicast** connections, put "tcp:" ahead of addresses, e.g. "tcp:34567" or "tcp:awayhostname:34567" in the corresponding RLY capability cert.
 
 To better understand relaying, run examples while monitoring communications with *dctwatch*.
 
@@ -88,7 +88,7 @@ Relays can also be used to create meshes that require no specific configuration 
 
 ![relaymesh](relaymesh.jpg)
 
-This directory also contains a simplified example where sensors (sens.cpp), assumed to use a short-range wireless media, periodically publish reports of their measurements and subscribe to commands. Relays have one DeftT that uses the same media as the sensors (those get role ids of s<relay #>) and another that uses a longer-range broadcast media which a controller (cntrl.cpp) also uses (those get role ids of m<relay #>). The directory contains a schema for the sensor media, sensor.rules, and a schema for the longer-range media where relays are meshed, mesh.rules.
+This directory also contains a simplified example where sensors (sens.cpp), assumed to use a short-range wireless media, periodically publish reports of their measurements and subscribe to commands. Relays have one DeftT that uses the same media as the sensors (those get role ids of s<relay #>) and another that uses a longer-range broadcast media which a controller (cntrl.cpp) also uses (those get role ids of m<relay #>). The directory contains a schema for the sensor media, sensor.rules, and a schema for the longer-range media where relays are meshed, mesh.rules. Since the relay-only subdomain and the relay-and-sensor sub-domain have different subschemas, they can share the same broadcast network without "hearing" one another. The mkMesh.sh script can use the same RLY capability cert for both subdomains, specifying use of the default multicast address. 
 
 To run this example, create a subdirectory for the identity bundles under relay (here mesh), change to that directory and run
 
@@ -96,14 +96,20 @@ To run this example, create a subdirectory for the identity bundles under relay 
 ../mkMeshIDs.sh ../mesh.rules
 ```
 
-which creates the required identity bundles. Note the script is not set up to make a keymaker cert for the sensor net, so don't use AEAD in the sensor.rules schema. To run from examples/relay, start:
+which creates the required identity bundles. The script uses the same RLY capability cert for all relay bundles so all will include the KM capability, even where it isn't used (i.e., on the sensor subnet using EdDSA for PDUs). To run from examples/relay, start:
 
 ```
-cntrl mesh/cntrl.bundle
+cntrl mesh/cntrl.bundle &
 runMesh.sh
 ```
 
 "killall relay"" can be used to terminate the script.
+
+The pmesh.rules and psensor.rules are for using the AEADSGN Pub encryption. To use those rulesets, Just
+
+```
+../mkpMesh.sh ../pmesh.rules
+```
 
 ### References and related work
 

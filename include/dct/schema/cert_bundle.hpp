@@ -37,6 +37,8 @@ namespace dct {
 using certItem = std::pair<dctCert,keyVal>;
 using certBundle = std::vector<certItem>;
 
+static constexpr std::chrono::seconds certOverlap = std::chrono::minutes(10);    // must be at least twice domain clock skew
+
 static inline certBundle rdCertBundle(const std::vector<uint8_t>& buf) {
 
     // unpack all the objects in the bundle

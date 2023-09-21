@@ -29,13 +29,22 @@
 #include <string>
 #include <string_view>
 
-// boost bug workaround: this should be defined for any c++17 or beyond compiler
-// and is *required* for c++20 or beyond since std::result_of is gone.
+#if 1
+// As of Dec 2022, get spurious warnings when include boost asio
+// because sprintf in deprecated (on mac os xcode 12+).
+// Theses pragmas are to prevent the warning from this.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
+// XXX boost bug workaround: this should be defined for any c++17 or beyond compiler and is
+// *required* for c++20 or beyond since std::result_of is gone.
 // Broken in boost 1.77 and earlier
 #if BOOST_ASIO_VERSION<102200
 #define BOOST_ASIO_HAS_STD_INVOKE_RESULT 1
 #include "dct/face/default-io-context.hpp"
 #include "dct/face/default-if.hpp"
+#endif
+#pragma GCC diagnostic pop
 #endif
 
 namespace dct {

@@ -76,10 +76,13 @@ struct IBLT {
      */
     static constexpr size_t N_HASH{3};
     static constexpr size_t N_HASHCHECK{0x53a1df9a}; // random bit string with half the bits set
-    static constexpr size_t stsize = 19; // sub-table size (should be prime)
-    static constexpr size_t nEntries = stsize * N_HASH; // must be <128
-    static constexpr uint8_t MAXCNT = 0x80; // max run length & run start marker, must be > nEntries
+    static constexpr size_t stsize = 41; // sub-table size (should be prime)
+    static constexpr size_t nEntries = stsize * N_HASH; // must be < maxCnt
+    static constexpr uint8_t maxCnt = 0x80; // max run length & run start marker
     static constexpr murmurHash3 mh3{};
+    // limits on the iblt size due to packet MTU constraints
+    static_assert(nEntries < maxCnt, "nEntries >=  maCnt");
+    static_assert(nEntries * 9 < 1300, "encoded iblt bigger than maxPubSize");
 
     template<typename V>
     static inline HashVal hashobj(const V& v) noexcept { return mh3(N_HASHCHECK, v.data(), v.size()); }
@@ -104,19 +107,19 @@ struct IBLT {
     /**
      * @brief run-length encode this iblt into a byte vector.
      *
-     * 'count' is encoded as a byte (assumes iblt max length < 128) then
-     * keySum and keyCheck in little-endian order. Runs of zero entries are encoded as a 'count'
-     * with the high bit set and the run length in the LSBs.
+     * 'count' is encoded as a byte (assumes max count in any bucket is < 128) then
+     * keySum and keyCheck in little-endian order. Runs of zero entries are encoded
+     * as a 'count' with the high bit set and the run length in the LSBs.
      */
     auto rlEncode() const noexcept {
         std::vector<uint8_t> rle{};
         uint8_t cnt{};
         for (const auto& e : hashTable_) {
             if (e.isEmpty()) {
-                if (++cnt >= MAXCNT) { rle.emplace_back(cnt | MAXCNT); cnt = 0; }
+                if (++cnt >= maxCnt) { rle.emplace_back(cnt | maxCnt); cnt = 0; }
                 continue;
             }
-            if (cnt != 0) { rle.emplace_back(cnt | MAXCNT); cnt = 0; }
+            if (cnt != 0) { rle.emplace_back(cnt | maxCnt); cnt = 0; }
 
             rle.emplace_back(e.count);
 
@@ -132,7 +135,7 @@ struct IBLT {
         }
         // trailing empty entry count is omitted except for
         // empty iblt (to avoid empty name component).
-        if (rle.empty() && cnt != 0) rle.emplace_back(cnt | MAXCNT);
+        if (rle.empty() && cnt != 0) rle.emplace_back(cnt | maxCnt);
         return rle;
     }
 
@@ -146,10 +149,10 @@ struct IBLT {
         size_t i{};
         for (auto r = rle.begin(); r < rle.end(); ) {
             auto b = *r;
-            if (b >= MAXCNT) {
-                if (b > MAXCNT) b &= MAXCNT-1;
+            if (b >= maxCnt) {
+                if (b > maxCnt) b &= maxCnt-1;
                 i += b; // advance over zero entries
-                if (i > nEntries) throw std::runtime_error("compressed IBLT too large");;
+                if (i >= nEntries) throw std::runtime_error("compressed IBLT too large");;
                 ++r;
                 continue;
             }
@@ -263,6 +266,7 @@ struct IBLT {
     void update1(int plusOrMinus, HashVal key, size_t idx) {
         HashTableEntry& entry = hashTable_.at(idx);
         entry.count += plusOrMinus;
+        if (entry.count >= maxCnt) throw std::runtime_error("too many items in iblt hash bucket");;
         entry.keySum ^= key;
         entry.keyCheck ^= mh3(uint64_t(key) | (N_HASHCHECK << 32));
     }

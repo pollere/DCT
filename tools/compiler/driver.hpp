@@ -833,7 +833,7 @@ template <>
 struct fmt::formatter<sComp> {
     // presentation format: 's' - as string, 'd' - raw data
     char presentation = 's';
-    constexpr auto parse(format_parse_context& ctx) -> decltype(ctx.begin()) {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         auto it = ctx.begin(), end = ctx.end();
         if (it != end && (*it == 's' || *it == 'd')) presentation = *it++;
         if (it != end && *it != '}') throw format_error("invalid format");
@@ -841,8 +841,7 @@ struct fmt::formatter<sComp> {
         // Return an iterator past the end of the parsed range:
         return it;
     }
-    template <typename FormatContext>
-    auto format(const sComp& c, FormatContext& ctx) const -> decltype(ctx.out()) {
+    auto format(const sComp& c, format_context& ctx) const -> format_context::iterator {
         if (presentation == 'd') return format_to(ctx.out(), "({:02x},{:d})", c.flags(), c.id());
         return format_to(ctx.out(), "{}", drv_.symtab().bare_string(c));
     }
@@ -850,9 +849,12 @@ struct fmt::formatter<sComp> {
 #endif
 
 template<>
-struct fmt::formatter<compSet>: fmt::dynamic_formatter<> {
-    template <typename FormatContext>
-    auto format(const compSet& v, FormatContext& ctx) const -> decltype(ctx.out()) {
+struct fmt::formatter<compSet> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
+        //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
+        return ctx.end();
+    }
+    auto format(const compSet& v, format_context& ctx) const -> format_context::iterator {
         std::set<std::string> s{};
         v.for_each([&s](auto b){ s.emplace(drv_.symtab().bare_string(b)); });
         return fmt::format_to(ctx.out(), "{}", s);
