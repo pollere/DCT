@@ -37,23 +37,12 @@ enum class tlv : uint16_t {
         csID = 35,
         Timestamp = 36,
         SequenceNum = 37,
-        // NDN TLVs that can't be in a DCT Name
-        //Keyword = 32,
-        //ImplicitSha256Digest = 1,
-        //ParametersSha256Digest = 2,
-        //ByteOffset = 34,
 
     // a DCT cState packet contains exactly 3 TLV blocks in the following order:
     //   7 (Name), 10 (Nonce), 12 (InterestLifetime)
     cState = 5,
         Nonce = 10,
         Lifetime = 12,
-        // NDN TLVs that can't be in a DCT Interest
-        //CanBePrefix = 33,
-        //MustBeFresh = 18,
-        //ForwardingHint = 30,
-        //HopLimit = 34,
-        //ApplicationParameters = 36,
 
     // DCT publications, certs and cAdd PDUs contain exactly 5 TLV blocks in the following order:
     //   7 (Name), 20 (Metainfo), 21 (Content), 22 (SignatureInfo), 23 (SignatureValue)
@@ -71,19 +60,17 @@ enum class tlv : uint16_t {
                 ContentType_Blob = 0,
                 ContentType_Key = 2,
                 ContentType_CAdd = 42,
-                // NDN content types
-                //ContentType_Link = 1,
-                //ContentType_Nack = 3,
-                //ContentType_Manifest = 4,
-            //FreshnessPeriod = 25,
-            //FinalBlockId = 26,
         Content = 21,
         SignatureInfo = 22,
             SignatureType = 27,
-                DigestSha256 = 0,
-                SignatureSha256WithRsa = 1,
-                SignatureSha256WithEcdsa = 3,
-                SignatureHmacWithSha256 = 4,
+                stSHA256 = 0,
+                stAEAD = 7,
+                stEdDSA = 8,
+                stRFC7693 = 9,
+                stPPAEAD = 11,
+                stPPSIGN = 12,
+                stAEADSGN = 13,
+
             KeyLocator = 28,
             KeyDigest = 29,
             ValidityPeriod = 253,

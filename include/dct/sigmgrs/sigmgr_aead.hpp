@@ -84,7 +84,7 @@ struct SigMgrAEAD final : SigMgr {
     std::vector<keyRecord> m_keyList;
     size_t m_decryptIndex;
 
-    SigMgrAEAD() : SigMgr(stAEAD) {
+    SigMgrAEAD() : SigMgr(stAEAD, sigSize) {
         randombytes_buf(m_nonce.data(), m_nonce.size()); //always done - set unique part of nonce (12 bytes)
     }
 

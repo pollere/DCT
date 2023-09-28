@@ -136,7 +136,7 @@ struct SigMgrSchema final : SigMgr {
     const tpToValidator& pv_;
 
     SigMgrSchema(SigMgr& pubsm, const bSchema& bs, const tpToValidator& pv) :
-        SigMgr(pubsm.type()), pubsm_{pubsm}, bs_{bs}, pv_{pv} { }
+        SigMgr(pubsm.type(), pubsm.sigSize()), pubsm_{pubsm}, bs_{bs}, pv_{pv} { }
 
     bool validate(rData data) override final {
         // cryptographically validate 'data'
@@ -165,7 +165,7 @@ struct SigMgrSchema final : SigMgr {
 struct SigMgrPT final : SigMgr {
     SigMgr& pubsm_;
 
-    SigMgrPT(SigMgr& pubsm) : SigMgr(pubsm.type()), pubsm_{pubsm} { }
+    SigMgrPT(SigMgr& pubsm) : SigMgr(pubsm.type(), pubsm.sigSize()), pubsm_{pubsm} { }
 
     bool validate(rData data) override final { return pubsm_.validate(data); }
 };

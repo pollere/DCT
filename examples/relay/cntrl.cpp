@@ -59,7 +59,7 @@ static void help(const char* cname)
 static std::string myId, role;
 static int Cnt = 0;
 static int Cmd = 0;
-static std::chrono::microseconds pubWait = std::chrono::seconds(10);
+static std::chrono::microseconds pubWait = std::chrono::seconds(30);
 
 /*
  * rprtRecv handles a message received in subscription.

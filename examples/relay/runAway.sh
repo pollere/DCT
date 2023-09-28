@@ -21,9 +21,6 @@ echo
 echo -n " starting roamOp"
 ../hmIot/app3 -n 0 home/roamOp.bundle &
 
-# use this line with "awayhostname" set to your away host for separate machines
-./relay -l " home/away.l.bundle,awayhostname:34567 home/away.e.bundle" &
-# use this line for testing relays on the same machine and using tcp for the unicast link
-# ./relay -l " home/away.l.bundle,tcp:127.0.0.1:34567 home/away.e.bundle" &
+./relay -l "home/away.l.bundle,home/away.e.bundle" &
 echo -n " starting away relay"
 echo

@@ -105,7 +105,7 @@ struct SigMgrPPAEAD final : SigMgr {
     std::vector<kpInfo>  m_keyList{};
 
 
-    SigMgrPPAEAD() : SigMgr(stPPAEAD) {
+    SigMgrPPAEAD() : SigMgr(stPPAEAD, sigSize) {
         randombytes_buf(m_nonce.data(), m_nonce.size()); //always done - set unique part of nonce (12 bytes)
     }
 

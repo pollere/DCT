@@ -93,7 +93,7 @@ struct SigMgrPPSIGN final : SigMgr {
     std::vector<kpInfo>  m_keyList{};
 
 
-    SigMgrPPSIGN() : SigMgr(stPPSIGN) {
+    SigMgrPPSIGN() : SigMgr(stPPSIGN, sigSize) {
         randombytes_buf(m_nonce.data(), m_nonce.size()); //always done - set unique part of nonce (12 bytes)
     }
 

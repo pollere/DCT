@@ -81,7 +81,7 @@ struct Transport {
 
     Transport(onRcv&& rcb, onConnect&& ccb) : rcb_{std::move(rcb)}, ccb_{std::move(ccb)} { }
 
-    virtual constexpr size_t mtu() const noexcept = 0;
+    virtual constexpr ptrdiff_t mtu() const noexcept = 0;
     virtual void connect() = 0;
     virtual void close() = 0;
     virtual void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) = 0;
@@ -115,7 +115,7 @@ struct TransportUdp : Transport {
     // but we hope for 9K MTU for local packets.
     std::array<uint8_t, max_pkt_size> rcvbuf_;
 
-    constexpr size_t mtu() const noexcept final { return 1500 - 40 - 8; }
+    constexpr ptrdiff_t mtu() const noexcept final { return 1500 - 40 - 8; }
 
     TransportUdp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
@@ -369,7 +369,7 @@ struct TransportTcp : Transport {
     // to data ratio. DCT's encap cost is ~100 bytes (due almost entirely to signing overhead -
     // 64 bytes of signature plus 32 bytes of key locator) so an 8K mtu results in 99% efficiency
     // with 65ms worst-case jitter on a 1Mbps backhaul.
-    constexpr size_t mtu() const noexcept final { return max_pkt_size; }
+    constexpr ptrdiff_t mtu() const noexcept final { return max_pkt_size; }
 
     TransportTcp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }

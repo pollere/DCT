@@ -55,7 +55,7 @@ namespace dct {
 
 struct SigMgrSHA256 final : SigMgr {
 
-    SigMgrSHA256() : SigMgr(stSHA256) { }
+    SigMgrSHA256() : SigMgr(stSHA256, crypto_hash_sha256_BYTES) { }
 
     bool sign(crData& d, const SigInfo& si, const keyVal&) override final {
         d.siginfo(si);

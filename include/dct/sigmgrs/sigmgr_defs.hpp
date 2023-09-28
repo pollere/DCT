@@ -48,6 +48,7 @@ namespace dct {
     using keyRef = std::span<const uint8_t>;
     using SigInfo = std::vector<uint8_t>;
     using SigType = uint8_t;
+    using SigSize = uint8_t;
 
     // Signature types (must match equivalent NDN TLV if any) and be less than 64
     static constexpr SigType stSHA256 = 0;

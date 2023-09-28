@@ -20,7 +20,9 @@ Additional features and filtering can be added to customize the Basic Relay. Pub
 
 ### Example using hmIoT
 
-A few examples use the hmIot directory's applications with relays and the figure below. DCT/examples/relay directory contains ioth.rules (a copy of examples/hmIot/iot1.rules with relay specification added) and iote.rules, a subset of ioth.rules that *only* contains the frontDoor publications and uses AEAD for cAdds on an "external" interface. A script, mkIotIDs.sh, is included for making identity bundles that illustrate use of relays with the home IoT example. A relay element (*home*) in the home network has a multicast DeftT on the local home network and a unicast DeftT on an external link. A second relay (*away*) has a unicast DeftT on the external side and multicast on the local away side. A roamOp on the away network can produce the same commands as any operator but the away relay will only publish commands for the frontDoor to the external interface as relays use the iote.rules rules for their external DeftT. The external DeftT will not validate (thus will discard) commands to devices other than frontDoor. Looking at the schemas and the script to make the bundles will show:
+**Note:** these examples are used for Pollere's testing and the "convenience" scripts to make bundles in the release may not be exactly the same as what is in this README. It's probably a good way to test your understanding but altering these scripts to do what you want.
+
+A few examples use the examples/hmIot directory's applications with relays and the figure below. DCT/examples/relay directory contains ioth.rules (a copy of examples/hmIot/iot1.rules with relay specification added) and iote.rules, a subset of ioth.rules that *only* contains the frontDoor publications and uses AEAD for cAdds on an "external" interface. A script, mkIotIDs.sh, is included for making identity bundles that illustrate use of relays with the home IoT example. A relay element (*home*) in the home network has a multicast DeftT on the local home network and a unicast DeftT on an external link. A second relay (*away*) has a unicast DeftT on the external side and multicast on the local away side. A roamOp on the away network can produce the same commands as any operator but the away relay will only publish commands for the frontDoor to the external interface as relays use the iote.rules rules for their external DeftT. The external DeftT will not validate (thus will discard) commands to devices other than frontDoor. Looking at the schemas and the script to make the bundles will show:
 
 - The **home** (green in figure) wifi network is using the ioth.rules schema
 
@@ -40,13 +42,13 @@ for the away multicast DeftT to reduce the work of relaying publications that th
 
 Testing requires that the *home* and *away* networks be isolated so they are not able to overhear each other's multicast, or "local" side. (If the two test machines are on the same broadcast networks, this can be accomplished by setting to use loopback as in the scripts runHome.sh and runAway.sh.) Here, the two machines are referred to as *home* and *away*.
 
-Edit the mkIotIDs.sh script to set the SRVR, PORT, and PROTO variables as needed for your set up. Create a subdirectory on *home* for the identity bundles under relay (here hmIoT), change to that directory and run
+Edit the mkIotIDs.sh script to set the SRVR, PORT, and PROTO variables as needed for your set up. Create a subdirectory under relay for the identity bundles (here hmIoT), change to that directory and run
 
 ```
 ../mkIotIDs.sh ../ioth.rules
 ```
 
-which creates identity bundles for all the interfaces. This directory should be copied to *away*. On *home*, in examples/relay, start:
+which creates identity bundles for all the interfaces. This directory should be copied to your *away* machine. On *home*, in examples/relay, start:
 
 ```
 ../hmIot/app2 ./hmIot/frontdoor.bundle
@@ -76,11 +78,21 @@ Relays can also be used to extend a single trust domain geographically, with all
 
 To use tcp instead of udp on **unicast** connections, put "tcp:" ahead of addresses, e.g. "tcp:34567" or "tcp:awayhostname:34567" in the corresponding RLY capability cert.
 
-To better understand relaying, run examples while monitoring communications with *dctwatch*.
+##### Extending relays
+
+Relays can have more than two ports and there can be more than two relays in a path. This directory includes scripts to make identities and run the pictured configuration where the home and away relays are connected via TCP, the apartment and home also connect via TCP (using localhost here). Those two links both use the iote.rules that will only pass operator commands to frontdoor.
+
+![relay3way](./relay3way.svg)
+
+The identities can be set up using the mk3IotIDs.sh script which also make additional operator identities for bob and alice. The same frontdoor.bundle is used for the apartment frontdoor and the home frontdoor; each member makes its own signing keys, so their chains will be unique. Use run3Home.sh to start the home (yellow) members, runApt to start the apartment (green) members and runAway.sh to start the away (blue) members.
 
 ### Setting up distinct multicast subnets
 
-To test relays on a single machine or a single broadcast network, subnets using different IPv6 multicast addresses can be used. If not set, a DeftT uses ff01::1234 as the default. The runAway.sh script shows setting the multicast address for the "away" entities to ff01::5678 and setting the away relay's unicast UDP port to use the local 127.0.0.1:34567 port. For testing on a single physical subnet, ff02 can be used. Note that a dctwatch can be set up for the non-default multicast group independently, e.g. (setenv DCT_MULTICAST_ADDR ff01::5678 ; dctwatch -h -n -d)
+To test relays on a single machine or a single broadcast network, subnets using different IPv6 multicast addresses can be used. If not set, a DeftT uses ff01::1234 as the default. The runAway.sh script shows setting the multicast address for the "away" entities to ff01::5678 and setting the away relay's unicast UDP port to use the local 127.0.0.1:34567 port. For testing on a single physical subnet, ff02 can be used. To better understand relaying, run examples while monitoring communications with *dctwatch*. When (re)setting multiple default IPv6 multicast addresses, local to host or network, it can be helpful to set up a dctwatch for each by setting the DCT_MULTICAST_ADDR environment variable on each command line, e.g.,
+
+```
+( setenv DCT_DEFAULT_IF en0; setenv DCT_MULTICAST_ADDR ff01::5678; dctwatch -h -n -d )
+```
 
 ### Meshing relays
 

@@ -56,7 +56,7 @@ static void help(const char* cname)
 
 /* Globals */
 static std::string myId, role, fullId;
-static std::chrono::microseconds pubWait = std::chrono::seconds(5);
+static std::chrono::microseconds pubWait = std::chrono::seconds(45);
 static int Cnt = 0;
 static int nMsgs = 5;
 

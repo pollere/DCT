@@ -47,6 +47,7 @@ using KeyCb = std::function<keyRef(rData)>;
 
 struct SigMgr {
     const SigType m_type;
+    const SigSize m_sigSize;
     SigInfo m_sigInfo;
     keyVal m_signingKey{};
     KeyCb m_keyCb{};
@@ -76,8 +77,9 @@ struct SigMgr {
         }
     }
 
-    SigMgr(SigType typ) : m_type{typ}, m_sigInfo{mkSigInfo(typ)} { if (sodium_init() == -1) exit(EXIT_FAILURE); }
-
+    SigMgr(SigType typ, SigSize sz) : m_type{typ}, m_sigSize{sz}, m_sigInfo{mkSigInfo(typ)} {
+        if (sodium_init() == -1) exit(EXIT_FAILURE);
+    }
     bool sign(crData& d) { return sign(d, m_sigInfo, m_signingKey); };
     bool sign(crData& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
     virtual bool sign(crData&, const SigInfo&, const keyVal&) { abort(); };
@@ -98,8 +100,12 @@ struct SigMgr {
     // if validate requires public keys of publishers, m_keyCb returns by keylocator
     void setKeyCb(KeyCb&& kcb) { m_keyCb = std::move(kcb);}
 
-    SigType type() const noexcept { return m_type; };
-    SigInfo getSigInfo() const noexcept { return m_sigInfo; }
+    constexpr SigType type() const noexcept { return m_type; };
+    constexpr SigSize sigSize() const noexcept { return m_sigSize; };
+    constexpr SigInfo getSigInfo() const noexcept { return m_sigInfo; }
+    // when constructing packets, need to know the total space occupied
+    // by sigInfo & signature including their outer TLV headers
+    constexpr SigSize sigSpace() const noexcept { return m_sigInfo.size() + m_sigSize + 4; };
 };
 
 } // namespace dct

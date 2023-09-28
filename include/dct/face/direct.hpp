@@ -106,7 +106,7 @@ class DirectFace {
     // Get the asio io_context used by this face
     boost::asio::io_context& getIoContext() const noexcept { return ioContext_; }
 
-    constexpr size_t mtu() const noexcept { return io_.mtu(); }
+    constexpr auto mtu() const noexcept { return io_.mtu(); }
 
     std::shared_ptr<Timer> schedule(std::chrono::microseconds delay, TimerCb&& cb) {
         auto timer = std::make_shared<Timer>(ioContext_, delay);

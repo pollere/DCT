@@ -38,7 +38,7 @@ namespace dct {
 
 struct SigMgrNULL final : SigMgr {
 
-    SigMgrNULL() : SigMgr(stNULL) {}
+    SigMgrNULL() : SigMgr(stNULL, 0) {}
 
     bool sign(crData& , const SigInfo& , const keyVal& ) override final { return true; }
 

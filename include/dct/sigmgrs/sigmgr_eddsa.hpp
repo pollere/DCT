@@ -88,7 +88,7 @@ namespace dct {
 
 struct SigMgrEdDSA final : SigMgr {
 
-    SigMgrEdDSA() : SigMgr(stEdDSA) { }
+    SigMgrEdDSA() : SigMgr(stEdDSA, crypto_sign_BYTES) { }
 
     /*
      * Called by parent when there is a new signing key.

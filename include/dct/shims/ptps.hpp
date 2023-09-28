@@ -101,7 +101,9 @@ struct DCTmodelPT final : DCTmodel  {
         // returns empty span if capability wasn't found or has bad argument content
        auto arg = (Cap::getval(c, pubPrefix(), cs_)(tp)).toSv();
         if (arg.empty()) std::runtime_error("DCTmodelPT: no RLY capability or no address in RLY capability cert");
-        if (!arg.starts_with("tcp:") && !arg.starts_with("udp:") && !arg.starts_with("ff0")) arg = "";  //XXXX hack for testing without transport.hpp changes
+        //XXXX hack for working without transport.hpp changes
+        if (!arg.starts_with("tcp:") && !arg.starts_with("udp:") && !arg.starts_with("ff02") && !arg.starts_with("ff01")) arg = "";
+        // print ("RLY capability argument is {}\n", arg);
         return arg;
     }
 
@@ -165,6 +167,7 @@ struct ptps
     // being forwarded before their signing keys.
     void certAck(const rData& c, bool acked)
     {
+        // print ("certAck addRelayedCert addCert cb: acked={} for {}\n", acked, c.name());
         auto tp = c.computeTP();
         if (!acked) { // unlikely as implies cert expired, but remove from list
             print ("addRelayedCert addCert cb fails for {}\n", c.name());
@@ -356,19 +359,24 @@ struct ptps
      */
     void addRelayedChain(const rData c, const auto& cs) {
         auto tp = c.computeTP();
-        if (m_pb.certs().contains(tp)) return;   //already have this signing chain
-        if (!m_unackedCerts.contains(tp))
-            m_unackedCerts.emplace(tp);
+         //if already have this signing chain in my certstore or
+         //have received this relayed chain but it's not acked yet, return
+        if (m_pb.certs().contains(tp) || m_unackedCerts.contains(tp)) return;
 
+        m_unackedCerts.emplace(tp);     // add to unacked signing certs - the cert will be published with a callback
+                                                                 // if the cert is validated
         // for each cert on signing chain
         cs.chain_for_each(tp, [this](const auto &c) {
             if (! m_pb.certs().contains(c.computeTP())) {
                 //auto h = std::hash<tlvParser>{}(c);
                 m_pb.addRelayed(c.computeTP());    // add to list of certs that were (solely) relayed to this DeftT
-                m_pb.addCert(c);
+                m_pb.addCert(c);                               // will add to certs if validates
             }
         });
-
+        if (!m_pb.certs().contains(tp)) {
+            m_unackedCerts.erase(tp);   // didn't pass validation, so didn't get published
+            print ("ptps::addRelayedChain: got an invalid signing cert\n");
+        }
     }
 
     // Can be used by application to schedule a cancelable timer. Note that

@@ -43,6 +43,7 @@ struct tlvParser {
     size_t m_off{}; 
 
     constexpr size_t size() const noexcept { return m_blk.size(); }
+    constexpr ssize_t ssize() const noexcept { return m_blk.size(); }
 
     constexpr auto data() const noexcept { return m_blk.data(); }
 

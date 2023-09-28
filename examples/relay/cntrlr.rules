@@ -1,0 +1,57 @@
+// trust schema for sensor aggregators with meshed relays
+
+// Each process has an identity associated with a particular type of
+// certificate that is signed and validatable.
+
+// trust anchor name associated with this schema
+_domain:    "mesh"
+
+// MBPS Publication definition
+// target, topic, args are set using application parameters
+// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// In addition, all trust schemas for mbps-based applications must include a #chainInfo
+// which lists all the signing chain tags so schemaLib can access them
+
+#Pub: _domain/target/topic/args/msgID/sCnt/mts
+
+sensRprt: #Pub & { target: "sens", topic: "rpt", args: _roleId } <= sensSign
+sensCmd: #Pub & { target: "sens", topic: "cmd", args: "read" | "reset" } <= cntrlSign
+// sensAck: #Pub & { target: "sens", topic: "ack" } <= signCert & ( _role: "sensor" }
+
+roleCert:   _domain/_role/_roleId/_keyinfo
+rlyCert:   _domain/_role/_roleId/_keyinfo
+signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
+
+// There are different signing chains for sensCert & cntrlCerts.
+// "key makers" (authorized by the KM capability, kmCap) are
+// responsible for creating and distributing the nonce
+// symmetric encryption keys for PDU validators
+// Relays may have the KM capability for PDUs if AEAD is selected
+
+sensSign:   signCert & { _role: "sensor" }  <= roleCert
+cntrlSign:  signCert & { _role: "controller" } <= roleCert
+roleCert <= domCert
+rlySign:    signCert <= rlyCert
+rlyCert <= rlyCap
+
+// capability certs (capabilities granted to roles)
+capCert: _domain/"CAP"/capId/capArg/_keyinfo
+kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert    // allowed to be a key maker (capArg is priority)
+rlyCap:  capCert & { capId: "RLY", capArg: _ } <= kmCap     // relay that talks to controller must be KM
+
+domCert: _domain/_keyinfo
+
+// information about signing chain
+#chainInfo: /_role/_roleId <= signCert
+
+// schema's Publication prefix and validator type
+#pubPrefix:    _domain
+#pubValidator: "EdDSA"
+
+#certValidator: "EdDSA"
+// used for cAdds
+#wireValidator: "AEAD"
+
+// uses NDN certificate format v2 suffix for a cert name, final four
+// components are KEY, keyID, issuerID, and version
+_keyinfo: "KEY"/_/"dct"/_

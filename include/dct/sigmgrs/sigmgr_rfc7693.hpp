@@ -54,7 +54,7 @@ namespace dct {
 
 struct SigMgrRFC7693 final : SigMgr {
 
-    SigMgrRFC7693() : SigMgr(stRFC7693) { }
+    SigMgrRFC7693() : SigMgr(stRFC7693, crypto_generichash_BYTES) { }
 
     bool sign(crData& d, const SigInfo& si, const keyVal&) override final {
         d.siginfo(si);

@@ -100,9 +100,8 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  * validation against its schema.
  */
 static void pubRecv(ptps* s, const Publication& p) {
-      /* auto now = std::chrono::system_clock::now();
-     print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->attribute("_roleId"),
-          (s->label().size()? s->label() : "default"), p.name()); */
+     /* auto now = std::chrono::system_clock::now();
+     print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());*/
     try {
         for (auto sp : transList)
             if (sp != s) {
@@ -111,6 +110,8 @@ static void pubRecv(ptps* s, const Publication& p) {
                     sp->publish(Publication(p));
                 } else {
                     sp->publishValid(Publication(p));
+                   // if (sp->publishValid(Publication(p)))
+                   //  print("{} relayed from {}:{} to interFace {}:{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                 }
             }
     } catch (const std::exception& e) {}
@@ -132,7 +133,7 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     try {
         for (auto sp : transList)
             if (sp != s) {
-                //print("\trelaying a signing chain to interFace {}:{}\n", sp->label(), sp->relayTo());
+                // print("RELAY: {} signing chain from {}:{} to interFace {}:{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                 sp->addRelayedChain(c, cs);
             }
     } catch (const std::exception& e) { }
@@ -246,10 +247,8 @@ int main(int argc, char* argv[])
         }
         auto& s = *transList.back();    // reach here implies must have RLY capability
 
-        print("relay:: created transport {} to {}\n", s.label(), s.relayTo());
+        print("relay:: created a transport {} to {}\n", s.label(), s.relayTo());
 
-        //single callback for all Publications in pubs
-       // s.subscribe(pubRecv);
         // Connect and pass in the handler
         try {
             s.connect([&s](){

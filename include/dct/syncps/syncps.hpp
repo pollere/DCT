@@ -201,7 +201,7 @@ struct SyncPS {
 
     constexpr auto randInt() { return randInt_(randGen()); }
 
-    constexpr size_t mtu() const noexcept { return face_.mtu(); }
+    constexpr auto mtu() const noexcept { return face_.mtu(); }
 
     /**
      * @brief constructor
@@ -418,19 +418,23 @@ struct SyncPS {
      * with a murmurhash3 32 bit hash of csName which serves as both a compact
      * representation of csName's iblt and as a PIT key to retrieve the original
      * iblt should it be needed.
+     *
+     * The cAdd will contain all the pubs that will fit in the face's MTU minus
+     * the space needed for cAdd container itself. The container is built early
+     * so its size is known.
      */
     auto shipCAdd(const rName& csName, const PubVec& pv) noexcept {
         PubVec sv{};
         auto ht = std::chrono::system_clock::now() + distDelay;   // set hold time for sent pubs
-        // send all the newPubs that will fit into a cAdd
-        for (size_t sz{}; const auto& p : pv) {
-           if (sz + p.size() > mtu()) continue;
-           sz += p.size();
+        // send all the newPubs that will fit into the cAdd
+        crData cAdd{crName{csName.first(-1)}.append(tlv::csID, mhashView(csName)).done(), tlv::ContentType_CAdd};
+        for (ssize_t sz = mtu() - cAdd.ssize() - pktSigmgr_.sigSpace(); const auto& p : pv) {
+           if (sz < p.ssize()) continue;
+           sz -= p.ssize();
            sv.emplace_back(p);
            pubs_.at(hashPub(p)).hold_ = ht;
         }
         if (sv.empty()) return false;
-        crData cAdd{crName{csName.first(-1)}.append(tlv::csID, mhashView(csName)).done(), tlv::ContentType_CAdd};
         cAdd.content(sv);
         if (! pktSigmgr_.sign(cAdd)) return false;
         face_.send(std::move(cAdd));
