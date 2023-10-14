@@ -23,9 +23,7 @@ schemaCompile -o sensor.scm ../sensor.rules
 # extract the info needed to make certs from the compiled schema
 Pub=$(schema_info $Bschema);
 PubPrefix=mesh
-# CertValidator=$(schema_info -t $Bschema "#certValidator");
-# default value
-CertValidator=EdDSA
+CertValidator=$(schema_info -t $Bschema "#certValidator");
 RootCert=mesh.root
 
 make_cert -s $CertValidator -o $RootCert $PubPrefix
@@ -34,7 +32,7 @@ schema_cert -o sensor.schema sensor.scm $RootCert
 
 # if main mesh schema uses AEAD must set keymaker
 # (main mesh gives relays KM capability)
-if [[ $(schema_info -t $Bschema "#wireValidator") =~ AEAD|AEADSGN|PPAEAD|PPSIGN ]]; then
+if [[ $(schema_info -t $Bschema "#pduValidator") =~ AEAD|AEADSGN|PPAEAD|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KM") ]; then
 	echo
 	echo "- error: AEAD encryption requires entity(s) with a KM (KeyMaker) Capability"

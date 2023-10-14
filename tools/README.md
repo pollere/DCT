@@ -9,7 +9,7 @@ Bundles contain the information needed to start a DCT-enabled application organi
 - 0: the trust anchor (sample.root)
 - 1: the schema (sample.schema)
 - 2...(n-2): the identity cert's signing chain
-- n-1: the identity cert and its key
+- n-1: the identity cert and its private key
 
 An application can receive its bundle via the command line, a pipe or some other method. The bundle is used by DCT's run-time modules (consult DCT/examples for applications). The identity bundle is itself used by each member entity to create signing certs for applications rather than using the identity directly. The example bundles include the private identity key but, in a deployment, this should not be part of the bundle, but securely configured. Deployment bundles should only include public certs.
 

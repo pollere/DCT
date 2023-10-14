@@ -27,12 +27,13 @@ domainCert: _domain/_keyinfo
 // information about signing chain
 #chainInfo: /_role/_roleId <= signCert
 
-// schema's Publication prefix and validator type
+// schema's Publication prefix and validator types
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
+#msgsValidator: "EdDSA"
+#certValidator: "EdDSA"
 
 // The signature manager for cAdds. Change to AEAD for data privacy
-#wireValidator: "EdDSA"
+#pduValidator: "EdDSA"
 
 // Certs use NDN certificate format v2 suffix
 // final four components are KEY, keyID, issuerID, and version

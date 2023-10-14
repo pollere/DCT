@@ -110,7 +110,7 @@ struct DistSGKey {
     bool m_keyMaker{false};     // true if this entity is a key maker
     bool m_subr{false};         // set if this identity has the subscriber capability
     bool m_init{true};          // key maker status unknown while in initialization
-    bool m_pubdist{false};        // true indicates this is a pub group key distributor (not pdu)
+    bool m_msgsdist{false};        // true indicates this is a group key distributor for msgs (not pdu)
     bool m_mrPending{false};    //member request pending
     pTimer m_mrRefresh{std::make_shared<Timer>(getDefaultIoContext())}; // to refresh timed out member request
 
@@ -136,7 +136,7 @@ struct DistSGKey {
         // get our identity thumbprint, check if we're allowed to make keys, check if we
         // are in subscriber group, then set up our public and private signing keys.
         m_tp = m_certs.Chains()[0];
-        if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;
+        if ( m_sync.collName_.last().toSv() == "msgs") m_msgsdist = true;
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
     }
 
@@ -145,7 +145,7 @@ struct DistSGKey {
     // publish my membership request with updated key: name <m_mrPrefix><timestamp>
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
     void publishMembershipReq() {
-        if (m_pubdist && isRelay(m_tp))  return;   // relays don't get pub encryption keys
+        if (m_msgsdist && isRelay(m_tp))  return;   // relays don't get pub encryption keys
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         if(!m_subr) return;     // don't have permission to be a member
         crData p(m_mrPrefix/std::chrono::system_clock::now());
@@ -193,7 +193,7 @@ struct DistSGKey {
             auto sgId = Cap::getval("SG", m_prefix, m_certs);
             //checks if SG cap is present and, if so, returns its argument
             // return 0 if cap wasn't found or has wrong content
-            // eventually use an m_keyColl that can have a subcollection within pubs
+            // eventually use an m_keyColl that can have a subcollection within msgs
             m_sgMem = [this,sgId](const thumbPrint& tp) { return sgId(tp).toSv() == m_keyColl; };
         }
         if( m_subr && !m_sgMem(m_tp) )  // first time through m_subr will be false for all
@@ -245,7 +245,7 @@ struct DistSGKey {
      */
     void receiveSGKeyRecords(const rPub& p)
     {
-        if (m_pubdist && isRelay(m_tp)) return;   // relays don't get keys
+        if (m_msgsdist && isRelay(m_tp)) return;   // relays don't get keys
 
         const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
         if (m_kmpri(tp) <= 0) {
@@ -388,19 +388,19 @@ struct DistSGKey {
      */
     void setup(connectedCb&& ccb) {
         m_connCb = std::move(ccb);
-        if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;    // this will need to be changed if put in names for subscriber groups
+        if ( m_sync.collName_.last().toSv() == "msgs") m_msgsdist = true;    // this will need to be changed if put in names for subscriber groups
 
          // relay: doesn't participate in pub group as it doesn't do encryption or decryption
         // but needs to pass through the sgklists so has a sgk distributor active with its own subscription cb
         // which is set by the ptps shim and the ptps shim also calls the start() for this sync as there are
         // other conditions which must be met beforehand
-        if (m_pubdist && isRelay(m_tp) ) { initDone(); return; }
+        if (m_msgsdist && isRelay(m_tp) ) { initDone(); return; }
 
         m_sync.start();
 
         // build function to get the key maker priority from a signing chain then
         // use it to see if we should join the key maker election
-        auto kmval = Cap::getval(m_pubdist ? "KMP" : "KM", m_prefix, m_certs);
+        auto kmval = Cap::getval(m_msgsdist ? "KMP" : "KM", m_prefix, m_certs);
         auto kmpri = [kmval](const thumbPrint& tp) {
                           // return 0 if cap wasn't found or has wrong content
                           // XXX value currently has to be a single digit
@@ -531,8 +531,8 @@ struct DistSGKey {
 
         auto tp = p.thumbprint();   // thumbprint of the signer of the member request
         if(! m_sgMem(tp)) return;  //this signing cert doesn't have SG capability
-        // Test here for request  in /keys/pubs/mr  from a RLY identity
-        if(m_pubdist && isRelay(tp))  return;
+        // Test here for request  in /keys/msgs/mr  from a RLY identity
+        if(m_msgsdist && isRelay(tp))  return;
 
         if (!m_mbrList.contains(tp))  //if not already a member, add to list
         {

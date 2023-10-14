@@ -63,12 +63,12 @@ netCert:    _domain/_keyinfo
 // information about signing chain
 #chainInfo: /_role/_roleId/_roomId <= signCert
 
-// Publication prefix and validator type
+// Publication prefix and validator types
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
-
+#msgsValidator: "EdDSA"
+#certValidator: "EdDSA"
 // for cAdds
-#wireValidator: "AEAD"
+#pduValidator: "AEAD"
 
 // The final components are KEY,keyID, issuerID and version 
 _keyinfo: "KEY"/_/"dct"/_

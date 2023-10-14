@@ -81,11 +81,9 @@ static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& 
         throw schema_error("schema cert name malformed");
 
     const auto& bs = loadSchema(scert);
-    /* this needs to check if it matches the certValidator from schema, not the pubValidator
-     * the "default" cert sigmgr is EdDSA
-    if (getSigMgr(bs).ref().type() != )
+    // check if it matches the certValidator from schema
+    if (getCertSigMgr(bs).ref().type() != sigType)
         throw schema_error("schema signature type doesn't match its certValidator");
-    */
 
     // check that schema and root cert match (root cert is always last in schema cert table)
     if (! matches(bs, root.name(), bs.cert_.size() - 1))
@@ -160,8 +158,8 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
         throw schema_error("schema cert name malformed");
 
     const auto& bs = loadSchema(scert);
-    if (getSigMgr(bs).ref().type() != sigType)
-        throw schema_error("schema signature type doesn't match its pubValidator");
+    if (getCertSigMgr(bs).ref().type() != sigType)
+        throw schema_error("schema signature type doesn't match its certValidator");
 
     // check that schema and root cert match (root cert is always last in schema cert table)
     if (! matches(bs, root.name(), bs.cert_.size() - 1))

@@ -106,13 +106,13 @@ struct Dissect {
     };
     inline static Dict sigTypeTLV = {
         // SignatureType types
-        {tlv::DigestSha256, {"DigestSha256", true, cFmt::unknown}},
-        {tlv::SignatureSha256WithRsa, {"Sha256WithRsa", true, cFmt::unknown}},
-        {tlv::SignatureSha256WithEcdsa, {"Sha256WithEcdsa", true, cFmt::unknown}},
-        {tlv::SignatureHmacWithSha256, {"HmacWithSha256", true, cFmt::unknown}},
-        { tlv(7), {"AEAD", true, cFmt::unknown} },
-        { tlv(8), {"EdDSA", true, cFmt::unknown} },
-        { tlv(9), {"RFC7693", true, cFmt::unknown} },
+        {tlv::stSHA256, {"DigestSha256", true, cFmt::unknown}},
+        {tlv::stAEAD, {"AEAD", true, cFmt::num} },
+        {tlv::stEdDSA, {"EdDSA", true, cFmt::num} },
+        {tlv::stRFC7693, {"RFC7693", true, cFmt::num} },
+        {tlv::stPPAEAD, {"PPAEAD", true, cFmt::num} },
+        {tlv::stPPSIGN, {"PPSIGN", true, cFmt::num} },
+        {tlv::stAEADSGN, {"AEADSGN", true, cFmt::num} },
     };
     inline static Dict schemaTLV = {
         // trust schema types

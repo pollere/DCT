@@ -72,14 +72,13 @@ domCert: _domain/_keyinfo
 // information about signing chain
 #chainInfo: /_role/_roleId <= signCert
 
-// schema's Publication prefix and validator type
+// schema's Publication prefix and validator types
 #pubPrefix:    _domain
-#pubValidator: "AEADSGN"
-//#pubValidator: "EdDSA"
-
+#msgsValidator: "AEADSGN"
+//#msgsValidator: "EdDSA"
 #certValidator: "EdDSA"
 // for cAdds
-#wireValidator: "AEAD"
+#pduValidator: "AEAD"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version

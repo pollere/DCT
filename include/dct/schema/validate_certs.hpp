@@ -117,9 +117,9 @@ static inline int validateChain(const bSchema& bs, const certStore& cs, const dc
     return c;
 }
 
-static inline auto getSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#pubValidator").substr(1)); }
-static inline auto getCertSigMgr(const bSchema&) { return sigMgrByType("EdDSA"s); }
-static inline auto getWireSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#wireValidator").substr(1)); }
+static inline auto getSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#msgsValidator").substr(1)); }
+static inline auto getCertSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#certValidator").substr(1)); }
+static inline auto getPduSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#pduValidator").substr(1)); }
 
 } // namespace dct
 

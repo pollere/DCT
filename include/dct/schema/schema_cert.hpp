@@ -31,9 +31,8 @@
 namespace dct {
 
 static inline auto schemaCert(const bSchema& bs, const keyVal& pk, SigMgr& sm) {
-    // schema must be signed the same way as its pubs
-    // XXXX this needs to change to certValidator
-    auto valtype = bs.pubVal("#pubValidator").substr(1);
+    // schema signing must match the cert specification
+    auto valtype = bs.pubVal("#certValidator").substr(1);
 
     // schema names are derived from the schema and must have the form:
     //   <pubPrefix>/"schema"/<pubName>/"KEY"/<kId>/"self"/<creationTime>

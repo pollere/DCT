@@ -37,7 +37,7 @@ namespace dct {
 template<typename C> concept lpmCapable = std::is_convertible_v<const C &, const rPrefix&>;
 
 /**
- * Lookup table to do longest-prefix-match on wire-format names. Both the RIT and PIT
+ * Lookup table to do longest-prefix-match on pdu-format names. Both the RIT and PIT
  * are lookup tables containing name prefixes that must be matched against some name
  * (Interest name for RIT, Data name for PIT) and the longest match returned.
  * The rName ordering operator is defined such that it collates prefixes in longest-match

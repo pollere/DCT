@@ -30,10 +30,8 @@ schemaCompile -o $Bschema $1
 # extract the info needed to make certs from the compiled schema
 Pub=$(schema_info $Bschema);
 PubPrefix=$(schema_info $Bschema "#pubPrefix");
-PubValidator=$(schema_info -t $Bschema "#pubValidator");
-# CertValidator=$(schema_info -t $Bschema "#certValidator");
-# default value
-CertValidator=EdDSA
+PubValidator=$(schema_info -t $Bschema "#msgsValidator");
+CertValidator=$(schema_info -t $Bschema "#certValidator");
 
 echo
 echo "pub prefix is $PubPrefix"
@@ -45,7 +43,7 @@ make_cert -s $CertValidator -o $RootCert $PubPrefix
 echo "made root cert"
 schema_cert -o $SchemaCert $Bschema $RootCert
 
-if [[ $(schema_info -t $Bschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
+if [[ $(schema_info -t $Bschema "#pduValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KM") ]; then
     echo
     echo "- error: AEAD PDU encryption requires entity(s) with a KM (KeyMaker) Capability"
@@ -56,7 +54,7 @@ if [[ $(schema_info -t $Bschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
     KMCap=km
 fi;
 
-if [[ $(schema_info -t $Bschema "#pubValidator") =~ AEADSGN|PPSIGN ]]; then
+if [[ $(schema_info -t $Bschema "#msgsValidator") =~ AEADSGN|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KMP") ]; then
     echo
     echo "- error: AEAD Pub encryption requires entity(s) with a KMP (KeyMaker Pubs) Capability"

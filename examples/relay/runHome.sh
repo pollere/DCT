@@ -14,14 +14,14 @@ export DCT_MULTICAST_ADDR
 ids=(frontdoor backdoor)
 
 for i in ${ids[@]}; do
-  ../hmIot/app2 -n 0 -q tst/$i.bundle &
+  ../hmIot/app2 -n 0 home/$i.bundle &
   echo -n " starting $i"
   echo ""
   sleep 1
 done
 echo
 
-./relay -l "tst/homeLoc.bundle,tst/homeExt.bundle" &
+./relay -l "home/homeLoc.bundle,home/homeExt.bundle" &
 echo -n " starting home relay"
 echo ""
 

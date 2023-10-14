@@ -103,14 +103,14 @@ struct pubValidator {
     }
 };
 
-// syncps validates each arriving publication using the 'validate' method of
+// syncps validates each arriving msgs Publication using the 'validate' method of
 // the 'psig' argument given its constructor. Pub *cryptographic* validation
-// is specified by the schema's "#pubValidator" definition. Pub *structural*
+// is specified by the schema's "#msgsValidator" definition. Pub *structural*
 // validataion (i.e., its conformance to to the schema) is done by this
 // pseudo-sigmgr ('pseudo' the sense that it does only validation, not signing). 
 //
 // Since syncps does only one 'validate' call per arriving publication, this
-// routine does both cryptographic validation (using the schema specified pubValidator)
+// routine does both cryptographic validation (using the schema specified msgsValidator)
 // and structural validation. As usual, the signing cert thumbprint in the arriving
 // pub is used to lookup its signing cert in the certStore to get the public key
 // needed for signature validation.

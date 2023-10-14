@@ -19,7 +19,7 @@
  * subtopic mr is used by members of the group to request a copy of the encryption key, and
  * subtopic gk is used by the key maker to publish key records where the symmetric key is encrypted
  *      for each valid member of the group.
- * The PDU prefix the distributor's sync uses is <tp_id>/keys/<pubs || pdus>, in the "keys" collection
+ * The PDU prefix the distributor's sync uses is <tp_id>/keys/<msgs || pdus>, in the "keys" collection
  * 
  * Copyright (C) 2020-3 Pollere LLC
  *
@@ -104,9 +104,9 @@ struct DistGKey {
     uint32_t m_KMepoch{};        // current election epoch
     bool m_keyMaker{false};      // true if this entity is a key maker
     bool m_init{true};                  // key maker status unknown while in initialization
-    bool m_pubdist = false;        // true indicates this is a pub group key distributor (not pdu)
+    bool m_msgsdist = false;     // true indicates this is a group key distributor for msgs  (not pdus)
     bool m_mrPending{false};    //member request pending
-    Cap::capChk m_relayChk; // method to return true if the identity chain has the relay (RLY) capability
+    Cap::capChk m_relayChk;   // method to return true if the identity chain has the relay (RLY) capability
     pTimer m_mrRefresh{std::make_shared<Timer>(getDefaultIoContext())};
 
     DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& gkeyCb, const certStore& cs,
@@ -141,7 +141,7 @@ struct DistGKey {
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
     // Member requests have a lifetime same order as a gkey so don't have to keep reissuing
     void publishMembershipReq() {
-        if (m_pubdist && isRelay(m_tp))  return;   // relays don't publish mrs (shouldn't get here)
+        if (m_msgsdist && isRelay(m_tp))  return;   // relays don't publish mrs (shouldn't get here)
         /*using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
         auto now = std::chrono::system_clock::now();
         print("{:%M:%S} {} publishes a {} membership request\n",  ticks(now.time_since_epoch()), m_certs[m_tp].name(), m_sync.collName_.last().toSv());*/
@@ -223,7 +223,7 @@ struct DistGKey {
      * gk names <m_gkPrefix><epoch><low tpId><high tpId><timestamp>
      */
     void receiveGKeyList(const rPub& p) {
-        if (m_pubdist && isRelay(m_tp))  return;   // relays don't get pub keys
+        if (m_msgsdist && isRelay(m_tp))  return;   // relays don't get pub keys
 
         const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
         if (m_kmpri(tp) <= 0) {
@@ -339,7 +339,7 @@ struct DistGKey {
      * after some initial signing certs have been exchanged so it's known
      * there are active peers. It is passed a callback, 'ccb', to be
      * invoked when a group key has been received (i.e., when this entity is
-     * able to encrypt/decrypt wirepacket content). There may also be a
+     * able to encrypt/decrypt pdu content). There may also be a
      * km capability cert in this entity's signing chain which allows
      * it to participate in keyMaker elections.  The value of the
      * capability influences the probability of this entity being elected
@@ -347,18 +347,18 @@ struct DistGKey {
      */
     void setup(connectedCb&& ccb) {
         m_connCb = std::move(ccb);
-        if ( m_sync.collName_.last().toSv() == "pubs") m_pubdist = true;
+        if ( m_sync.collName_.last().toSv() == "msgs") m_msgsdist = true;
 
         // relay doesn't participate in pub group as it doesn't do encryption or decryption
         // but needs to pass through the gklists so has a gk distributor active with its own subscription cb
         // which is set by the ptps shim which then calls the start() for this sync
-        if (m_pubdist && isRelay(m_tp)) { initDone(); return; }
+        if (m_msgsdist && isRelay(m_tp)) { initDone(); return; }
 
         m_sync.start();
 
         // build function to get the key maker priority from a signing chain then
         // use it to see if we should join the key maker election
-        auto kmval = Cap::getval(m_pubdist ? "KMP" : "KM", m_prefix, m_certs);
+        auto kmval = Cap::getval(m_msgsdist ? "KMP" : "KM", m_prefix, m_certs);
 
         auto kmpri = [kmval](const thumbPrint& tp) {
                           // return 0 if cap wasn't found or has wrong content
@@ -490,7 +490,7 @@ struct DistGKey {
         if (m_mbrList.size() == 80*maxKR) return;
 
         auto tp = p.thumbprint();   // thumbprint of the signer of the member request
-        if (m_pubdist && isRelay(tp)) return;  // identities with RLY don't get pub keys
+        if (m_msgsdist && isRelay(tp)) return;  // identities with RLY don't get pub keys
 
         if (!m_mbrList.contains(tp)) {     // not already a member, add to list
             auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint

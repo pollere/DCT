@@ -45,7 +45,7 @@
  * NOTE: This means that an entity with subscriber capability could forge a publication
  * from an entity with the ability to publish in the Collection. This is not of concern 1) if there
  * is only a single subscriber in the group or 2) depending on other elements/requirements of a particular
- * application's set up (e.g., if provenance is ensured via signing Publication or Wire Packet,
+ * application's set up (e.g., if provenance is ensured via signing Publication or PDU,
  * or if such potential forging is not of concern).
  *
  * References:

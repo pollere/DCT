@@ -24,9 +24,7 @@ schemaCompile -o psensor.scm ../psensor.rules
 # extract the info needed to make certs from the compiled schema
 Pub=$(schema_info $Bschema);
 PubPrefix=mesh
-# CertValidator=$(schema_info -t $Bschema "#certValidator");
-# default value
-CertValidator=EdDSA
+CertValidator=$(schema_info -t $Bschema "#certValidator");
 RootCert=mesh.root
 
 make_cert -s $CertValidator -o $RootCert $PubPrefix
@@ -34,7 +32,7 @@ schema_cert -o $SchemaCert $Bschema $RootCert
 schema_cert -o psensor.schema psensor.scm $RootCert
 
 # if schema uses AEADSGN for Pubs must set Pub keymaker
-if [[ $(schema_info -t $Bschema "#pubValidator") =~ AEADSGN|PPSIGN ]]; then
+if [[ $(schema_info -t $Bschema "#msgsValidator") =~ AEADSGN|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KMP") ]; then
 	echo
 	echo "- error: AEAD Pub encryption requires entity(s) with a KMP (KeyMaker) Capability"

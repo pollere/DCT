@@ -2,8 +2,8 @@
 # mkIDs schema - script to create id bundles needed to run an app with some iot mbps schema
 # Creates bundles for operators and devices in multicast subdomains
 # and a "sub" schema, iote.rules for a relay's external unicast (UDP) subdomain 
-# Publications are secured across the trust domain with signed AEAD with their cAdds ("wire" PDUs)
-# signed via EdDSA and the externally unicast PDUs (cAdds/"wire") are secured with AEAD.
+# Publications are secured across the trust domain with signed AEAD with their cAdds (PDUs)
+# signed via EdDSA and the externally unicast PDUs (cAdds) are secured with AEAD.
 #  'schema' is the filename of the schema's .rules file
 PATH=../../../tools:$PATH
 
@@ -29,7 +29,7 @@ schemaCompile -o $Bschema $1
 schemaCompile -o $Eschema ../iote.rules
 
 PubPrefix=iot
-CertValidator=EdDSA
+CertValidator=$(schema_info -t $Bschema "#certValidator");
 Hm=:1234
 Awy=:5678
 Apt=:3456
@@ -47,16 +47,16 @@ make_cert -s $CertValidator -o $RootCert $PubPrefix
 schema_cert -o $SchemaCert $Bschema $RootCert
 schema_cert -o iote.schema $Eschema $RootCert
 
-if [[ $(schema_info -t $Bschema "#pubValidator") != $(schema_info -t $Eschema "#pubValidator") ]]; then
+if [[ $(schema_info -t $Bschema "#msgsValidator") != $(schema_info -t $Eschema "#msgsValidator") ]]; then
 	echo
-	echo "- error: pubValidator must be identical across the Trust Domain"
+	echo "- error: msgsValidator must be identical across the Trust Domain"
 	exit 1;
 fi;
 
 #
 # This part makes certs needed for member deftts of the multicast subdomains (that use Bschema)
 #
-if [[ $(schema_info -t $Bschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
+if [[ $(schema_info -t $Bschema "#pduValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KM") ]; then
 	echo
 	echo "- error: AEAD PDU encryption requires entity(s) with a KM (KeyMaker) Capability"
@@ -69,7 +69,7 @@ if [[ $(schema_info -t $Bschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
     DeviceSigner=$KMCapCert
 fi;
 
-if [[ $(schema_info -t $Bschema "#pubValidator") =~ AEADSGN|PPSIGN ]]; then
+if [[ $(schema_info -t $Bschema "#msgsValidator") =~ AEADSGN|PPSIGN ]]; then
     if [ -z $(schema_info -c $Bschema "KMP") ]; then
 	echo
 	echo "- error: AEAD Pub encryption requires entity(s) with a KMP (KeyMaker Pubs) Capability"
@@ -123,7 +123,7 @@ for nm in ${device[@]}; do
 done
 
 # make the relay certs and bundles for local interfaces
-# in this example, the relays can never be keymakers for the multicast subdomain's wireValidator
+# in this example, the relays can never be keymakers for the multicast subdomain's pduValidator
 # so the Loc Relay capability cert is signed by the RootCert
 subdom=Loc
 for nm in ${relay[@]}; do
@@ -135,9 +135,9 @@ done
 #
 # This part is for the external unicast subdomains (that uses Eschema)
 # In this example, at least one external relay link will need to be a
-# keymaker for the wireValidator of that subdomain
+# keymaker for the pduValidator of that subdomain
 KMCapCert=
-if [[ $(schema_info -t $Eschema "#wireValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
+if [[ $(schema_info -t $Eschema "#pduValidator") =~ AEAD|PPAEAD|PPSIGN ]]; then
     if [ -z $(schema_info -c $Eschema "KM") ]; then
 	echo
 	echo "- error: AEAD PDU encryption requires entity(s) with a KM (KeyMaker) Capability"

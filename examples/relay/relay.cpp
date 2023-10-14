@@ -1,33 +1,28 @@
 /*
- * relay.cpp relays Publications between different DeftTs (that can be
+ * relay.cpp relays Publications between different DeftTs (that may be
  * attached to different network segments) whose identity bundles have the same trust anchor
  * and compatible trust schemas. A compatible trust schema has the same trust root and can be
- * identical, one a subset of the other, or overlap in a way that allows them to share some
- * publications as well as the certificates that sign them.
+ * identical, one a subset of the other, or each is a subset of the domain schema and they overlap
+ * in a way that allows them to share some publications as well as the certificates that sign them.
  *
  * The relay creates two or more transports with a ptps shim.
- * ptps does a "pass through" of publications and certificates unaltered.
- * A DeftT is created for each identity bundle in command line args. The
- * bundles contain the bootstrap information including which network interface
+ * ptps does a "pass through" of publications subject to conformance with the
+ * (sub)schema at each DeftT.
+ * A DeftT is created for each identity bundle in command line args.
+ * Bundles contain the bootstrap information including which network interface
  * to use, passed as an argument to a RLY capability. Network interfaces are
  * specified in strings of the form "protocol:<opt>host:port" where protocol is
  * udp, tcp, or llm (link layer multicast - udp) and host is provided for the active
  * member of a tcp or udp connection.
- *
- * Different relay DeftTs may use different "wire" validators but must all use the same
- * publication validator, even if going to a "pure" relay link
+ * Different relay DeftTs may use different PDU validators but must all use the same
+ * validators for msgs, cert, and keys Publications
  *
  * After set up, relay waits for a Publication to arrive from one of the transports.
- * Upon receipt, the Publication is published to all the attached DeftTs. If the DeftTs
- * do not have identical schemas, then pubRecv() must use publishValid() rather
- * than publish() when relaying publications. publishValid() applies a DeftT's schema
- * to publications which will filter publications not contained in that DeftT's schema.
- * (publishValid() can be used in all cases for extra security.)
+ * Upon receipt, the Publication is published to all the attached DeftTs for which it is valid.
  * relay also supplies a callback for each transport to call when a new signing
  * cert is added to its cert store; the cert is passed to all the other DeftTs where they are
  * always validated before adding to their own cert stores (and publishing).
- * relay also passes through all publications of a publication distributor to extend the
- * trust domain.
+ * relay also passes through all publications of a publication group key distributor
  *
  * relay.cpp is not intended as production code.
  */
@@ -92,27 +87,23 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
                                                     //    which can be used for failure detection
 
 /*
- * pubRecv is the callback passed to subscribe() which is invoked upon arrival of validated (crypto and
- * structural) Publications to DeftT s
- * Publication p is published to all the (other) DeftTs which will silently discard (returns false) if p is not in their schema
- * publish() is used if schema is the same for all DeftTs or if the DeftTs with full schemas only subscribe to publications
- * that are defined in the sub-TSs. Otherwise publishValid() is recommended in order to check structural
- * validation against its schema.
+ * msgsRecv is the callback passed to subscribe() which is invoked upon arrival of each validated (crypto
+ * and structural) Publication in the msgs collection of DeftT s
+ * Publication p is published to all the (other) DeftTs for which it is structurally valid (against their schema)
+ *
+ * skipValidatePubs can be used if schema is the same for all DeftTs and the security through the relay is
+ * not an issue, but it is not recommended
  */
-static void pubRecv(ptps* s, const Publication& p) {
-     /* auto now = std::chrono::system_clock::now();
-     print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());*/
+static void msgsRecv(ptps* s, const Publication& p) {
+     //auto now = std::chrono::system_clock::now();
+     //print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
             if (sp != s) {
-                if(skipValidatePubs) {
-                    // print("\trelayed w/o validate to interFace {}:{}\n", sp->label(), sp->relayTo());
+                if(skipValidatePubs || sp->validPub(p)) {
                     sp->publish(Publication(p));
-                } else {
-                    sp->publishValid(Publication(p));
-                   // if (sp->publishValid(Publication(p)))
-                   //  print("{} relayed from {}:{} to interFace {}:{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
-                }
+                    //print("{} relayed from {}:{} to interFace {}:{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
+                }  // else print("{} from {}:{} discarded at interFace {}:{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
             }
     } catch (const std::exception& e) {}
 }
@@ -123,9 +114,7 @@ static void pubRecv(ptps* s, const Publication& p) {
  *  The chain's signging cert and pointer to the arrival cert store is then relayed to all the (other) DeftTs
  *  for validation and publication
  *
- *  Any cert that does not appear as an "is signed by" for a publication in a DeftT's trust schema should probably
- *  not be forwarded, but this needs further investigation as more subscription restrictions are added.
- *  Also it may be more costly to filter the cert chain than to forward it.
+ *  Any cert that is not defined  in a DeftT's trust schema should not be forwarded.
  */
 static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     // don't pass through relay certs - only useful on their subnet
@@ -140,18 +129,20 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
 }
 
 /*
- *  keyPubRecv is callback set when each ptps is constructed. If a publication key distributor
- *  is in use, it is used as a subscription callback to relay the publications of its syncps
- *  to other shims. Relays don't participate in pub encrypt/decrypt groups, merely
- *  validate and relay the encrypted pubs, but must pass through the key distribution publications
- *  (in PDU keys collection: <td_ID>/keys/pubs) to other shims.
+ *  keysRecv is callback set when each ptps is constructed and set as a subscription
+ *  callback for the msgs key distributor's syncps, if any.
+ *   It is used as a subscription callback to relay Publications in the keys/msgs collection
+ *  to other shims.
+ *  Relays don't participate in msgs encrypt/decrypt groups, merely
+ *  validate and relay the encrypted Pubs, but must pass through the keys/msgs Publications
+ *  (in collection: <td_ID>/keys/msgs) to other shims.
  *
- *  Distributor publications do not currently appear in trust schemas, so instead, a test is made to
- *  determine if a  pub's signer is known (in the cert store) to a shim before it is forwarded there.
+ *  Distributor publications do not currently appear in schemas, so instead, a test is made to
+ *  determine if a  pub's signer is known (in the  DeftT's cert store) to a shim before it is forwarded there.
  */
-static void keyPubRecv(ptps* s, const Publication& p) {
-   /* auto now = std::chrono::system_clock::now();
-    print("{:%M:%S} relay:{}:{}\tkeyPubRcv {}", ticks(now.time_since_epoch()), s->label(), s->relayTo(), p.name()); */
+static void keysRecv(ptps* s, const Publication& p) {
+   // auto now = std::chrono::system_clock::now();
+    // print("{:%M:%S} relay:{}:{}\tkeyRcv {}\n", ticks(now.time_since_epoch()), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
             if (sp != s) {
@@ -233,13 +224,13 @@ int main(int argc, char* argv[])
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
                                            [i=s_id]{return getSigningPair(i);},
-                                           "RLY", chainRecv, keyPubRecv} );
+                                           "RLY", chainRecv, keysRecv} );
             } else {
                 transList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
                                            [i=s_id]{return getSigningPair(i);},
-                                           "RLY", chainRecv, keyPubRecv, pubFailure} );
+                                           "RLY", chainRecv, keysRecv, pubFailure} );
             }
         } catch (const std::exception& e) {
             std::cerr << "relay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;
@@ -253,7 +244,7 @@ int main(int argc, char* argv[])
         try {
             s.connect([&s](){
                 print("relay: DeftT transport {} relaying to {} is connected\n", s.label(), s.relayTo());
-                s.subscribe(pubRecv);} );
+                s.subscribe(msgsRecv);} );
         } catch (const std::exception& e) {
             std::cerr << "main: encountered exception while trying to connect transport " << s.label() << " relaying to " << s.relayTo() << " (bundle " << l << "): " << e.what() << std::endl;
             exit(1);

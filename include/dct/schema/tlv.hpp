@@ -49,7 +49,7 @@ enum class tlv : uint16_t {
     //
     // Metainfo can only contain a content type:
     //   cAdd PDUs have Metainfo>ContentType>ContentType_CAdd
-    //   pubs have Metainfo>ContentType>ContentType_Blob
+    //   msgs have Metainfo>ContentType>ContentType_Blob
     //   certs have Metainfo>ContentType>ContentType_Key
     //
     // A cert's siginfo must contain a validity period, pub and cAdd siginfo must not.

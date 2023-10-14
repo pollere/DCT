@@ -53,27 +53,27 @@ struct DCTmodel {
     const bSchema& bs_;     // communications schema for this model instance
     DirectFace face_;
     pubBldr<false> bld_;    // publication builder/verifier
-    SigMgrAny psm_;         // publication signing/validation
-    SigMgrAny csm_;         // cert signing/validation (XXXX currently limited to EdDSA)
-    SigMgrAny wsm_;         // wire packet signing/validation
-    SigMgrSchema syncSm_;   // syncps pub validator
-    SyncPS m_sync;  // sync collection for pubs
+    SigMgrAny msm_;         // msgs publication signing/validation
+    SigMgrAny csm_;         // cert publication signing/validation
+    SigMgrAny psm_;         // pdu signing/validation
+    SigMgrSchema syncSm_;   // msgs syncps pub validator
+    SyncPS m_sync;  // sync collection for msgs
     static inline std::function<size_t(std::string_view)> _s2i;
     DistCert m_ckd;         // cert collection distributor
     DistGKey* m_gkd{};      // group key distributor (if needed)
     DistSGKey* m_sgkd{};    // subscriber group key distributor (if needed)
-    DistGKey* m_pgkd{};      // pubs group key distributor (if needed)
-    DistSGKey* m_psgkd{};    // pubs subscriber group key distributor (if needed)
+    DistGKey* m_pgkd{};      // msgs group key distributor (if needed)
+    DistSGKey* m_psgkd{};    // msgs subscriber group key distributor (if needed)
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
 
-    SigMgr& wireSigMgr() { return wsm_.ref(); }
-    SigMgr& pubSigMgr() { return psm_.ref(); }
+    SigMgr& pduSigMgr() { return psm_.ref(); }
+    SigMgr& pubSigMgr() { return msm_.ref(); }
     SigMgr& certSigMgr() { return csm_.ref(); }
     auto pubPrefix() const { return crName{bs_.pubVal("#pubPrefix")}; }
 
     // all cState/cAdd packet names start with the first 8 bytes
     // of the schema cert thumbprint to make them trust-zone specific.
-    auto wirePrefix() const { return crName()/std::span(bs_.schemaTP_).first(8); }
+    auto pduPrefix() const { return crName()/std::span(bs_.schemaTP_).first(8); }
 
     const auto& certs() const { return cs_; }
 
@@ -87,7 +87,7 @@ struct DCTmodel {
         return false;
     }
 
-    // setup the information needed to validate pubs signed with the cert
+    // setup the information needed to validate msgs pubs signed with the cert
     // associated with 'tp' which is the head of schema signing chain 'chain'.
     void setupPubValidator(const thumbPrint& tp) {
         //XXX this is a hack and should be refactored
@@ -198,7 +198,7 @@ struct DCTmodel {
                 cs_.insertChain(sc);                // make it a signing chain head
                 // pass new signing pair to sigmgrs and distributors
                 pubSigMgr().updateSigningKey(sp.second, sc);
-                wireSigMgr().updateSigningKey(sp.second, sc);
+                pduSigMgr().updateSigningKey(sp.second, sc);
                 // update group key distributors for cAdds, if any
                 if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
                 else if (m_sgkd) m_sgkd->updateSigningKey(sp.second, sc);
@@ -227,49 +227,49 @@ struct DCTmodel {
             bs_{validateBootstrap(rootCb, schemaCb, idChainCb, signIdCb, cs_)},
             face_{addrCb()},
             bld_{pubBldr(bs_, cs_, bs_.pubName(0))},
-            psm_{getSigMgr(bs_)},
+            msm_{getSigMgr(bs_)},
             csm_{getCertSigMgr(bs_)},
-            wsm_{getWireSigMgr(bs_)},
-            syncSm_{psm_.ref(), bs_, pv_},
-            m_sync{face_, wirePrefix()/"pubs", wireSigMgr(), syncSm_},
-            m_ckd{ face_, pubPrefix(), wirePrefix()/"cert",
+            psm_{getPduSigMgr(bs_)},
+            syncSm_{msm_.ref(), bs_, pv_},
+            m_sync{face_, pduPrefix()/"msgs", pduSigMgr(), syncSm_},
+            m_ckd{ face_, pubPrefix(), pduPrefix()/"cert",
                    [this](auto cert){ addCert(cert);},  [](auto /*p*/){return false;} }
     {
-        // pub sync session is started after distributor(s) have completed their setup
+        // sync session for msgs pubs is started after distributor(s) have completed their setup
         m_sync.autoStart(false);
-        if(wsm_.ref().encryptsContent()) {
+        if(psm_.ref().encryptsContent()) {
             if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                 throw schema_error("Encrypted CAdds require that some entity(s) have KeyMaker capability");
             }
-            if (! wsm_.ref().subscriberGroup()) {
-                m_gkd = new DistGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pdus",
-                             [this](auto gk, auto gkt){ wsm_.ref().addKey(gk, gkt);}, certs());
+            if (! psm_.ref().subscriberGroup()) {
+                m_gkd = new DistGKey(face_, pubPrefix(), pduPrefix()/"keys"/"pdus",
+                             [this](auto gk, auto gkt){ psm_.ref().addKey(gk, gkt);}, certs());
             } else {
                 if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                     // schema doesn't contain an SG member so PP won't work XXXX should extract name of group from schema
                     throw schema_error("PPSIGNED/PPAEAD require that some entity(s) have Subscriber capability");
                 }
-                m_sgkd = new DistSGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pdus",
-                             [this](auto gpk, auto gsk, auto ct){ wsm_.ref().addKey(gpk, gsk, ct);}, certs());
+                m_sgkd = new DistSGKey(face_, pubPrefix(), pduPrefix()/"keys"/"pdus",
+                             [this](auto gpk, auto gsk, auto ct){ psm_.ref().addKey(gpk, gsk, ct);}, certs());
             }
         }
-        //encryption methods for pubs MUST be signed versions
-        if(psm_.ref().encryptsContent()) {
+        //encryption methods for pubs in msgs collection MUST be signed versions
+        if(msm_.ref().encryptsContent()) {
             if (matchesAny(bs_, pubPrefix()/"CAP"/"KMP"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                 // schema doesn't contain a "KeyMaker" capability cert so AEAD won't work
                 throw schema_error("pub content encryption requires that some entity(s) have KeyMaker capability");
             }
-            if ( psm_.ref().subscriberGroup()) {
+            if ( msm_.ref().subscriberGroup()) {
                 if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                     // schema doesn't contain a member with subscriber  ability so PPAEAD won't work
                     throw schema_error("PPSIGNED requires that some entity(s) have Subscriber capability");
                 }
-                // XXXX instead of pubs could be name of subscriber group
-                m_psgkd = new DistSGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pubs",
-                             [this](auto gpk, auto gsk, auto ct){ psm_.ref().addKey(gpk, gsk, ct);}, certs());
+                // XXXX instead of msgs could be name of subscriber group
+                m_psgkd = new DistSGKey(face_, pubPrefix(), pduPrefix()/"keys"/"msgs",
+                             [this](auto gpk, auto gsk, auto ct){ msm_.ref().addKey(gpk, gsk, ct);}, certs());
             } else {
-                m_pgkd = new DistGKey(face_, pubPrefix(), wirePrefix()/"keys"/"pubs",
-                             [this](auto gk, auto gkt){ psm_.ref().addKey(gk, gkt);}, certs());
+                m_pgkd = new DistGKey(face_, pubPrefix(), pduPrefix()/"keys"/"msgs",
+                             [this](auto gk, auto gkt){ msm_.ref().addKey(gk, gkt);}, certs());
             }
         }
 
@@ -278,14 +278,14 @@ struct DCTmodel {
 
         for (const auto& [tp, cert] : cs_) m_ckd.initialPub(cert);
 
-        // pub and wire sigmgrs each need its signing key setup and its validator needs
+        // pub and pdu sigmgrs each need its signing key setup and its validator needs
         // a callback to return a public key given a cert thumbprint.
         const auto& tp = cs_.Chains()[0]; // thumbprint of signing cert
         pubSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
   //      certSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);    //do I need this?
-        wireSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
+        pduSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
         pubSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
-        wireSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
+        pduSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
 
         // SPub need access to builder's 'index' function to translate component names to indices
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
@@ -385,7 +385,7 @@ struct DCTmodel {
                         }
                     });
             return;
-        } else {    //both pdus and pubs have a distributor
+        } else {    //both pdus and msgs have a distributor
            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                         if (!c) { cb(false); return; }
                         if (m_gkd) {

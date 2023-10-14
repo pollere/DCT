@@ -4,7 +4,7 @@
 // certificate that is signed and validatable.
 
 // Like the iot2 trust schema, this uses a symmetric key AEAD encryption for the
-// "wire" (cAdd) packets, but publisher privacy is enabled by designating a Subscription
+// PDU (cAdd) packets, but publisher privacy is enabled by designating a Subscription
 // Group for a collection whose members are the only entities that get the secret
 // key that lets them decrypt the packet.
 
@@ -28,7 +28,7 @@ signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
 // locCerts are used to sign location reports published from location apps
 // on mobile devices and do not subscribe to the location reports.
 // If publisher privacy is desired, a subscription group capability
-// is used by a PPAEAD wire signer/validator to ensure that only
+// is used by a PPAEAD PDU signer/validator to ensure that only
 // members of the subscription group get the encryption key.
 // Here, only monitors can be members of a subscriber group.
 // Within the SG, key makers (KM) are responsible for creating and distributing
@@ -55,12 +55,12 @@ domCert: _domain/_keyinfo
 // information about signing chain
 #chainInfo: /_role/_roleId <= signCert
 
-// schema's Publication prefix and validator type
+// schema's Publication prefix and validator types
 #pubPrefix:    _domain
-#pubValidator: "EdDSA"
-
+#msgsValidator: "EdDSA"
+#certValidator: "EdDSA"
 // used for cAdd PDUs
-#wireValidator: "AEAD"
+#pduValidator: "AEAD"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version

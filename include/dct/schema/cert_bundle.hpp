@@ -2,7 +2,7 @@
 #define CERT_BUNDLE_HPP
 #pragma once
 /*
- * unpack a bundle of wire-format certs into a vector of cert objects
+ * unpack a bundle of pdu-format certs into a vector of cert objects
  *
  * Copyright (C) 2021-2 Pollere LLC
  *

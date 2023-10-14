@@ -21,6 +21,6 @@ echo
 echo -n " starting roamOp"
 ../hmIot/app3 -n 0 home/roamOp.bundle &
 
-./relay -l "home/away.l.bundle,home/away.e.bundle" &
+./relay -l "home/awayLoc.bundle,home/awayExt.bundle" &
 echo -n " starting away relay"
 echo

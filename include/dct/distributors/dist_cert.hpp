@@ -43,7 +43,7 @@ using connectedCb = std::function<void(bool)>;
 
 /*
  * Key distributor for certs.
- * Parent certstore sets the wirePrefix used for its SyncPubSub (would   with domain and
+ * Parent certstore sets the pduPrefix used for its SyncPubSub (would   with domain and
  * probably include "cert") and sets the pubprefix used for subscription in start().
  * Also passes in a call back for each new received signing cert.
  *

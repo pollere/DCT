@@ -56,8 +56,9 @@ using chnCb = std::function<void(ptps*, const rData, const certStore&)>;
  */
 
  /*
-  * Pass-throughs enable trust-based relay of pubs, certs, and keys between different
-  * network interfaces, identified by a string of protocol//host:<opt>port or default, that
+  * Pass-throughs enable trust-based relay of Publications (in msgs, certs, and keys
+  * collections) between different network interfaces,
+  * identified by a string of protocol//host:<opt>port or default, that
   * is used to create a particular Face. Thus a few additions to DCTmodel are required.
   * DCTmodelPT is derived from DCTmodel and adds tracking of relayed certs, a test of
   * validity of outgoing pubs against this dct_model's trust schema, and a "validate only"
@@ -112,7 +113,7 @@ struct DCTmodelPT final : DCTmodel  {
     DCTmodelPT(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
                std::string_view addrLoc, DelivCb&& acb = nullptr, addChnCb&& rcb = nullptr) :
             DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, [this,a=addrLoc]{ return capArgument(a);}  ),
-            ptPubSm_{psm_.ref()}
+            ptPubSm_{msm_.ref()}
     {
         m_tp = cs_.Chains()[0]; // thumbprint of signing cert
         // reset  m_sync.pubSigmgr_ to syncPTSm_ to use the pass-through version
@@ -163,7 +164,7 @@ struct ptps
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
 
     // following routine MUST have same type signature as DelivCb
-    // this is used to prevent Publications (specifically in /keys/pubs) from
+    // this is used to prevent Publications (specifically in /keys/msgs) from
     // being forwarded before their signing keys.
     void certAck(const rData& c, bool acked)
     {
@@ -271,7 +272,7 @@ struct ptps
     /*
      * p is a complete trust-schema compliant Publication on the input Face and goes directly to the syncps
      * Can call this if the same schema (or a superset) is applied on the output Face
-     * Use of holdKeys keeps from relaying keys/pubs until their signing cert has been ackd/confirmed
+     * Use of holdKeys keeps from relaying keys/msgs until their signing cert has been ackd/confirmed
      */
     void publish(Publication&& p)
     {
@@ -295,6 +296,8 @@ struct ptps
      *
      * Returns true if p was passed to syncps, false otherwise
      */
+    bool validPub(const Publication& p) {return m_pb.isValidPub(p);}
+
     bool publishValid(Publication&& p)
     {      
         if(m_pb.isValidPub(p)) {
@@ -307,9 +310,9 @@ struct ptps
     }
       /*
      * p is a complete schema-compliant Publication on the input Face
-     * This is used to pass keys/pubs publications
+     * This is used to pass keys/msgs publications
      * This allows checking of the Publication against this (outgoing) Face's schema
-     * Use of holdKeys keeps from relaying keys/pubs until their signing cert has been ackd/confirmed
+     * Use of holdKeys keeps from relaying keys/msgs until their signing cert has been ackd/confirmed
      * Returns true if p was passed to gk syncps, false otherwise
      */
     bool publishKnown(Publication&& p)
@@ -339,7 +342,7 @@ struct ptps
     /*
      * Add a cert chain relayed from another DefTT's cert store (cs)  to mine. Traverses the chain and adds each cert.
      *
-     * Calls the dct model's checker m_pb.addCert(&c) just like is done on reception from wire
+     * Calls the dct model's checker m_pb.addCert(&c) just like is done on reception from a cAdd
      * which will check the cert for validity against this DefTT's trust schema.
      * In smart "trust-based" pass through, the cert gets checked against the
      * trust schema before it is published to this DefTT's cert collection
@@ -363,9 +366,7 @@ struct ptps
          //have received this relayed chain but it's not acked yet, return
         if (m_pb.certs().contains(tp) || m_unackedCerts.contains(tp)) return;
 
-        m_unackedCerts.emplace(tp);     // add to unacked signing certs - the cert will be published with a callback
-                                                                 // if the cert is validated
-        // for each cert on signing chain
+        // for each cert on this signing chain
         cs.chain_for_each(tp, [this](const auto &c) {
             if (! m_pb.certs().contains(c.computeTP())) {
                 //auto h = std::hash<tlvParser>{}(c);
@@ -373,10 +374,11 @@ struct ptps
                 m_pb.addCert(c);                               // will add to certs if validates
             }
         });
-        if (!m_pb.certs().contains(tp)) {
-            m_unackedCerts.erase(tp);   // didn't pass validation, so didn't get published
-            print ("ptps::addRelayedChain: got an invalid signing cert\n");
-        }
+         // add to unacked signing certs - the cert will be published with a callback
+        // since entire chain was added, the cert will be in the certstore if is valid in my schema
+        if (m_pb.certs().contains(tp))
+            m_unackedCerts.emplace(tp);
+        // else print ("ptps::addRelayedChain: got an invalid signing cert {}\n", c.name());
     }
 
     // Can be used by application to schedule a cancelable timer. Note that
