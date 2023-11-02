@@ -141,7 +141,7 @@ struct driver {
     static inline const std::array<std::string,8> fn2str_{
         "timestamp","sysId","pid","host","uid","seq","",""
     };
-    static inline const std::map<std::string,u_int8_t> str2fn_{
+    static inline const std::map<std::string,uint8_t> str2fn_{
         {"timestamp", 0 }, {"sysId", 1 }, {"pid", 2 }, {"host", 3 }, {"uid", 4 }, {"seq", 5 }
     };
 
