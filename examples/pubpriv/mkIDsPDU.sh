@@ -23,7 +23,6 @@ schemaCompile -o $Bschema $1
 # extract the info needed to make certs from the compiled schema
 Pub=$(schema_info $Bschema);
 PubPrefix=$(schema_info $Bschema "#pubPrefix");
-PubValidator=$(schema_info -t $Bschema "#msgsValidator");
 CertValidator=$(schema_info -t $Bschema "#certValidator");
 
 make_cert -s $CertValidator -o $RootCert $PubPrefix

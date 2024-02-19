@@ -21,8 +21,8 @@ _domain:    "ppLoc"
 
 locRprt: #Pub & { target: "loc" } <= locSign
 
-roleCert:   _domain/_role/_roleId/_keyinfo
-signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
+roleCert:   _domain/_role/_roleId/_certinfo
+signCert:   _domain/_role/_roleId/"sgn"/_certinfo
 
 // There are different signing chains for monCert & locCerts.
 // locCerts are used to sign location reports published from location apps
@@ -47,25 +47,23 @@ locCert:    roleCert <= domCert
 monCert:    roleCert & { _role: "monitor" } <= sgCap
 
 // capability certs (here capabilities granted to roles)
-capCert: _domain/"CAP"/capId/capArg/_keyinfo
+capCert: _domain/"CAP"/capId/capArg/_certinfo
 kmCap:   capCert & { capId: "KM", capArg: _ } <= domCert  // allowed to be a key maker (capArg is priority)
 kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domCert | kmCap
 sgCap:   capCert & { capId: "SG", capArg: _ } <= kmCap | kmpCap  // allowed to be a subscriber (member of subscriber group)
 
-domCert: _domain/_keyinfo
+domCert: _domain/_certinfo
 
 // information about signing chain
 #chainInfo: /_role/_roleId <= signCert
 
 // schema's Publication prefix and validator types
 #pubPrefix:    _domain
-// #msgsValidator: "EdDSA"
 #msgsValidator: "PPSIGN"
 #certValidator: "EdDSA"
 // used for cAdd PDUs
-//#pduValidator: "PPAEAD"
 #pduValidator: "AEAD"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version
-_keyinfo: "KEY"/_/"dct"/_
+_certinfo: "KEY"/_/"dct"/_

@@ -39,6 +39,9 @@
  * neither sequence numbers or timestamps, have to keep some local value to use.
  * Here, using a 12 byte random value set at initiation and
  * incremented after each encryption.
+ *
+ * Encrypt/decrypt uses a symmetric key derived from the sender private key and receiver (here the SG)
+ * public key or publisher public key and receiver (SG) private key.
  * The public key of the publisher is required in addition to the secret key of the
  * Subscriber Group in order to decrypt so the publisher's thumbprint is included in the SigInfo
  * (as in EdDSA) although this is not signed by that key.
@@ -47,6 +50,7 @@
  * is only a single subscriber in the group or 2) depending on other elements/requirements of a particular
  * application's set up (e.g., if provenance is ensured via signing Publication or PDU,
  * or if such potential forging is not of concern).
+ *
  *
  * References:
  * https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/ietf_xchacha20-poly1305_construction
@@ -94,6 +98,10 @@ struct SigMgrPPAEAD final : SigMgr {
             pk.assign(p.begin(),p.end());
             //convert key timestamp to array of uint8_t
             for(int i=0; i<8; ++i) iv.push_back((unsigned char) (kts >> (i*8)));
+        }
+
+        void clearSk() {
+            sk.assign(sk.size(), 0);
         }
     };
 
@@ -162,6 +170,7 @@ struct SigMgrPPAEAD final : SigMgr {
      */
     virtual void addKey(keyRef pk, keyRef sk, uint64_t ts) override final {
         if(m_keyList.size() > 1) {  //keep no more than two
+            m_keyList.back().clearSk();
             m_keyList.pop_back();
         }
         auto kpi = kpInfo(sk,pk,ts);

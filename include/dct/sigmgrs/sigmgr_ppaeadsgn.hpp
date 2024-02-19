@@ -83,6 +83,10 @@ struct SigMgrPPSIGN final : SigMgr {
             //convert key timestamp to array of uint8_t
             for(int i=0; i<8; ++i) iv.push_back((unsigned char) (kts >> (i*8)));
         }
+
+        void clearSk() {
+            sk.assign(sk.size(), 0);
+        }
     };
 
     std::array<uint8_t,nonceSize>  m_nonce;
@@ -150,6 +154,7 @@ struct SigMgrPPSIGN final : SigMgr {
      */
     virtual void addKey(keyRef pk, keyRef sk, uint64_t ts) override final {
         if(m_keyList.size() > 1) {  //keep no more than two
+            m_keyList.back().clearSk();
             m_keyList.pop_back();
         }
         auto kpi = kpInfo(sk,pk,ts);

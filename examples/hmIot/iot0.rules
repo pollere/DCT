@@ -19,10 +19,10 @@ _domain:    "iot0"
     _origin:   sysId()
 } <= signCert
 
-roleCert:    _domain/_role/_roleId/_keyinfo <= domainCert
-signCert:    _domain/_role/_roleId/"sgn"/_keyinfo <= roleCert
+roleCert:    _domain/_role/_roleId/_certinfo <= domainCert
+signCert:    _domain/_role/_roleId/"sgn"/_certinfo <= roleCert
 
-domainCert: _domain/_keyinfo
+domainCert: _domain/_certinfo
 
 // information about signing chain
 #chainInfo: /_role/_roleId <= signCert
@@ -37,5 +37,5 @@ domainCert: _domain/_keyinfo
 
 // Certs use NDN certificate format v2 suffix
 // final four components are KEY, keyID, issuerID, and version
-_keyinfo: "KEY"/_/"dct"/_
+_certinfo: "KEY"/_/"dct"/_
 

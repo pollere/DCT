@@ -28,13 +28,13 @@ lockCommand: #iotPub & { target: "lock", topic: "command" } &
     { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
     { topicArgs:  "lock"|"unlock"|"report" } <= opSign
 
-roleCert:    _domain/_role/_roleId/_keyinfo <= domainCert
-signCert:    _domain/_role/_roleId/"sgn"/_keyinfo
+roleCert:    _domain/_role/_roleId/_certinfo <= domainCert
+signCert:    _domain/_role/_roleId/"sgn"/_certinfo
 
 opSign: signCert & { _role: "operator" } <= roleCert
 devSign: signCert & { _role: "device" } <= roleCert
 
-domainCert: _domain/_keyinfo
+domainCert: _domain/_certinfo
 
 // information about signing chain
 #chainInfo: /_role/_roleId <= signCert
@@ -48,4 +48,4 @@ domainCert: _domain/_keyinfo
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version
-_keyinfo: "KEY"/_/"dct"/_
+_certinfo: "KEY"/_/"dct"/_

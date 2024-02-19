@@ -2,9 +2,9 @@
 #define MBPS_HPP
 #pragma once
 /*
- * mbps.hpp: message-based pub/sub API for DCT (NDN network layer)
+ * mbps.hpp: message-based pub/sub API for a DeftT
  *
- * Copyright (C) 2020-2 Pollere LLC
+ * Copyright (C) 2020-3 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -39,8 +39,8 @@
 
 namespace dct {
 
-//if not using syncps defaults, set these here
-static constexpr size_t MAX_CONTENT=1024; //max content size in bytes, < maxPubSize + (~300bytes) in syncps.hpp
+// defaults
+static constexpr size_t MAX_NAME=80; //max Name size in bytes is a function of particular schema
 static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
 
 /* 
@@ -84,6 +84,7 @@ struct mbps
     DCTmodel m_pb;
     crName m_pubpre{};        // full prefix for Publications
     std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids
+    size_t maxContent_;      //in bytes
     std::unordered_map<MsgID, confHndlr> m_msgConfCb;
     MsgInfo m_pending{};    // unconfirmed published messages
     MsgInfo m_received{};   //received publications of a message
@@ -91,14 +92,19 @@ struct mbps
     Timer* m_timer;
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr)
-        : m_pb{rootCb, schemaCb, idChainCb, signIdCb, addr},
-          m_pubpre{m_pb.pubPrefix()}  { }
+        : m_pb{rootCb, schemaCb, idChainCb, signIdCb, addr}, m_pubpre{m_pb.pubPrefix()}
+        {
+            if ((maxContent_ = m_pb.maxInfoSize() - MAX_NAME) <= 0)
+                throw runtime_error("mbps: no room for Pub Content");
+            //print ("mbps: maxContent is {}\n", maxContent_);
+        }
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb)
         : mbps(rootCb, schemaCb, idChainCb, signIdCb, "")  { }
 
     void run() { m_pb.run(); }
     void stop() { m_pb.stop(); }
+    auto maxContent() { return maxContent_; }
     const auto& pubPrefix() const noexcept { return m_pubpre; }
 
     /* relies on communication schema using mbps conventions of collecting all the signing chain
@@ -177,6 +183,8 @@ struct mbps
         //all the publication name ftags (in order) set by app or mbps
         SegCnt k = p.number("sCnt"), n = 1u;
         std::vector<uint8_t> msg{}; //for message body
+        if (p.name().size() > MAX_NAME)
+            print ("mbps::receivePub: pub name size {} exceeds preset max {}\n", p.name().size(), MAX_NAME);
 
         auto content = p.content().rest();
         if (k == 0) { //single publication in this message
@@ -193,10 +201,10 @@ struct mbps
             const auto& m = content;
             auto& dst = m_reassemble[mId];
             if (k == n)
-                dst.resize((n-1)*MAX_CONTENT+m.size());
+                dst.resize((n-1)*maxContent_+m.size());
             else if (dst.size() == 0)
-                dst.resize(n*MAX_CONTENT);
-            std::copy(m.begin(), m.end(), dst.begin()+(--k)*MAX_CONTENT);
+                dst.resize(n*maxContent_);
+            std::copy(m.begin(), m.end(), dst.begin()+(--k)*maxContent_);
             m_received[mId].set(k);
             if (m_received[mId].count() != n) return; // all segments haven't arrived
             msg = m_reassemble[mId];
@@ -295,7 +303,7 @@ struct mbps
 
         // determine number of message segments: sCnt forces n < 256,
         // iblt is sized for 80 but 64 fits in an int bitset
-        size_t n = (size + (MAX_CONTENT - 1)) / MAX_CONTENT;
+        size_t n = (size + (maxContent_ - 1)) / maxContent_;
         if(n > MAX_SEGS) throw error("publishMsg: message too large");
         auto sCnt = n > 1? n + 256 : 0;
         mp.emplace_back("sCnt", sCnt);
@@ -309,8 +317,8 @@ struct mbps
         }
 
         // publish as many segments as needed
-        for (auto off = 0u; off < size; off += MAX_CONTENT) {
-            auto len = std::min(size - off, MAX_CONTENT);
+        for (auto off = 0u; off < size; off += maxContent_) {
+            auto len = std::min(size - off, maxContent_);
             if(ch) {
                 m_pb.publish(m_pb.pub(msg.subspan(off, len), mp),
                                   [this](auto p, bool s) { confirmPublication(mbpsPub(p),s); });

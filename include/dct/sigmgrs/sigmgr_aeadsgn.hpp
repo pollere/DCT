@@ -76,6 +76,10 @@ struct SigMgrAEADSGN final : SigMgr {
             //convert key timestamp to array of uint8_t
             for(int i=0; i<8; ++i) iv.push_back((unsigned char) (kts >> (i*8)));
         }
+
+        void clearKey() {
+            key.assign(key.size(), 0);
+        }
     };
     static constexpr uint32_t aeadkeySize = crypto_aead_xchacha20poly1305_IETF_KEYBYTES;
     static constexpr uint32_t nonceSize = crypto_aead_xchacha20poly1305_IETF_NPUBBYTES;
@@ -107,7 +111,7 @@ struct SigMgrAEADSGN final : SigMgr {
     // at the front of keyList and no more than two keys are kept.
     void addKey(keyRef k, uint64_t ktm) override final {
         m_keyList.insert(m_keyList.begin(), keyRecord(k, ktm));
-        if(m_keyList.size() > 2) m_keyList.pop_back();
+        if(m_keyList.size() > 2) { m_keyList.back().clearKey(); m_keyList.pop_back(); }
         m_decryptIndex = (keyListSize() > 1) ? 1 : 0;
     }
 

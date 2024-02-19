@@ -67,13 +67,14 @@ struct DCTmodel {
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
 
     SigMgr& pduSigMgr() { return psm_.ref(); }
-    SigMgr& pubSigMgr() { return msm_.ref(); }
+    SigMgr& msgSigMgr() { return msm_.ref(); }  // sigmgr for publications that carry application msgs
     SigMgr& certSigMgr() { return csm_.ref(); }
-    auto pubPrefix() const { return crName{bs_.pubVal("#pubPrefix")}; }
+    auto pubPrefix() const { return crName{bs_.pubVal("#pubPrefix")}; } // prefix for all publications
 
     // all cState/cAdd packet names start with the first 8 bytes
     // of the schema cert thumbprint to make them trust-zone specific.
     auto pduPrefix() const { return crName()/std::span(bs_.schemaTP_).first(8); }
+    auto maxInfoSize() const { return m_sync.maxInfoSize_; }
 
     const auto& certs() const { return cs_; }
 
@@ -197,7 +198,7 @@ struct DCTmodel {
                 if (validateChain(bs_, cs_, sc) < 0) throw schema_error(format("getNewSP:addKP cert {} signing chain invalid", sc.name()));
                 cs_.insertChain(sc);                // make it a signing chain head
                 // pass new signing pair to sigmgrs and distributors
-                pubSigMgr().updateSigningKey(sp.second, sc);
+                msgSigMgr().updateSigningKey(sp.second, sc);
                 pduSigMgr().updateSigningKey(sp.second, sc);
                 // update group key distributors for cAdds, if any
                 if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
@@ -281,10 +282,10 @@ struct DCTmodel {
         // pub and pdu sigmgrs each need its signing key setup and its validator needs
         // a callback to return a public key given a cert thumbprint.
         const auto& tp = cs_.Chains()[0]; // thumbprint of signing cert
-        pubSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
+        msgSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
   //      certSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);    //do I need this?
         pduSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
-        pubSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
+        msgSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
         pduSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
 
         // SPub need access to builder's 'index' function to translate component names to indices
@@ -337,7 +338,7 @@ struct DCTmodel {
     auto pub(std::span<const uint8_t> content, Rest&&... rest) {
         Publication pub(name(std::forward<Rest>(rest)...));
         pub.content(content);
-        pubSigMgr().sign(pub);
+        msgSigMgr().sign(pub);
         return pub;
     }
 
@@ -346,7 +347,7 @@ struct DCTmodel {
     auto pub(std::span<const uint8_t> content, const std::vector<parItem>& pvec) {
         Publication pub(name(pvec));
         pub.content(content);
-        pubSigMgr().sign(pub);
+        msgSigMgr().sign(pub);
         return pub;
     }
 

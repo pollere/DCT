@@ -26,7 +26,6 @@ schemaCompile -o $Bschema $1
 # extract the info needed to make certs from the compiled schema
 Pub=$(schema_info $Bschema);
 PubPrefix=$(schema_info $Bschema "#pubPrefix");
-PubValidator=$(schema_info -t $Bschema "#msgsValidator");
 CertValidator=$(schema_info -t $Bschema "#certValidator");
 
 make_cert -s $CertValidator -o $RootCert $PubPrefix
@@ -54,7 +53,7 @@ KMPCapCert=kmp.cap
 make_cert -s $CertValidator -o $KMPCapCert $PubPrefix/CAP/KMP/1 $IDSigner
 # make the 'subscriber group' capability cert (with ability to be a key maker)
 SGCapCert=sg.cap
-make_cert -s $CertValidator -o $SGCapCert $PubPrefix/CAP/SG/pubs $KMPCapCert
+make_cert -s $CertValidator -o $SGCapCert $PubPrefix/CAP/SG/msgs $KMPCapCert
 
 # make the location reporter certs (can't be keymakers)
 for (( n=1; n <= $numLR; ++n )); do

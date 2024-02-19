@@ -81,7 +81,19 @@ struct Transport {
 
     Transport(onRcv&& rcb, onConnect&& ccb) : rcb_{std::move(rcb)}, ccb_{std::move(ccb)} { }
 
+    /*
+     * these are intended for a particular transport to inform DeftT as to the size of the MTU it
+     * exchanges with the system network modules, specifically the space in the MTU available
+     * for DeftT PDUs and the corresponding time to send that MTU.
+     * The mtu should be in bytes; the tts in ms
+     * This is usually quite straightforward but in the case of an interface to system network
+     * modules that will be fragmenting the DeftT PDU, it may need to cover transmission of
+     * multiple frames.
+     * The mtu must be large enough to hold a max size cState and a minimum useful cAdd
+     * (pubSize + cAdd name, etc + 80B for AEAD, 107B for EdDSA). Test this is syncps
+     */
     virtual constexpr ptrdiff_t mtu() const noexcept = 0;
+    virtual constexpr std::chrono::milliseconds tts() const noexcept = 0;
     virtual void connect() = 0;
     virtual void close() = 0;
     virtual void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) = 0;
@@ -115,7 +127,10 @@ struct TransportUdp : Transport {
     // but we hope for 9K MTU for local packets.
     std::array<uint8_t, max_pkt_size> rcvbuf_;
 
-    constexpr ptrdiff_t mtu() const noexcept final { return 1500 - 40 - 8; }
+    // values should match ifconfig of interface: using 1500 for interface MTU and 1.2ms tts (10Mbps interface)
+    // XXX had to remove "final" because of derived LoRa transport
+    constexpr ptrdiff_t mtu() const noexcept final  { return 1500 - 40 - 8; }
+    constexpr std::chrono::milliseconds tts() const noexcept final  { return std::chrono::milliseconds(1500/(10000/8)); }
 
     TransportUdp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
@@ -143,7 +158,7 @@ struct TransportUdp : Transport {
     }
 };
 
-struct TransportMulticast final : TransportUdp {
+struct TransportMulticast : TransportUdp {
     udp::socket tsock_;
     udp::endpoint our_;
 
@@ -370,6 +385,7 @@ struct TransportTcp : Transport {
     // 64 bytes of signature plus 32 bytes of key locator) so an 8K mtu results in 99% efficiency
     // with 65ms worst-case jitter on a 1Mbps backhaul.
     constexpr ptrdiff_t mtu() const noexcept final { return max_pkt_size; }
+    constexpr std::chrono::milliseconds tts() const noexcept final  { return std::chrono::milliseconds(1500/(1000/8)); }
 
     TransportTcp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }

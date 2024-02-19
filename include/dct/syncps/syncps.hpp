@@ -47,13 +47,39 @@ using Publication = crData;  // type of a publication
 
 using namespace std::literals::chrono_literals;
 
+/*
+ * syncps gets the mtu bytes available for its PDUs (cAdds and cStates) from its face
+ * For most networks, cState size will not be a problem; for rate-challenged networks, may need to
+ * set stSize in iblt.hpp to a smaller (prime) value.
+ * cAdds are made up of  5 required TLVs and syncps can upper bound the non-Content components,
+ * plus accounting for top-level TL of 2 bytes and the TL of 2 bytes for the Content component.
+ * The remaining bytes are available for Publications (maxPubSize_)
+ * Publications require the same 5 TLVs and syncps has the ability to determine the size of 3 of these plus
+ * the "type-length" overhead for the Name and Content, leaving an upper bound on the information
+ * size (Name value field plus Content value field) available for the shim or distributor using this syncps
+ */
+ static constexpr size_t cAddTLVs = 37 + 107;    // max of 144 bytes of required TLVs in every cAdd.
+                                                        // XXX this should be function of sigmgr type - 107 for EdDSA and 80 for AEAD
 //default values
-static constexpr size_t maxPubSize = 1452 - 144;// max payload in Data (with 1452B IPv6+UDP MSS
-                                                // minus 144 bytes of required TLVs)
 static constexpr std::chrono::milliseconds maxPubLifetime = 2s;
 static constexpr std::chrono::milliseconds maxClockSkew = 1s;
+static constexpr std::chrono::milliseconds stateLifetime = 1357ms;
 
-static constexpr std::chrono::milliseconds distDelay = 50ms; // time for a PDU to be distributed to all members on this subnet
+// set an estimated processing overhead that will dominate distDelay for higher speed networks
+static constexpr std::chrono::milliseconds pduProc = 50ms;
+
+/*
+ * In syncps constructor, add the mtu()/rate() to distDelay. distDelay is (an estimate of) the time to
+ * get a PDU processed by every member within range.
+ * A Publication in a meshed network might take multiple hops to reach all members and may transit
+ * multiple relays in a trust domain extended with relays. This means that Publication lifetimes must
+ * be chosen with this in mind.
+ *
+ * Initially, setting the cStateLifetime for Publications in the msgs collection to ~ 30 * distDelay
+ * pubLifetime should be ~ 1.5 * cStateLifetime if not set by shim or distributor to something longer
+ * (e.g., certs and keys)
+ */
+
 
 /**
  * @brief app callback when new publications arrive
@@ -112,7 +138,7 @@ struct SyncPS {
     static inline PubHash hashPub(const rPub& r) { return IBLT<PubHash>::hashobj(r); }
 
     template<typename Item>
-    struct CE { // Collection Entry 
+    struct CE { // Collection Entry
         Item i_;
         uint8_t s_; // item status
         std::chrono::system_clock::time_point hold_{};       // if non-zero, hold time
@@ -134,7 +160,7 @@ struct SyncPS {
 
         constexpr auto contains(PubHash h) const noexcept { return Base::contains(h); }
 
-        template<typename C=Item> requires hasView<C>       
+        template<typename C=Item> requires hasView<C>
         constexpr auto contains(decltype(C().asView())&& c) const noexcept { return Base::contains(hashPub(c)); }
 
         PubHash add(PubHash h, Item&& i, decltype(Ent::s_) s) {
@@ -172,11 +198,14 @@ struct SyncPS {
 
     DirectFace& face_;
     const crName collName_;         // 'name' of the collection
-    SigMgr& pktSigmgr_;             // cAdd packet signing and validation
+    SigMgr& pktSigmgr_;               // cAdd packet signing and validation
     SigMgr& pubSigmgr_;             // Publication validation
-    std::chrono::milliseconds cStateLifetime_{1357ms};
+    size_t maxPubSize_;                // max space in bytes available in Content of a cAdd
+     size_t maxInfoSize_;               // max space in bytes for Publication Name plus Content
+    std::chrono::milliseconds cStateLifetime_{stateLifetime};
     std::chrono::milliseconds pubLifetime_{maxPubLifetime};
     std::chrono::milliseconds pubExpirationGB_{maxPubLifetime};
+    std::chrono::milliseconds distDelay_{pduProc};  // time for a PDU to be distributed to all members on this subnet
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
     std::uniform_int_distribution<unsigned short> randInt_{3u, 12u}; //  cState delay  randomization
     Nonce  nonce_{};                // nonce of current cState
@@ -201,7 +230,9 @@ struct SyncPS {
 
     constexpr auto randInt() { return randInt_(randGen()); }
 
+    constexpr auto maxInfoSize() const noexcept { return maxInfoSize_; }
     constexpr auto mtu() const noexcept { return face_.mtu(); }
+    constexpr auto tts() const noexcept { return face_.tts(); }
 
     /**
      * @brief constructor
@@ -215,6 +246,18 @@ struct SyncPS {
         : face_{face}, collName_{collName}, pktSigmgr_{wsig}, pubSigmgr_{psig} {
         // if auto-starting at the time 'run()' is called, fire off a register for collection name
         getDefaultIoContext().dispatch([this]{ if (autoStart_) start(); });
+        // maxPubSize_ is the mtu minus (top-level TL + size of the name including csID + MetaInfo size + Content TL + crypto overhead)
+        maxPubSize_ = mtu() - (4 + (collName_.ssize() + 2+4) + 5 + 3 + pktSigmgr_.sigSpace());
+        // max information size (Name Value components plus Content Value) available for shim/distributor
+        maxInfoSize_ = maxPubSize_ -(2 + 3 + pubSigmgr_.sigSpace());
+        if (maxPubSize_ <= 0 || maxInfoSize_ <= 0)
+            throw runtime_error("syncps: no space for Pub /Info");
+        distDelay_ += std::chrono::milliseconds(tts());
+        if (distDelay_ > 300ms) {
+            cStateLifetime_ = 30 * distDelay_ > 6000s ? 6000ms : 30*distDelay_;  // distributors can change
+            pubLifetime_ = maxPubLifetime > 10*cStateLifetime_ ? maxPubLifetime : 10*cStateLifetime_;
+        }
+        // print ("syncps for {} computes pubSize: {}, infoSize: {}, distDly: {}\n", collName_, maxPubSize_, maxInfoSize_, distDelay_.count());
     }
 
     SyncPS(rName collName, SigMgr& wsig, SigMgr& psig) : SyncPS(defaultFace(), collName, wsig, psig) {}
@@ -258,7 +301,7 @@ struct SyncPS {
      * @param pub the object to publish
      */
     PubHash publish(crData&& pub) {
-        if (pub.size() > maxPubSize) return 0;
+        if (pub.size() > maxPubSize_) return 0;
         auto h = addToActive(std::move(pub), true);
         //print("{:%M:%S} publish {:x} d {} r {}\n", std::chrono::system_clock::now(), h, delivering_, registering_);
         if (h == 0) return h;
@@ -425,7 +468,7 @@ struct SyncPS {
      */
     auto shipCAdd(const rName& csName, const PubVec& pv) noexcept {
         PubVec sv{};
-        auto ht = std::chrono::system_clock::now() + distDelay;   // set hold time for sent pubs
+        auto ht = std::chrono::system_clock::now() + distDelay_;   // set hold time for sent pubs
         // send all the newPubs that will fit into the cAdd
         crData cAdd{crName{csName.first(-1)}.append(tlv::csID, mhashView(csName)).done(), tlv::ContentType_CAdd};
         for (ssize_t sz = mtu() - cAdd.ssize() - pktSigmgr_.sigSpace(); const auto& p : pv) {
@@ -459,11 +502,11 @@ struct SyncPS {
         // send all the eligible matching non-local origin pubs for csId that fit in a cAdd packet
         // set hold time
         PubVec sv{};
-        for (const auto h : hv) sv.emplace_back(pubs_.at(h).i_);
+        auto now = std::chrono::system_clock::now();
+        for (const auto h : hv) { if ( pubs_.at(h).hold_ <= now) sv.emplace_back(pubs_.at(h).i_);}
         if (sv.empty() || !orderPub_(sv)) return;
-
         shipCAdd(name, sv);
-        pendOthers_.erase(it);
+        pendOthers_.erase(it);  // erases everything pending on csId so a new csId starts the hold clock again
     }
 
     bool handleCState(const rName& name) {
@@ -498,31 +541,30 @@ struct SyncPS {
         if (pv.empty() || !orderPub_(pv)) {
             if (need.size() > 0) {
                 face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-                sendCStateSoon(distDelay);
+                sendCStateSoon();
             }
             // Next section of code is for sending non-local origin pubs for effective meshing
             //  only set up to send others pubs if the cState is from a member who has all my local origin pubs
             //  (may be overly conservative but avoids reacting to transitory cStates)
+            // This may result in sending another's Pubs that it is suppressing after first send
             if (phOth.empty() || have.size() - phOth.size() > 0) return false;
             // set up a delayed send of a cAdd of others Pubs that are missing from this cState
             uint32_t csId = mhashView(name);
             if (auto it=pendOthers_.find(csId); it == pendOthers_.end()) {
                 pendOthers_.emplace(csId, phOth);
-                oneTime(distDelay + std::chrono::milliseconds(randInt()), [this,csId]{ sendOthers(csId); });
+                oneTime(distDelay_ + std::chrono::milliseconds(randInt()), [this,csId]{ sendOthers(csId); });
             }
             return false;
          }
 
-        // ship all the local origin pubs that will fit in a cadd packet
-        if (! shipCAdd(name, pv)) return false;
- 
-        auto d = distDelay * 2;
-        if (need.size()) {
-            // next cState should not be suppressed
+        if (! shipCAdd(name, pv)) return false; // ship all the local origin pubs that will fit in a cAdd packet
+
+        if (need.size()) {  // check if this cState shows Publications I need
             face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-            d = distDelay;
+            sendCStateSoon();
+            return true;
         }
-        sendCStateSoon(d); // delay long enough for recipients to send cStates
+        sendCStateSoon(distDelay_); // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
         return true;
     }
 
@@ -546,10 +588,9 @@ struct SyncPS {
         }
         if (! orderPub_(pv)) return false;    //order priority returns all pubs to send in pv - puts new pubs first
 
-        if (shipCAdd(name, pv)) return false;
-        // delay so receiving members can confirm.
-        // if there are more new pubs to send, others' cStates will cause sending
-        sendCStateSoon(2*distDelay);
+        if (! shipCAdd(name, pv)) return false;
+        sendCStateSoon(distDelay_); // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
+                                                          // and to remove hold times on the Pubs that were just sent
         return true;
     }
 
@@ -610,7 +651,7 @@ struct SyncPS {
         // if this responds to a cState on pendOthers_, set the hold time on its Pubs to keep from resending too soon
         auto h = cAdd.name().lastBlk().toNumber();
         decltype(std::chrono::system_clock::now()) ht{};
-        if (auto ci=pendOthers_.find(h); ci != pendOthers_.end()) ht = std::chrono::system_clock::now() + 2*distDelay;
+        if (auto ci=pendOthers_.find(h); ci != pendOthers_.end()) ht = std::chrono::system_clock::now() + 2*distDelay_;
 
         auto ap = 0;    // added pubs from this cAdd
         for (auto c : cAdd.content()) {
@@ -622,7 +663,7 @@ struct SyncPS {
                 if (ht.time_since_epoch().count()) pubs_.at(hashPub(d)).hold_ = ht;
                 continue;
             }
-            if (d.size() > maxPubSize || isExpired_(d) || ! pubSigmgr_.validate(d)) {
+            if (d.size() > maxPubSize_ || isExpired_(d) || ! pubSigmgr_.validate(d)) {
                 // print("pub {}: {}\n", isExpired_(d)? "expired":"failed validation", d.name());
                 // unwanted pubs have to go in our iblt or we'll keep getting them
                 ignorePub(d);
@@ -658,7 +699,7 @@ struct SyncPS {
 
         // If the cAdd resulted in new outbound (locally originated) pubs, cAdd them for any pending peer CStates
         if (initpubs != publications_ && sendCAdd(cState.name())) return;  // sending will schedule an updated cState
-        sendCStateSoon(distDelay); // changed local cState, send a confirming cState at a randomized delay
+        sendCStateSoon(); // changed local cState, send a confirming cState at a randomized delay - gets reset if more cAdds arrive
     }
 
     /**

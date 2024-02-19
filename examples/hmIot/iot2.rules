@@ -28,8 +28,8 @@ lockCommand: #iotPub & { target: "lock", topic: "command" } &
     { trgtLoc: "all" | "frontdoor" | "gate" | "backdoor" } &
     { topicArgs:  "lock"|"unlock"|"report" } <= opSign
 
-roleCert:    _domain/_role/_roleId/_keyinfo
-signCert:    _domain/_role/_roleId/"sgn"/_keyinfo
+roleCert:    _domain/_role/_roleId/_certinfo
+signCert:    _domain/_role/_roleId/"sgn"/_certinfo
 
 opSign: signCert & { _role: "operator" } <= opCert
 devSign: signCert & { _role: "device" } <= devCert
@@ -52,7 +52,7 @@ opCert:  roleCert <= domainCert
 devCert: roleCert <= domainCert | kmCap | kmpCap
 
 // capability certs (capabilities granted to roles)
-capCert: _domain/"CAP"/capId/capArg/_keyinfo
+capCert: _domain/"CAP"/capId/capArg/_certinfo
 
 // KM (KeyMaker) allows the holder to become a key maker. There
 // can only be one active keymaker so holders participate in an
@@ -61,7 +61,7 @@ capCert: _domain/"CAP"/capId/capArg/_keyinfo
 kmCap:   capCert & { capId: "KM", capArg: _ } <= domainCert
 kmpCap:   capCert & { capId: "KMP", capArg: _ } <= domainCert | kmCap
 
-domainCert: _domain/_keyinfo
+domainCert: _domain/_certinfo
 
 // information about signing chain
 #chainInfo: /_role/_roleId <= signCert
@@ -75,4 +75,4 @@ domainCert: _domain/_keyinfo
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version
-_keyinfo: "KEY"/_/"dct"/_
+_certinfo: "KEY"/_/"dct"/_

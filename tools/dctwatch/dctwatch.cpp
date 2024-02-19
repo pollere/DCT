@@ -1,8 +1,8 @@
 /*
- * dctwatch - real-time printing of multicast NDN packets
+ * dctwatch - real-time printing of multicast DCT packets
  *
  * dctwatch passively listens to the default DCT network interface and prints
- * the contents of each NDN packet it sees. There are two output formats,
+ * the contents of each DCT packet it sees. There are two output formats,
  * 'compact' (default) and 'full' ('-f' flag). The compact format prints one
  * line packet descriptions like:
  *   ...
@@ -79,6 +79,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <iostream>
 #include <regex>
 #include <sstream>
@@ -169,7 +170,7 @@ static auto namePrint(const uint8_t* d, size_t s, uint16_t sport) {
             if (! p.valid()) return pt;
             print(" | {}\n", p.name());
         }
-    } catch (const std::runtime_error&) { }
+    } catch (const std::runtime_error& e) { std::cerr << "ERROR: " << e.what() << std::endl; }
     return pt;
 }
 
@@ -221,8 +222,8 @@ int main(int argc, char* argv[])
         filtering = true;
         filter = std::regex(argv[0]);
     }
+    std::signal(SIGINT, [](int /*sig*/){ std::exit(1); });
     Watcher watcher(handlePkt);
-
     watcher.run();
     exit(0);
 }

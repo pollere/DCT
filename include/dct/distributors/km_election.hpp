@@ -121,14 +121,15 @@ struct kmElection {
     void handleKMcand(const rData& p) {
         if (priority_ <= 0) return; // already know election is lost
         try { 
-            auto tp = p.thumbprint();
+            const auto& tp = p.thumbprint();
             int pri = kmpri_(tp);
             auto n = p.name();
             if (pri <= 0 || wrongEpoch(n.nextAt(preSz_).toNumber())) return;
-            //if (n.nextBlk().toTimestamp() > elecDone_) return; // election over
 
             if (std::cmp_greater(priority_, pri)) return; // candidate loses
             if (std::cmp_greater(pri, priority_) || tp > ourTP_) priority_ = -priority_; // we lose
+            //print("cand {:02x} pri {}  us {:02x} {}\n", fmt::join(std::span(tp).first(4),""), pri,
+            //      fmt::join(std::span(ourTP_).first(4),""), priority_);
         } catch (std::runtime_error& ex) { return; }
     }
 
@@ -155,7 +156,7 @@ struct kmElection {
         epoch_ = epoch;
     }
 
-    kmElection(crName&& pre, const certStore& cs, SyncPS& sy, doneCB&& done, kmpriCB&& kmv, thumbPrint& tp,
+    kmElection(crName&& pre, const certStore& cs, SyncPS& sy, doneCB&& done, kmpriCB&& kmv, const thumbPrint& tp,
                 millis dur = 100ms)
         : prefix_{std::move(pre)}, certs_{cs}, sync_{sy}, done_{std::move(done)}, kmpri_{std::move(kmv)}, ourTP_{tp},
           elecDur_{dur}, preSz_{static_cast<uint16_t>((prefix_/"elec").size())},

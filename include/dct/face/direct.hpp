@@ -107,6 +107,7 @@ class DirectFace {
     boost::asio::io_context& getIoContext() const noexcept { return ioContext_; }
 
     constexpr auto mtu() const noexcept { return io_.mtu(); }
+    constexpr auto tts() const noexcept { return io_.tts(); }
 
     std::shared_ptr<Timer> schedule(std::chrono::microseconds delay, TimerCb&& cb) {
         auto timer = std::make_shared<Timer>(ioContext_, delay);

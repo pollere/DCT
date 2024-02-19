@@ -76,13 +76,14 @@ struct DistGKey {
      * enclosed list. (96 bytes also accounts for tlv indicators)
      */
     using gkr = std::pair<const thumbPrint, encGK>;
-    static constexpr int maxKR = (maxPubSize - 96) / (sizeof(thumbPrint) + encGKeySz);
 
     const crName m_prefix;        // prefix for pubs in this distributor's collection
     const crName m_gkPrefix;     // prefix for group symmetric key list publications
     const crName m_mrPrefix;    // prefix for member request publications
     SigMgrAny m_keySM{sigMgrByType("EdDSA")};   // to sign/validate Publications and PDUs
     SyncPS m_sync;
+    size_t m_maxContent = m_sync.maxInfoSize();
+    size_t m_maxKR;
     const certStore& m_certs;
     addKeyCb m_newKeyCb;   // called when group key rcvd
     connectedCb m_connCb{[](auto) {}};
@@ -99,7 +100,6 @@ struct DistGKey {
     std::chrono::milliseconds m_keyRand{10s};
     std::chrono::milliseconds m_keyLifetime{3600s+10s};
     std::chrono::milliseconds m_mrLifetime{1s}; // set to ~ few dispersion delays
-                                                                           // should member request  last for ~ key lifetime in steady state?
     kmElection* m_kme{};
     uint32_t m_KMepoch{};        // current election epoch
     bool m_keyMaker{false};      // true if this entity is a key maker
@@ -120,19 +120,48 @@ struct DistGKey {
              m_keyRand(reKeyRandomize),
              m_keyLifetime(m_reKeyInt + m_keyRand),
              m_relayChk{Cap::checker("RLY", pPre, cs)} {
-       // the associated sync session is started after cert distributor completes  setup
-       m_sync.autoStart(false);
-       m_sync.cStateLifetime(6763ms);
+       // if the syncps set its cStateLifetime longer, means we are on a low rate network
+       if (m_sync.cStateLifetime_ < 6763ms) m_sync.cStateLifetime(6763ms);
        m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
-       m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),mreq=crPrefix(m_mrPrefix)](const auto& p) {
+       m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),elec=crPrefix(m_prefix/"km"/"elec"),mreq=crPrefix(m_mrPrefix)](const auto& p) ->std::chrono::milliseconds {
             if (mreq.isPrefix(p.name())) return m_mrLifetime;
-            return cand.isPrefix(p.name())? 1000ms : m_keyLifetime; //election winner's km/elec should last indefinitely
-            });
+            if (cand.isPrefix(p.name())) return 1000ms; // a keymaker prefix
+            // if the Publication's signer is the keymaker, its assertion gk and km/elec should persist until there's a new epoch
+            // expire normal gk lists with same lifetime as membership requests
+            const auto& tp = p.thumbprint();    // thumbprint of this Pub's signer
+            auto n = p.name();
+            if (elec.isPrefix(n)) { // a keymaker prefix
+                auto epoch = n.nthBlk(elec.nBlks()).toNumber();
+                // (potential) keymaker's elec should persist for keylifetime
+                if (tp >= m_kmtp && epoch >= m_KMepoch) return m_keyLifetime;
+                return 0ms;     // not the keymaker
+            }
+
+            if (! crPrefix(m_gkPrefix).isPrefix(p.name())) return 1ms; // shouldn't happen - expect a gk list
+            auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
+            if (epoch < m_KMepoch) return 0ms;  // from earlier epoch
+            // Check if this is an assertion gk list Pub which should persist
+            static constexpr auto equal = [](const auto& a, const auto& b) -> bool {
+                        return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0;
+            };
+            auto tpl = n.nextBlk().toSpan();
+            auto tpId = std::span(tp).first(tpl.size());    // get corresponding portion of signer's tp
+            auto tph = n.nextBlk().toSpan();                // shouldn't actually have to check that tpl=tph
+            // keymaker assertion gk should persist for keylifetime
+            if(equal(tpId, tpl) && equal(tpl, tph)) return m_keyLifetime;
+            return m_mrLifetime;                                // other gk lists only need to last as long as member requests
+        });
 
         // get our identity thumbprint, check if we're allowed to make keys,
         // then set up our public and private signing keys.
         m_tp = m_certs.Chains()[0];
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
+         // compute space for content for the gkr Publication. Other Pubs are smaller, so gkr is worst-case
+        m_maxContent -= m_prefix.size() + 2 +3 + 9 + 2 + 2 + 2*(4+2);    // all the components of Name
+        if (m_maxContent < (sizeof(thumbPrint) + encGKeySz))
+            throw ("DistGKey: not enough space in Pub Content to carry group key list");
+        m_maxKR = (m_maxContent) / (sizeof(thumbPrint) + encGKeySz);
+        // print ("DistGKey: maxContent is {} max num key records is {}\n", m_maxContent, m_maxKR);
     }
 
     auto isRelay(const thumbPrint& tp) { return m_relayChk(tp).first; }    // identity 'tp' has RLY capability?
@@ -354,8 +383,6 @@ struct DistGKey {
         // which is set by the ptps shim which then calls the start() for this sync
         if (m_msgsdist && isRelay(m_tp)) { initDone(); return; }
 
-        m_sync.start();
-
         // build function to get the key maker priority from a signing chain then
         // use it to see if we should join the key maker election
         auto kmval = Cap::getval(m_msgsdist ? "KMP" : "KM", m_prefix, m_certs);
@@ -371,24 +398,24 @@ struct DistGKey {
                       };
         m_kmpri = kmpri;
 
-        if (m_kmpri(m_tp) <= 0 ) {
-            // non-keymaker,  just subscribe to group key subcollection
-            m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
+        m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
+        if (m_kmpri(m_tp) <= 0 || m_KMepoch > 0) {
+            // we're not a non-keymaker or got a gkey that tells us the election is done
+            //if (m_KMepoch > 0) print("{} found {} elected epoch {}\n",
+            //        m_certs[m_tp].name(), m_certs[m_kmtp].name(), m_KMepoch);
             return;
         }
         // check if keymaker candidate and whether election is over
         auto eDone = [this](auto elected, auto epoch) {
                 m_keyMaker = elected;
                 m_KMepoch = epoch;
-                // all members  subscribe to group key subcollection; keymakers subscribe in case of conflicts
-                m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
-                if (! elected)   return;
+                if (! elected) return;
                 //print("{} wins election to make {} GKs\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
                 // keymakers need the member requests
                 m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); });
                 gkeyTimeout();  //create a group key and reschedule group key creation
         };
-        // start election. election durations should be ~10 dist delays
+        // start election. election durations should be ~10 distDelays
         m_kme = new kmElection(m_prefix/"km", m_certs, m_sync, std::move(eDone), std::move(kmpri), m_tp, 500ms);
     }
 
@@ -409,8 +436,6 @@ struct DistGKey {
      * A keymaker that has just won an election will publish an empty gk list to assert its win
      * to later joiners. Since subscribers get this gklist, using reception of any gklist (when in init
      * state with no pending member requests) to publish a membership request.
-     * Might want to use this in the future to have keymaker do some sort of delay to gather members
-     * and publish the keylist for all of them at start up
      *
      * If in init state and there are group members, call initDone to exit init and callback to start
     */
@@ -436,22 +461,21 @@ struct DistGKey {
         }
 
         auto s = m_mbrList.size();
-        auto p = s <= maxKR ? 1 : (s + maxKR - 1) / maxKR; // determine number of Publications needed
+        auto p = s <= m_maxKR ? 1 : (s + m_maxKR - 1) / m_maxKR; // determine number of Publications needed
         auto pubTS = std::chrono::system_clock::now();
         auto it = pubPairs.begin();
         for(auto i=0u; i<p; ++i) {
-            auto r = s < maxKR ? s : maxKR;
+            auto r = s < m_maxKR ? s : m_maxKR;
             tlvEncoder gkrEnc{};    //tlv encoded content
             gkrEnc.addNumber(36, m_curKeyCT);
-            if(m_mbrList.size()==0) {
-                // publish empty list to continue to assert keyMaker role
-                gkrEnc.addArray(130, pubPairs);
-                // use own tp in range
-                publishKeyRange(m_tp, m_tp, pubTS, gkrEnc.vec());
-                break;
+            if(i==0) {  // once every time the keymaker makes a new key
+                // publish empty list to continue to assert keymaker role ("assertion gk")
+                gkrEnc.addArray(130, pubPairs);              
+                publishKeyRange(m_tp, m_tp, pubTS, gkrEnc.vec());   // use own tp in range
+                if (s==0) break;
             }
             it = gkrEnc.addArray(130, it, r);
-            auto l = i*maxKR;
+            auto l = i*m_maxKR;
             publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, pubTS, gkrEnc.vec());
             s -= r;
         }
@@ -486,8 +510,7 @@ struct DistGKey {
     void addGroupMem(const rData& p) {
         if (!m_keyMaker) return;
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
-        // Each gkR is ~100 bytes so the default maxPubSize of 1024 allows for ~800 members.
-        if (m_mbrList.size() == 80*maxKR) return;
+        if (m_mbrList.size() == 80*m_maxKR) return;
 
         auto tp = p.thumbprint();   // thumbprint of the signer of the member request
         if (m_msgsdist && isRelay(tp)) return;  // identities with RLY don't get pub keys
