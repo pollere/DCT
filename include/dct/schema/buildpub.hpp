@@ -398,7 +398,8 @@ struct pubBldr {
         // make sure all parameters were supplied or defaulted
         for (auto c = 0u; c < par.size(); c++) {
             if (parmbm_[c] && par[c].index() == 0) {
-                if (pdefault_[c].index() == 0) throw schema_error(format("param {} missing", bs_.tok_[tag_[c]]));
+                if (c >= pdefault_.size() || pdefault_[c].index() == 0)
+                    throw schema_error(format("param {} missing", bs_.tok_[tag_[c]]));
                 par[c] = pdefault_[c];
             }
         }

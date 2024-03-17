@@ -225,7 +225,7 @@ struct crTLV : rView {
     }
 
     // uses 'str' to construct a 'name' tlv at the current end of the vector.
-    // Since name tlv's are the first item of Interest and Data tlv's and names
+    // Since name tlv's are the first item of cState and Data tlv's and names
     // can be large, names aren't built incrementally and they leave empty
     // space at the front of the container for the outer TLV.
     constexpr auto& strToName(std::string_view str) noexcept {
@@ -317,8 +317,8 @@ struct crPrefix : crTLV<rPrefix,tlv::Name> {
     crPrefix(const crName& n) : crTLV{n.v_} { }
 };
 
-struct crInterest : crTLV<rInterest,tlv::cState> {
-    crInterest(crName&& n, std::chrono::milliseconds lt, uint32_t non = rand32()) : crTLV{std::move(n)} {
+struct crState : crTLV<rState,tlv::cState> {
+    crState(crName&& n, std::chrono::milliseconds lt, uint32_t non = rand32()) : crTLV{std::move(n)} {
         append(tlv::Nonce, std::array{uint8_t(non), uint8_t(non >> 8), uint8_t(non >> 16), uint8_t(non >> 24)});
         append(tlv::Lifetime, lt.count());
         done();

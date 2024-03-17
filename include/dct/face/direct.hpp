@@ -28,20 +28,9 @@
 /** DCT 'Direct' face
  *
  * A 'face' is the interface between an application and a particular packet
- * transport instance.  It handles the Interest & Data packet send/recv semantics
+ * transport instance.  It handles the cState & Data (cAdd) packet send/recv semantics
  * and provides the necessary application callbacks (e.g., when a matching Data arrives
- * for some pending Interest). Other NDN libraries delegate most of this work to
- * a 'forwarding agent' like NFD but this creates security, maintainability,
- * reliability and performance issues in an OT environment. Direct face implements
- * *all* of the NDN behavior used by DCT, allowing applications to be self-contained
- * and idempotent.
- *
- * 'Direct' interoperates with NFD at the NDN Interest/Data packet level thus
- * with DCT-compatible apps written using the ndn-ind or ndn-cxx libraries.  However,
- * introducing NFDs into a DCT direct system doubles packet processing costs (every packet
- * is sent & received twice - once by apps and once by NFD), makes it difficult to implement
- * app-based policies controlling which packets go where, and greatly increases the debugging
- * and attack surface (NFD + ndn-cxx is >50,000 lines of code vs. ~250 for Direct).
+ * for some pending cState). 
  */
 
 
@@ -59,9 +48,8 @@ using namespace std::literals;
 using TimerCb = std::function<void()>;
 
 /**
- * A DirectFace implements a subset of the NDN application-level API used by both the ndn-cxx
- * and ndn-ind libraries. It directly connects DCT-based applications to a network without
- * requiring a forwarding agent like NFD.
+ * A DirectFace directly connects DCT-based applications to a network without
+ * requiring a forwarding agent
  */
 class DirectFace {
   public:
@@ -72,9 +60,9 @@ class DirectFace {
     boost::asio::io_context& ioContext_{getDefaultIoContext()};
     dct::Transport& io_;   // boost async I/O transport (defaults to UDP6 multicast)
 
-    RIT rit_{}; // Registered Interest Table
-    PIT pit_{}; // Pending Interest Table
-    DIT dit_{}; // Duplicate Interest Table
+    RST rst_{}; // Registered State Table
+    PST pst_{}; // Pending State Table
+    DST dst_{}; // Duplicate State Table
 
     connectCbList ccb_;
     cSts cSts_{UNCONNECTED};
@@ -83,8 +71,14 @@ class DirectFace {
         // Packet receive handler: decode and process as Interest or Data (silently ignore anything else).
         // Since a matching interest might already be in the PIT or there might be
         // no matching interests for a data, don't do anything heavyweight here.
-        if (tlv(pkt[0]) == tlv::cState) handlecState({pkt, len});
-        else if (tlv(pkt[0]) == tlv::Data) handlecAdd({pkt, len});
+        // The handle* routines validity check all the contents of the cState/cAdd but the call
+        // site here constructs the outer rInterest/rData and that can fail if the received
+        // packet length 'len' doesn't agree with the outer TLV length in 'pkt'. The try..catch
+        // makes sure that packets with this error are silently ignored.
+        try {
+            if (tlv(pkt[0]) == tlv::cState) handlecState({pkt, len});
+            else if (tlv(pkt[0]) == tlv::Data) handlecAdd({pkt, len});
+        } catch (const runtime_error& ) { }
     }
 
     auto conCb() -> void {
@@ -125,29 +119,29 @@ class DirectFace {
     std::uniform_int_distribution<unsigned short> randInt_{10, 60}; // 35ms avg cstate publish randomization
     constexpr auto jitter() { return std::chrono::milliseconds(randInt_(randGen())); }
 
-    // schedule or re-schedule PIT Interest Timeout callback
-    void schedITO(PITentry& pe) {
-        // if the interest is locally generated, the timeout upcall will generate a new pit
+    // schedule or re-schedule PST cState Timeout callback
+    void schedSTO(PSTentry& pe) {
+        // if the cState is locally generated, the timeout upcall will generate a new pst
         // entry to replace the one being deleted. Wait a bit to delete entries from the net
         // in the hope they'll refresh theirs before we have to replace ours.
-        auto to = pe.i_.lifetime();
+        auto to = pe.s_.lifetime();
         if (pe.fromNet_) to += jitter();
-        pe.timer(timeOut(to, [this, idat=*pe.idat_] () mutable {
-                                auto i = rInterest(idat);
-                                pit_.itoCB(i);
+        pe.timer(timeOut(to, [this, sdat=*pe.sdat_] () mutable {
+                                auto s = rState(sdat);
+                                pst_.stoCB(s);
                             }));
     }
 
     /**
-     * Handle an interest registration.
-     * - add the RIT entry
+     * Handle a registration.
+     * - add the RST entry
      * - Registration isn't successful until the network is connected.
      *   If not connected yet add the regDone callback to a deferal
      *   list handled on connection complete.
      * - Otherwise just call the regDone CB.
      */
-    void addToRIT(const rName& p, InterestCb&& iCb, DataCb&& dCb, RegisterCb&& rCb) {
-        rit_.add(RITentry{p, std::move(iCb), std::move(dCb)});
+    void addToRST(const rName& p, StateCb&& sCb, DataCb&& dCb, RegisterCb&& rCb) {
+        rst_.add(RSTentry{p, std::move(sCb), std::move(dCb)});
         if (cSts_ != CONNECTED) {
             // Call back when connected.  Have to copy prefix & rCB since the
             // backing store of p might go away on our return.
@@ -158,99 +152,99 @@ class DirectFace {
     }
 
     /**
-     * Handle an interest outgoing from app.
-     * - if it's already in the pit (from network peer), add the local origin information.
-     * - Add it to the pit & dit then send it. Note that interest has to be sent
+     * Handle a cState outgoing from app.
+     * - if it's already in the pst (from network peer), add the local origin information.
+     * - Add it to the pst & dst then send it. Note that cState has to be sent
      *   even though it was multicast to the net to unblock completion callbacks
-     *   at the origin. E.g., during cert dist peer sent this interest followed
+     *   at the origin. E.g., during cert dist peer sent this cState followed
      *   by pubs and it needs to hear pubs arrived.
      *
      *  May get multiple cStates broadcast if there are members missing different
      *  pubs after timeout collection subname is i.name().first(-1)
      */
     auto unsuppressCState(const rName& n) {
-        if (auto pi = pit_.find(n); pit_.found(pi)) pi->second.onNet_ = 0;
+        if (auto ps = pst_.find(n); pst_.found(ps)) ps->second.onNet_ = 0;
     }
 
      // always sends a newly created cState (a new cState is always created after old one expired)
      // syncps resets the onNet_ before calling if a currentState must be put onNet
      // suppress sending if already exists (not the last cState locally received from others)
      // and has been on network twice
-    auto express(crInterest&& i, InterestTO&& ito) {
+    auto express(crState&& s, StateTO&& sto) {
         if (cSts_ != CONNECTED) throw runtime_error("express: not connected");
 
         bool newCS = true;
         bool suppress = false;
-        if (auto pi = pit_.find(i.name()); pit_.found(pi)) {
-            const auto& pe = pi->second;
+        if (auto ps = pst_.find(s.name()); pst_.found(ps)) {
+            const auto& pe = ps->second;
             // suppress if broadcast to domain at least twice (and not "close to" expiry?)
             if (pe.onNet_ > 1)  suppress = true;
-            if (pe.ito_)  newCS = false;  // i is the same as last expressed cState
+            if (pe.sto_)  newCS = false;  // s is the same as last expressed cState
         }
         if (newCS) {
-            // i is not the same as last expressed cState
-            // find the previous local cState in PIT for this collection, if any,
+            // s is not the same as last expressed cState
+            // find the previous local cState in PST for this collection, if any,
             // and remove its local info so it doesn't get re-expressed at time out
-            const auto c = i.name().first(-1);
-            for (auto& [ih, pe] : pit_) {
-                if (pe.ito_ && c.isPrefix(pe.i_.name())) {
-                    pe.ito_ = {};
+            const auto c = s.name().first(-1);
+            for (auto& [ih, pe] : pst_) {
+                if (pe.sto_ && c.isPrefix(pe.s_.name())) {
+                    pe.sto_ = {};
                     break;
                 }
             }
         }
-        auto res = pit_.add(i, std::move(ito)); // add or update with local info
-        schedITO(res.first->second);  //  reschedule timeout
+        auto res = pst_.add(s, std::move(sto)); // add or update with local info
+        schedSTO(res.first->second);  //  reschedule timeout
         if (suppress) return;
 
-        dit_.add(i);
-        io_.send(std::move(i));
+        dst_.add(s);
+        io_.send(std::move(s));
     }
 
     /**
      * Handle a cState incoming from the network:
-     *  - if it's a dup of a recent interest, ignore it.
-     *  - if there's no RIT match, ignore it
-     *  - add it to dup interest table.
-     *  - add it to PIT then upcall RIT listener (has to be done in
-     *    this order so if upcall results in a Data, PIT entry exists).
+     *  - if it's a dup of a recent cState, ignore it.
+     *  - if there's no RST match, ignore it
+     *  - add it to dup cState table.
+     *  - add it to PST then upcall RST listener (has to be done in
+     *    this order so if upcall results in a Data, PST entry exists).
      */
-    void handlecState(rInterest i) {
-        if (! i.valid()) return;
-        auto [isDup, h] = dit_.dupInterest(i);
+    void handlecState(rState s) {
+        if (! s.valid()) return;
+        auto [isDup, h] = dst_.dupState(s);
         if (isDup) return;
 
-        // check RIT first to see if we can handle this interest. If not,
-        // ignore it (DON'T add it to the DIT because we might register
-        // a handler soon and don't want future matching Interests suppressed).
-        auto ri = rit_.findLM(rPrefix(i.name()));
-        if (! rit_.found(ri)) return;
+        // check RST first to see if we can handle this cState. If not,
+        // ignore it (DON'T add it to the DST because we might register
+        // a handler soon and don't want future matching cStates suppressed).
+        auto rs = rst_.findLM(rPrefix(s.name()));
+        if (! rst_.found(rs)) return;
 
-        dit_.add(h);    // detect future copies of i as dups
+        dst_.add(h);    // detect future copies of s as dups
 
-        // add to PIT as a from network interest, get iCb from the RIT match and give it to RIT's listener.
-        schedITO(pit_.add(i).first->second);
-        ri->second.iCb_(rName{*ri->second.name_}, i);
+        // add to PST as a from network cState, get sCb from the RST match and give it to RST's listener.
+        schedSTO(pst_.add(s).first->second);
+        rs->second.sCb_(rName{*rs->second.name_}, s);
     }
 
     /**
-     * Return the most recent pending interest matching prefix 'p'
+     * Return the most recent pending cState matching prefix 'p'
      *
-     * This is normally used to avoid waiting for the interest re-expression
+     * This is normally used to avoid waiting for the cState re-expression
      * callback when the app has new data to send.
      */
     auto bestCState(const rPrefix p) const noexcept {
-        if (pit_.begin() == pit_.end()) return rName{};
-        const PITentry* loc{};
-        const PITentry* net{};
-        for (const auto& [ih, pe] : pit_) {
-            if (!pe.timer_ || !p.isPrefix(pe.i_.name())) continue;
+        if (pst_.begin() == pst_.end()) return rName{};
+        const PSTentry* loc{};
+        const PSTentry* net{};
+        for (const auto& [ih, pe] : pst_) {
+            if (!pe.timer_ || !p.isPrefix(pe.s_.name())) continue;
             auto e = pe.timer_->expiry();
             if (pe.fromNet_ && (!net || e > net->timer_->expiry())) net = &pe;
-            if (pe.ito_ && (!loc || e > loc->timer_->expiry())) loc = &pe;
+            if (pe.sto_ && (!loc || e > loc->timer_->expiry())) loc = &pe;
         }
         if (!net && !loc) return rName{};
-        return (net? net:loc)->i_.name();
+        return (net? net:loc)->s_.name();
     }
 
     /**
@@ -261,32 +255,32 @@ class DirectFace {
     /**
      * Handle an incoming cAdd:
      *  - ignore if not structurally valid
-     *  - complain if there's no pit entry for it
-     *  - if the prefix is in the RIT, pass it to the associated data callback
+     *  - complain if there's no pst entry for it
+     *  - if the prefix is in the RST, pass it to the associated data callback
      */
     void handlecAdd(rData d) {
         if (! d.valid()) return;
         // The last component of the name is a hash of the associated cState's name.
-        // This hash is the pit lookup key. The 'valid()' above has checked that this
+        // This hash is the pst lookup key. The 'valid()' above has checked that this
         // block exists. Now check that it has the correct type then deserialize it.
-        auto ibh = d.name().lastBlk();
-        if (ibh.size() > 8 || tlv(ibh.typ()) != tlv::csID) return;
-        decltype((mhashView(ibh))) ihash = ibh.toNumber();
-        // use the hash to get the cState PIT entry
-        auto pi = pit_.find(ihash);
-        if (!pit_.found(pi)) return; // we didn't hear this cState
-        const auto& i = pi->second.i_;
-        if (auto ri = rit_.findLM(rPrefix(d.name())); rit_.found(ri)) ri->second.dCb_(i, d);
+        auto sbh = d.name().lastBlk();
+        if (sbh.size() > 8 || tlv(sbh.typ()) != tlv::csID) return;
+        decltype((mhashView(sbh))) shash = sbh.toNumber();
+        // use the hash to get the cState PST entry
+        auto ps = pst_.find(shash);
+        if (!pst_.found(ps)) return; // we didn't hear this cState
+        const auto& s = ps->second.s_;
+        if (auto rs = rst_.findLM(rPrefix(d.name())); rst_.found(rs)) rs->second.dCb_(s, d);
     }
 
-     // use the name hash to get the cState PIT entry's name
+     // use the name hash to get the cState PST entry's name
     auto hash2Name(uint32_t h) {
-        auto pi = pit_.find(h);
-        if (!pit_.found(pi)) {
-            print("hash2Name: no PIT entry for {}\n", h);
+        auto ps = pst_.find(h);
+        if (!pst_.found(ps)) {
+            print("hash2Name: no PST entry for {}\n", h);
             return rName{};
         }
-        return pi->second.i_.name();
+        return ps->second.s_.name();
     }
 };
 

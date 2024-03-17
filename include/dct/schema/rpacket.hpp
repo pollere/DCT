@@ -210,18 +210,18 @@ template<> struct fmt::formatter<dct::rName> {
 
 namespace dct {
 
-struct rInterest : tlvParser {
-    constexpr rInterest() = default;
-    rInterest(const rInterest&) = default;
-    rInterest(rInterest&&) = default;
-    rInterest& operator=(const rInterest&) = default;
-    rInterest& operator=(rInterest&&) = default;
+struct rState : tlvParser {
+    constexpr rState() = default;
+    rState(const rState&) = default;
+    rState(rState&&) = default;
+    rState& operator=(const rState&) = default;
+    rState& operator=(rState&&) = default;
 
-    rInterest(tlvParser i) : tlvParser(i) { }
-    rInterest(const uint8_t* pkt, size_t sz) : tlvParser(pkt, sz) { }
-    rInterest(const std::vector<uint8_t>& v) : tlvParser(v) { }
+    rState(tlvParser i) : tlvParser(i) { }
+    rState(const uint8_t* pkt, size_t sz) : tlvParser(pkt, sz) { }
+    rState(const std::vector<uint8_t>& v) : tlvParser(v) { }
 
-    // an Interest is valid if it starts with the correct TLV, its name is valid and
+    // a cState is valid if it starts with the correct TLV, its name is valid and
     // it contains the 3 required TLV blocks in the right order and nothing else.
     // A cState name must contain at least 3 components (schema ID, collection name
     // and iblt) and the iblt must be non-zero.
@@ -251,7 +251,7 @@ struct rInterest : tlvParser {
         if (lt == 0 || lt > 1000*3600) throw runtime_error("cState lifetime invalid");
         return std::chrono::milliseconds(lt);
     }
-    auto operator<=>(const rInterest& rhs) const noexcept { return name() <=> rhs.name(); }
+    auto operator<=>(const rState& rhs) const noexcept { return name() <=> rhs.name(); }
 };
 
 struct rData : tlvParser {

@@ -124,7 +124,7 @@ struct DistCert
      * The inbound half of initialization finishes when the certstore has
      * received and validated the entire signing chain of at least one peer
      * (indicated by 'm_havePeer = true'). When both halves are done, future
-     * pubs are done without confirmation, interest timeout is much less
+     * pubs are done without confirmation, cState timeout is much less
      * aggressive, and the 'connect' callback is called to move to the next
      * phase of operation.
      */

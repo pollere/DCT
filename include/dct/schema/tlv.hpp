@@ -39,7 +39,7 @@ enum class tlv : uint16_t {
         SequenceNum = 37,
 
     // a DCT cState packet contains exactly 3 TLV blocks in the following order:
-    //   7 (Name), 10 (Nonce), 12 (InterestLifetime)
+    //   7 (Name), 10 (Nonce), 12 (cStateLifetime)
     cState = 5,
         Nonce = 10,
         Lifetime = 12,

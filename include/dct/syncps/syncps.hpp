@@ -211,7 +211,7 @@ struct SyncPS {
     Nonce  nonce_{};                // nonce of current cState
     uint32_t publications_{};       // # locally originated publications
     bool delivering_{false};        // currently processing a cAdd
-    bool registering_{true};        // RIT not set up yet
+    bool registering_{true};        // RST not set up yet
     bool autoStart_{true};          // call 'start()' when done registering
     GetLifetimeCb getLifetime_{ [this](auto){ return pubLifetime_; } };
     IsExpiredCb isExpired_{
@@ -296,7 +296,7 @@ struct SyncPS {
      * A publication is published at most once and lives for at most pubLifetime.
      * Publications are signed before calling this routine.
      * Publications from the application always are additions to the collection so
-     * are pushed to the network in response to any cState in PIT
+     * are pushed to the network in response to any cState in PST
      *
      * @param pub the object to publish
      */
@@ -394,7 +394,6 @@ struct SyncPS {
      * @brief Send a cState describing our publication set to our peers.
      *
      * Creates & sends cState of the form: /<sync-prefix>/<own-IBF>
-     * If called from interest timeout, set to to true
      */
     void sendCState() {
         // if a cState is sent before the initial register is done the reply can't
@@ -403,8 +402,8 @@ struct SyncPS {
 
         scheduledCStateId_->cancel();
         nonce_ = rand32();
-        face_.express(crInterest(collName_/pubs_.iblt().rlEncode(), cStateLifetime_, nonce_),
-                        [this](auto /*csid*/) { sendCState(); } // interest timeout for local cStates
+        face_.express(crState(collName_/pubs_.iblt().rlEncode(), cStateLifetime_, nonce_),
+                        [this](auto /*csid*/) { sendCState(); } // cState timeout for local cStates
                     );
     }
 
@@ -459,7 +458,7 @@ struct SyncPS {
      *
      * The cAdd's name is the same as csName except the final component is replaced
      * with a murmurhash3 32 bit hash of csName which serves as both a compact
-     * representation of csName's iblt and as a PIT key to retrieve the original
+     * representation of csName's iblt and as a PST key to retrieve the original
      * iblt should it be needed.
      *
      * The cAdd will contain all the pubs that will fit in the face's MTU minus
@@ -616,7 +615,7 @@ struct SyncPS {
      * against my current iblt with peel operation before pulling out content. I.e., if I "have"
      * everything in the iblt, don't process.
      *
-     * Called for *any* cAdd in the collection, even if no matching cState in PIT
+     * Called for *any* cAdd in the collection, even if no matching cState in PST
      * Can result in a change in local cState if any of the pubs are "needed"
      * A needed pub can also cause a local publication in response to delivering_
      * If no change in local cState, then the current cState shedule should not be change
@@ -634,7 +633,7 @@ struct SyncPS {
      * @param cState   cState for which we got the cAdd
      * @param cAdd     cAdd content
      */
-    void onCAdd(const rInterest& cState, const rData& cAdd) {
+    void onCAdd(const rState& cState, const rData& cAdd) {
         // entry invariants:
         // - this routine is an upcall from the incoming pdu handler so shouldn't
         //   be called recursively. 'delivering_' is only true while this routine's
@@ -719,7 +718,7 @@ struct SyncPS {
     /**
      * @brief startup related methods start and autoStart
      *
-     * 'start' starts up the bottom half (network) communication by registering RIT
+     * 'start' starts up the bottom half (network) communication by registering RST
      * callbacks for cStates matching this collection's prefix then sending an initial
      * 'cState' to solicit/distribute publications. Since the content of cAdd packets
      * can be encrypted, it's pointless to send a cState before obtaining the decryption
@@ -730,20 +729,20 @@ struct SyncPS {
      * after 'run()' is called (the default) or if it will be called explicitly
      */
     void start() {
-        face_.addToRIT(collName_,
-                       [this, ncomp = collName_.nBlks()+1](auto /*prefix*/, auto i) {   // iCb
+        face_.addToRST(collName_,
+                       [this, ncomp = collName_.nBlks()+1](auto /*prefix*/, auto s) {   // sCb
                            // cState must have one more name component (an iblt) than the collection name
                            // if this handleCState results in sending a cAdd, currently won't schedule a cState, may want to change
-                           if (auto n = i.name(); n.nBlks() == ncomp) handleCState(n);
+                           if (auto n = s.name(); n.nBlks() == ncomp) handleCState(n);
                        },
-                       [this](auto ri, auto rd) { // dCb: cAdd response to any active local cState in collName_
-                            // print("syncps RIT set Cb received cAdd: {}\n", rd.name());
+                       [this](auto rs, auto rd) { // dCb: cAdd response to any active local cState in collName_
+                            // print("syncps RST set Cb received cAdd: {}\n", rd.name());
                             if (! pktSigmgr_.validateDecrypt(rd)) {
                                 // print("syncps invalid cAdd: {}\n", rd.name());
                                 // Got an invalid cAdd so ignore the pubs it contains.
                                 return;
                             }
-                            onCAdd(ri, rd);
+                            onCAdd(rs, rd);
                         },
                        [this](rName) -> void {
                            registering_ = false;

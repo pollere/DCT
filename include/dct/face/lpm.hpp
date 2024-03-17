@@ -4,9 +4,9 @@
 /*
  * Longest-Prefix-Match lookup template class
  *
- * Consists of: RIT - Registered Interest Table - LPM (Longest Prefix Match)
- *              PIT - Pending Interest Table - LPM or Exact-Match
- *              DIT - Duplicate Interest Table - Exact-Match
+ * Consists of: RST - Registered State Table - LPM (Longest Prefix Match)
+ *              PST - Pending State Table - LPM or Exact-Match
+ *              DST - Duplicate State Table - Exact-Match
  *
  * Copyright (C) 2021-2 Pollere LLC
  *
@@ -37,9 +37,9 @@ namespace dct {
 template<typename C> concept lpmCapable = std::is_convertible_v<const C &, const rPrefix&>;
 
 /**
- * Lookup table to do longest-prefix-match on pdu-format names. Both the RIT and PIT
+ * Lookup table to do longest-prefix-match on pdu-format names. Both the RST and PST
  * are lookup tables containing name prefixes that must be matched against some name
- * (Interest name for RIT, Data name for PIT) and the longest match returned.
+ * (State name for RST, Data name for PST) and the longest match returned.
  * The rName ordering operator is defined such that it collates prefixes in longest-match
  * order to support these use cases when using std containers like map & set.
  *

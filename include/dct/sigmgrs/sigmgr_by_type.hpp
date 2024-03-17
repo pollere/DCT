@@ -30,8 +30,6 @@
  * allocated and subject to compiler RVO. 
  *
  * List of Signature-managers by SIGNER_TYPE:
- * (Note: in case DCT is being used with the NDN forwarder of named-data.net, its values of
- * 0x01 RSASHA256, 0x04 HMACSHA256, 0x03 ECDSA are not used in DCT.)
  *  0x00 SHA256
  *  0x07 AEAD
  *  0x08 EdDSA

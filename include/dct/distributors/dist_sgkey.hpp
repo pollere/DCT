@@ -181,7 +181,11 @@ struct DistSGKey {
         crData p(m_mrPrefix/std::chrono::system_clock::now());
         p.content(std::vector<uint8_t>{});
         m_mrPending = true;
-        m_sync.signThenPublish(std::move(p));
+        try {
+            m_sync.signThenPublish(std::move(p));
+        } catch (const std::exception& e) {
+            std::cerr << "dist_sgkey::publishMembershipReq: " << e.what() << std::endl;
+        }
         m_mrRefresh = m_sync.schedule(m_mrLifetime, [this](){ publishMembershipReq(); });
     }
 
@@ -463,11 +467,15 @@ struct DistSGKey {
         crData p(m_krPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
         p.content(c);
         m_keySM.sign(p);
-        if (conf) {
-            // this keymaker has no subscribers, but at least one publish-capable member
-            m_sync.publish(std::move(p), [this](const auto&, bool f){ if (f) initDone(); });
-        } else {
-            m_sync.publish(std::move(p));
+        try {
+            if (conf) {
+                // this keymaker has no subscribers, but at least one publish-capable member
+                m_sync.publish(std::move(p), [this](const auto&, bool f){ if (f) initDone(); });
+            } else {
+                m_sync.publish(std::move(p));
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "dist_sgkey::publishKeyRange: " << e.what() << std::endl;
         }
     }
 

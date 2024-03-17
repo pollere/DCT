@@ -2,13 +2,13 @@
 #define DCT_FACE_LPM_TABLES_HPP
 #pragma once
 /*
- * Longest-Prefix-Match lookup tables implementing NDN Face Interest/Data semantics.
+ * Longest-Prefix-Match lookup tables implementing DeftT's Face cState/cAdd semantics.
  *
- * Consists of: RIT - Registered Interest Table - LPM (Longest Prefix Match)
- *              PIT - Pending Interest Table - LPM or Exact-Match
- *              DIT - Duplicate Interest Table - Exact-Match
+ * Consists of: RST - Registered State Table - LPM (Longest Prefix Match)
+ *              PST - Pending State Table - LPM or Exact-Match
+ *              DST - Duplicate State Table - Exact-Match
  *
- * Copyright (C) 2021-2 Pollere LLC
+ * Copyright (C) 2021-4 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -39,88 +39,87 @@
 namespace dct {
 
 /**
- * The Registered Interest Table (RIT) delivers incoming Interests to a
+ * The Registered State Table (RST) delivers incoming cStates to a
  * handler that may be able to satisfy them (respond with an appropriate
- * Data). The handler registers a prefix to match against incoming Interests
- * and a callback that's called with each matching Interest. RIT entries
+ * Data). The handler registers a prefix to match against incoming cStates
+ * and a callback that's called with each matching cState. RST entries
  * persist until explicitly deleted.
  *
  * Since the key is a view (an rPrefix) its backing data needs to be preserved.
  * It can't go in the entry because the map item is built as a pair with the
  * prefix first so the name is copied to the heap with a pointer in the entry.
  */
-struct RITentry {
-    InterestCb iCb_;
+struct RSTentry {
+    StateCb sCb_;
     DataCb dCb_;
     std::vector<uint8_t>* name_;    // The 'prefix' is supplied as an rName since that's needed for the callback.
                                     // Its backing data is copied to the heap with a pointer here.
 
-    RITentry(const rName& n, InterestCb&& iCb, DataCb&& dCb) : iCb_{std::move(iCb)}, dCb_{std::move(dCb)},
+    RSTentry(const rName& n, StateCb&& sCb, DataCb&& dCb) : sCb_{std::move(sCb)}, dCb_{std::move(dCb)},
         name_{new std::vector<uint8_t>{n.m_blk.begin(), n.m_blk.end()}} { }
 };
 
-struct RIT : lpmLT<rPrefix, RITentry> {
-    void add(RITentry&& e) { lpmLT<rPrefix, RITentry>::add(rPrefix{*e.name_}, std::move(e)); }
+struct RST : lpmLT<rPrefix, RSTentry> {
+    void add(RSTentry&& e) { lpmLT<rPrefix, RSTentry>::add(rPrefix{*e.name_}, std::move(e)); }
 };
 
 /**
- * The Duplicate Interest Table (DIT) keeps track of recently seen Interests
- * to filter out duplicates created by mis-behaving multicast implementations
- * and from the lack of any useful duplicate suppression in NFD. It uses the
- * fact that each Interest carries a randomly generated nonce so Interests
- * with the same name from different sources can be distinguished. The DIT
- * hashes each arriving Interest and compares it to a set recent hashes. If
+ * The Duplicate State Table (DST) keeps track of recently seen cStates
+ * to filter out duplicates created by mis-behaving multicast implementations.
+ * It uses the fact that each cState carries a randomly generated nonce so cStates
+ * with the same name from different sources can be distinguished. The DState
+ * hashes each arriving cState and compares it to a set recent hashes. If
  * the hash is not in the set it's accepted and added to the set. Otherwise
  * it's discarded.
  */
-struct DIT : std::unordered_set<size_t> {
-    std::unordered_set<size_t> ihash_{};
+struct DST : std::unordered_set<size_t> {
+    std::unordered_set<size_t> shash_{};
 
-    auto hash(const rInterest& i) const noexcept { return std::hash<tlvParser>{}(i); }
+    auto hash(const rState& s) const noexcept { return std::hash<tlvParser>{}(s); }
 
     void add(size_t h) {
         // if too many entries, remove a random one
-        if (ihash_.size() >= 256) {
-            auto it = ihash_.begin();
+        if (shash_.size() >= 256) {
+            auto it = shash_.begin();
             for (int b = h & 0xff; b-- > 0; it++) { }
-            ihash_.erase(it);
+            shash_.erase(it);
         }
-        ihash_.emplace(h);
+        shash_.emplace(h);
     }
-    void add(const rInterest& i) { add(hash(i)); }
+    void add(const rState& s) { add(hash(s)); }
 
-    auto dupInterest(const rInterest& i) { auto h = hash(i); return std::pair(ihash_.contains(h), h); }
+    auto dupState(const rState& s) { auto h = hash(s); return std::pair(shash_.contains(h), h); }
 };
 
 /**
- * The Pending Interest Table (PIT) records each outgoing Interest (one sent by the app)
- * together with a handler to call if an incoming Data satisfies the Interest (i.e., the
- * Interest's name is a prefix of the Data's name).
+ * The Pending State Table (PST) records each outgoing cState (one sent by the app)
+ * together with a handler to call if an incoming cAdd satisfies the cState (i.e., the
+ * cState's name is a prefix of the cAdd's name).
  *
- * There is also a PIT entry for each RIT-matching incoming Interest which allows any
- * matching Data generated by the RIT handler to be sent to the network.
+ * There is also a PST entry for each RST-matching incoming cState which allows any
+ * matching Data generated by the RST handler to be sent to the network.
  *
- * PIT entrys are deleted when satisfied by a Data or when they time out.
+ * PST entrys are deleted when satisfied by a Data or when they time out.
  *
- * All Interests and Datas are matched against the PIT. The lookup key is a hash of
- * the interest name.
+ * All cStates and cAdds are matched against the PST. The lookup key is a hash of
+ * the cState name.
  */
-struct PITentry {
+struct PSTentry {
     using TOptr = std::unique_ptr<Timer>;
 
-    std::unique_ptr<std::vector<uint8_t>> idat_{}; // bytes of the interest (backing store for prefix & interest_)
-    rInterest i_{};
-    InterestTO ito_{};      // Interest time-out callback (also indicates interest locally expressed)
-    TOptr timer_{};         // Interest lifetime timer
+    std::unique_ptr<std::vector<uint8_t>> sdat_{}; // bytes of the cState (backing store for prefix & state_)
+    rState s_{};
+    StateTO sto_{};         // cState time-out callback (also indicates cState locally expressed)
+    TOptr timer_{};         // cState lifetime timer
     size_t onNet_{0};
-    bool fromNet_{false};   // Interest was heard from net
+    bool fromNet_{false};   // cState was heard from net
 
-    PITentry(const rInterest& i, InterestTO&& ito) :
-                idat_{std::make_unique<std::vector<uint8_t>>(i.m_blk.begin(), i.m_blk.end())}, i_{*idat_},
-                ito_{std::move(ito)} { }
+    PSTentry(const rState& s, StateTO&& sto) :
+                sdat_{std::make_unique<std::vector<uint8_t>>(s.m_blk.begin(), s.m_blk.end())}, s_{*sdat_},
+                sto_{std::move(sto)} { }
 
-    PITentry(const rInterest& i) :
-                idat_{std::make_unique<std::vector<uint8_t>>(i.m_blk.begin(), i.m_blk.end())}, i_{*idat_},
+    PSTentry(const rState& s) :
+                sdat_{std::make_unique<std::vector<uint8_t>>(s.m_blk.begin(), s.m_blk.end())}, s_{*sdat_},
                 fromNet_{true} { }
 
     auto& timer() const noexcept { return timer_; }
@@ -131,71 +130,71 @@ struct PITentry {
     }
 };
 
-struct PIT : std::unordered_map<csID_t, PITentry> {
-    using base = std::unordered_map<csID_t, PITentry>;
+struct PST : std::unordered_map<csID_t, PSTentry> {
+    using base = std::unordered_map<csID_t, PSTentry>;
     using base::unordered_map;
     bool found(iterator it) const noexcept { return it != end(); }
     bool found(const_iterator it) const noexcept { return it != end(); }
-    const_iterator find(const csID_t ih) const noexcept { return base::find(ih); }
-    iterator find(const csID_t ih) noexcept { return base::find(ih); }
+    const_iterator find(const csID_t sh) const noexcept { return base::find(sh); }
+    iterator find(const csID_t sh) noexcept { return base::find(sh); }
     auto find(rName&& n) noexcept { return find(mhashView(n)); }
     auto find(const rName& n) noexcept { return find(mhashView(n)); }
 
     auto erase(iterator it) { base::erase(it); }
-    auto erase(csID_t ih) { base::erase(ih); }
-    auto erase(const rInterest& i) { return base::erase(mhashView(i.name())); }
+    auto erase(csID_t sh) { base::erase(sh); }
+    auto erase(const rState& s) { return base::erase(mhashView(s.name())); }
 
-    // Interest Time-Out callback
-    // if itCB is false, don't call the pit entry interest time out (which could send a new interest)
-    // The PIT entry needs to be deleted and, since the callback might want to reinstate it,
+    // cState Time-Out callback
+    // if stCB is false, don't call the pst entry cState time out (which could send a new cState)
+    // The PST entry needs to be deleted and, since the callback might want to reinstate it,
     // the entry has to be removed before the callback
-    void itoCB(rInterest i) {
-        auto ih = mhashView(i.name());
-        auto pi = find(ih);
-        if (! found(pi)) return;
-        auto ito = pi->second.ito_;
-        erase(pi);
-        if (ito) ito(ih);
+    void stoCB(rState s) {
+        auto sh = mhashView(s.name());
+        auto ps = find(sh);
+        if (! found(ps)) return;
+        auto sto = ps->second.sto_;
+        erase(ps);
+        if (sto) sto(sh);
     }
 
     /**
-     * add a pit entry to the PIT. 
+     * add a pst entry to the PST. 
      *
-     * The entry has to contain a copy of the Interest which may be large (e.g. Sync Interests
+     * The entry has to contain a copy of the cState which may be large (e.g. Sync cState
      * names contain an iblt of O(128) bytes) so we want to minimize copying. 
      */
-    auto add(PITentry&& e) { return try_emplace(mhashView(e.i_.name()), std::move(e)); }
+    auto add(PSTentry&& e) { return try_emplace(mhashView(e.s_.name()), std::move(e)); }
 
     /**
-     * add Interest to PIT.
+     * add cState to PST.
      *
      * If the entry doesn't exist it's created.
      *
      * If the entry exists (because it came in from the net or it was previously expressed
      * locally and hasn't timed out yet) a new entry is not created but the timeout of the
-     * existing entry is updated and the new interest origin is recorded.
+     * existing entry is updated and the new cState origin is recorded.
      *
-     * returns 'true' if entry added (interest packet should be sent on) and false otherwise.
+     * returns 'true' if entry added (cState packet should be sent on) and false otherwise.
      */
 
-    // add locally generated interest to PIT
-    auto add(const rInterest& i, InterestTO&& ito) {
-        if (auto it = find(mhashView(i.name())); found(it)) {
+    // add locally generated cState to PST
+    auto add(const rState& s, StateTO&& sto) {
+        if (auto it = find(mhashView(s.name())); found(it)) {
             auto& pe = it->second;
-            pe.ito_ = std::move(ito);
+            pe.sto_ = std::move(sto);
             return std::pair<iterator,bool>{it, false};
         }
-        return add(PITentry{i, std::move(ito)});
+        return add(PSTentry{s, std::move(sto)});
     }
 
-    // add network generated interest to PIT
-    auto add(const rInterest& i) {
-        if (auto it = find(mhashView(i.name())); found(it)) {
+    // add network generated cState to PST
+    auto add(const rState& s) {
+        if (auto it = find(mhashView(s.name())); found(it)) {
             it->second.fromNet_ = true;
             it->second.onNet_++;
             return std::pair<iterator,bool>{it, false};
         }
-        return add(PITentry{i});
+        return add(PSTentry{s});
     }
 };
 

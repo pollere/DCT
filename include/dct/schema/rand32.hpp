@@ -2,7 +2,7 @@
 #define RAND32_HPP
 #pragma once
 /*
- * DCT random number generator (for non-crypto use like Interest nonces)
+ * DCT random number generator (for non-crypto use like cState nonces)
  *
  * Copyright (C) 2020-2 Pollere LLC
  *

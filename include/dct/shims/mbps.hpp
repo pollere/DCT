@@ -96,7 +96,6 @@ struct mbps
         {
             if ((maxContent_ = m_pb.maxInfoSize() - MAX_NAME) <= 0)
                 throw runtime_error("mbps: no room for Pub Content");
-            //print ("mbps: maxContent is {}\n", maxContent_);
         }
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb)
@@ -260,7 +259,7 @@ struct mbps
      *
      * An application calls this method and passes a vector of pairs (msgParms) that
      * is used to fill in any needed tag values and an optional message body.
-     * (Might want to use paramNames to make sure all the parameter tags have been set.)
+     * (May use m_pb.paramNames() to make sure all the parameter tags have been set.)
      *
      * The message may need to be broken into content-sized segments.
      * Publications for all segments have the same message ID and timestamp.
@@ -308,29 +307,35 @@ struct mbps
         auto sCnt = n > 1? n + 256 : 0;
         mp.emplace_back("sCnt", sCnt);
 
-        if(size == 0) { //empty message body
-            if(ch)
-                m_pb.publish(m_pb.pub({}, mp), [this](auto p, bool s) { confirmPublication(mbpsPub(p),s); });
-            else
-                m_pb.publish(m_pb.pub({}, mp));
-            return mId;
-        }
-
-        // publish as many segments as needed
-        for (auto off = 0u; off < size; off += maxContent_) {
-            auto len = std::min(size - off, maxContent_);
-            if(ch) {
-                m_pb.publish(m_pb.pub(msg.subspan(off, len), mp),
-                                  [this](auto p, bool s) { confirmPublication(mbpsPub(p),s); });
-            } else {
-                m_pb.publish(m_pb.pub(msg.subspan(off, len), mp));
+        // try...catch for errors in building the pub
+        try {
+            if(size == 0) { //empty message body
+                if(ch)
+                    m_pb.publish(m_pb.pub({}, mp), [this](auto p, bool s) { confirmPublication(mbpsPub(p),s); });
+                else
+                    m_pb.publish(m_pb.pub({}, mp));
+                return mId;
             }
-            sCnt += 256;    //segment names differ only in sCnt
-            mp.pop_back();   //sCnt is last argument on the list
-            mp.emplace_back("sCnt", sCnt);
-        }
-        if(ch) {
-            m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
+
+            // publish as many segments as needed
+            for (auto off = 0u; off < size; off += maxContent_) {
+                auto len = std::min(size - off, maxContent_);
+                if(ch) {
+                    m_pb.publish(m_pb.pub(msg.subspan(off, len), mp),
+                                  [this](auto p, bool s) { confirmPublication(mbpsPub(p),s); });
+                } else {
+                    m_pb.publish(m_pb.pub(msg.subspan(off, len), mp));
+                }
+                sCnt += 256;    //segment names differ only in sCnt
+                mp.pop_back();   //sCnt is last argument on the list
+                mp.emplace_back("sCnt", sCnt);
+            }
+
+            if(ch) {
+                m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "mbps::publish: " << e.what() << std::endl;
         }
         return mId;
     }

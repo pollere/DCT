@@ -177,8 +177,12 @@ struct DistGKey {
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         crData p(m_mrPrefix/std::chrono::system_clock::now());
         p.content(std::vector<uint8_t>{});
-        m_mrPending = true;       
-        m_sync.signThenPublish(std::move(p));
+        m_mrPending = true;
+        try {
+            m_sync.signThenPublish(std::move(p));
+        } catch (const std::exception& e) {
+            std::cerr << "dist_gkey::publishMembershipReq: " << e.what() << std::endl;
+        }
         m_mrRefresh = m_sync.schedule(m_mrLifetime, [this](){ publishMembershipReq(); });
     }
 
@@ -428,7 +432,11 @@ struct DistGKey {
         const auto TP = [](const auto& tp){ return std::span(tp).first(4); };
         crData p(m_gkPrefix/m_KMepoch/TP(tpl)/TP(tph)/ts);
         p.content(c);
-        m_sync.signThenPublish(std::move(p));
+        try {
+            m_sync.signThenPublish(std::move(p));
+       } catch (const std::exception& e) {
+            std::cerr << "dist_gkey::publishKeyRange: " << e.what() << std::endl;
+        }
     }
 
     /*

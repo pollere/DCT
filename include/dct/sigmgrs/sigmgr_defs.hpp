@@ -50,7 +50,7 @@ namespace dct {
     using SigType = uint8_t;
     using SigSize = uint8_t;
 
-    // Signature types (must match equivalent NDN TLV if any) and be less than 64
+    // Signature types must be less than 64
     static constexpr SigType stSHA256 = 0;
     static constexpr SigType stAEAD = 7;
     static constexpr SigType stEdDSA = 8;
