@@ -95,15 +95,15 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  * not an issue, but it is not recommended
  */
 static void msgsRecv(ptps* s, const Publication& p) {
-     //auto now = std::chrono::system_clock::now();
-     //print("{:%M:%S} {}:{}:{}\tpubRcv {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
+     // auto now = std::chrono::system_clock::now();
+     // print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
             if (sp != s) {
                 if(skipValidatePubs || sp->validPub(p)) {
                     sp->publish(Publication(p));
-                    //print("{} relayed from {}:{} to interFace {}:{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
-                }  // else print("{} from {}:{} discarded at interFace {}:{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
+                    // print("\trelayed to {}-{}\n",  sp->label(), sp->relayTo());
+                }   // else print("\tdiscarded at {}-{}\n", sp->label(), sp->relayTo());
             }
     } catch (const std::exception& e) {}
 }
@@ -111,7 +111,7 @@ static void msgsRecv(ptps* s, const Publication& p) {
 /*
  * chainRecv is callback set when each ptps is constructed.
  *  It is invoked upon reception of a crypto validated signing cert by DeftT s which contains its validated chain
- *  The chain's signging cert and pointer to the arrival cert store is then relayed to all the (other) DeftTs
+ *  The chain's signing cert and pointer to the arrival cert store is then relayed to all the (other) DeftTs
  *  for validation and publication
  *
  *  Any cert that is not defined  in a DeftT's trust schema should not be forwarded.
@@ -122,7 +122,7 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     try {
         for (auto sp : transList)
             if (sp != s) {
-                // print("RELAY: {} signing chain from {}:{} to interFace {}:{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
+                // print("relay::chainRecv: {} signing chain from {}-{} to interFace {}-{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                 sp->addRelayedChain(c, cs);
             }
     } catch (const std::exception& e) { }
@@ -146,7 +146,8 @@ static void keysRecv(ptps* s, const Publication& p) {
     try {
         for (auto sp : transList)
             if (sp != s) {
-               sp->publishKnown(Publication(p));
+                print("relay::keysRecv: {} from {}-{} to interFace {}-{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
+               sp->publishGKey(Publication(p));
             }
     } catch (const std::exception& e) {}
 }
@@ -238,12 +239,12 @@ int main(int argc, char* argv[])
         }
         auto& s = *transList.back();    // reach here implies must have RLY capability
 
-        print("relay:: created a transport {} to {}\n", s.label(), s.relayTo());
+        print("relay:: created transport {}-{}\n", s.label(), s.relayTo());
 
         // Connect and pass in the handler
         try {
             s.connect([&s](){
-                print("relay: DeftT transport {} relaying to {} is connected\n", s.label(), s.relayTo());
+                print("relay: DeftT transport {}-{} is connected\n", s.label(), s.relayTo());
                 s.subscribe(msgsRecv);} );
         } catch (const std::exception& e) {
             std::cerr << "main: encountered exception while trying to connect transport " << s.label() << " relaying to " << s.relayTo() << " (bundle " << l << "): " << e.what() << std::endl;

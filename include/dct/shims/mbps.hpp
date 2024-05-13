@@ -336,6 +336,7 @@ struct mbps
             }
         } catch (const std::exception& e) {
             std::cerr << "mbps::publish: " << e.what() << std::endl;
+            return 0;
         }
         return mId;
     }

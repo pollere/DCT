@@ -140,7 +140,7 @@ static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport) {
         default:
             return ptype;
         case 5:
-            try { n = rInterest(d, s).name(); } catch (const std::exception& e) { return ptype; }
+            try { n = rState(d, s).name(); } catch (const std::exception& e) { return ptype; }
             ptype = "St";
             break;
         case 6:
@@ -186,7 +186,7 @@ static void handlePkt(const uint8_t* d, size_t s, uint16_t sport) {
     if (!doInterest && d[0] == 5) return;
     if (!doData && d[0] == 6) return;
     if (filtering) {
-        auto n = d[0] == 5?  rInterest(d, s).name() : rData(d, s).name();
+        auto n = d[0] == 5?  rState(d, s).name() : rData(d, s).name();
         if (! std::regex_search(format("{}", n), filter)) return;
     }
     switch (ofmt) {

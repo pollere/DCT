@@ -33,7 +33,7 @@ CertValidator=$(schema_info -t $Bschema "#certValidator");
 LLM=llm:ff02::1234
 PROTO=udp:
 PORT=34567
-SRVR=<IPaddress:>
+SRVR=127.0.0.1:
 
 echo $PROTO$SRVR$PORT
 

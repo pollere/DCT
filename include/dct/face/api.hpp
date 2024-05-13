@@ -37,7 +37,7 @@ using pTimer = std::shared_ptr<Timer>;
 using TimerCb = std::function<void()>;
 using csID_t = uint32_t; // aka csID - 32-bit murmurhash of cState name
 
-using DataCb = std::function<void(const rState& i, rData d)>;
+using DataCb = std::function<void(rData d)>;
 using StateCb = std::function<void(const rName& n, const rState& i)>;
 using StateTO = std::function<void(csID_t)>;
 using RegisterCb = std::function<void(const rName& prefix)>;

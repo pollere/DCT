@@ -265,12 +265,11 @@ class DirectFace {
         // block exists. Now check that it has the correct type then deserialize it.
         auto sbh = d.name().lastBlk();
         if (sbh.size() > 8 || tlv(sbh.typ()) != tlv::csID) return;
-        decltype((mhashView(sbh))) shash = sbh.toNumber();
+        // decltype((mhashView(sbh))) shash = sbh.toNumber();
         // use the hash to get the cState PST entry
-        auto ps = pst_.find(shash);
-        if (!pst_.found(ps)) return; // we didn't hear this cState
-        const auto& s = ps->second.s_;
-        if (auto rs = rst_.findLM(rPrefix(d.name())); rst_.found(rs)) rs->second.dCb_(s, d);
+       // auto ps = pst_.find(shash);
+       // if (pst_.found(ps))  s = ps->second.s_;
+        if (auto rs = rst_.findLM(rPrefix(d.name())); rst_.found(rs)) rs->second.dCb_(d);
     }
 
      // use the name hash to get the cState PST entry's name

@@ -146,11 +146,11 @@ struct SigMgrSchema final : SigMgr {
         }
         // structurally validate 'data'
         try {
-            const auto& pubval = pv_.at(dctCert::getKeyLoc(data));
+            const auto& pubval = pv_.at(dctCert::getKeyLoc(data)); // can throw when checking pubs from cAdds where don't yet have certs
             auto valid = pubval.matchTmplt(bs_, data.name());
             if (!valid) print("SigMgrSchema::validate: invalid structure {}\n", data.name());
             return valid;
-        } catch (std::exception& e) { print("SigMgrSchema::validate: structure validation err: {}\n", e.what()); }
+        } catch (std::exception& e) { /* print("SigMgrSchema::validate: structure validation err: {}\n", e.what());*/ }
         return false;
     }
 

@@ -19,6 +19,9 @@
  * Any entity with a valid certificate for this trust schema (i.e., any entity that belongs to
  * this trust domain) can publish but must have the appropriate SG (denoted by the
  * SG cert's capability argument) in order to subscribe.
+ *
+ * As soon as its syncps is registered, it will receive pubs into its collection(s) but the pubs don't invoke
+ * a subscription callback until one is registered (in setup)
  * 
  * Copyright (C) 2020-3 Pollere LLC
  *
@@ -105,7 +108,7 @@ struct DistSGKey {
     std::chrono::milliseconds m_reKeyInt{3600s};
     std::chrono::milliseconds m_keyRand{10s};
     std::chrono::milliseconds m_keyLifetime{3600s+10s};
-    std::chrono::milliseconds m_mrLifetime{1s}; // set to ~ a few disperson delays
+    std::chrono::milliseconds m_mrLifetime{5s}; // set to ~ a few disperson delays
     kmElection* m_kme{};
     uint32_t m_KMepoch{};      // current election epoch
     bool m_keyMaker{false};     // true if this entity is a key maker
@@ -135,12 +138,11 @@ struct DistSGKey {
         if (m_sync.cStateLifetime_ < 5233ms) m_sync.cStateLifetime(5233ms);
         m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
         m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),elec=crPrefix(m_prefix/"km"/"elec"),mreq=crPrefix(m_mrPrefix)](const auto& p) ->std::chrono::milliseconds {
-            if (mreq.isPrefix(p.name())) return m_mrLifetime;
-
-              if (cand.isPrefix(p.name())) return 1000ms; // a keymaker prefix
+              if (mreq.isPrefix(p.name())) return m_mrLifetime;
+              if (cand.isPrefix(p.name())) return 1000ms;
               // if the Publication's signer is the keymaker, its assertion kr and km/elec should persist until there's a new epoch
               // expire normal kr lists with same lifetime as membership requests
-              const auto& tp = p.thumbprint();    // thumbprint of this Pub's signer
+              const auto& tp = p.thumbprint();    // get thumbprint of this Pub's signer
               auto n = p.name();
               if (elec.isPrefix(n)) { // a keymaker prefix
                   auto epoch = n.nthBlk(elec.nBlks()).toNumber();
@@ -174,6 +176,8 @@ struct DistSGKey {
 
     // publish my membership request with updated key: name <m_mrPrefix><timestamp>
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
+    // Member requests have a lifetime on order of a few distribution delays and are reissued until
+    // a kr is received
     void publishMembershipReq() {
         if (m_msgsdist && isRelay(m_tp))  return;   // relays don't get pub encryption keys
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
@@ -281,10 +285,19 @@ struct DistSGKey {
         }
         auto n = p.name();
         auto epoch = n.nextAt(m_krPrefix.size()).toNumber();
-        if (m_keyMaker) {
-            // if keylist is from earlier signing key of same identity, ignore
-            if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) return;
+        // if keylist is from earlier signing key of same identity
+        if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
+            if (m_keyMaker) return; // ignore if I'm still keymaker
+            // kr from my identity when I haven't set keymaker implies I've restarted
+            // (some other keymaker may have already taken over but that should get resolved eventually - do something better later)
+            m_keyMaker = true;
+            m_KMepoch = ++epoch;
+            m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); });
+            sgkeyTimeout();  //create a group key, publish it, callback parent with key
+            return;
+        }
 
+        if (m_keyMaker) {
             // another member claims to be a keyMaker - largest thumbPrint and most recent epoch wins
            if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
                 // relinquish keymaker status
@@ -413,8 +426,10 @@ struct DistSGKey {
      * For a pure publisher, it must have received the public key. The value of the keyMaker
      * capability influences the probability of this entity being elected
      * with larger values giving higher priority.
-     * A trust schema using subscription groups should ensure key maker
+     * A schema using subscription groups should ensure key maker
      * capability is only given with subscription group capability.
+     *
+     * subscribe() calls will process any publications waiting in collection
      */
     void setup(connectedCb&& ccb) {
         m_connCb = std::move(ccb);
@@ -422,8 +437,7 @@ struct DistSGKey {
 
         // relay: doesn't participate in pub group as it doesn't do encryption or decryption
         // but needs to pass through the sgklists so has a sgk distributor active with its own subscription cb
-        // which is set by the ptps shim and the ptps shim also calls the start() for this sync as there are
-        // other conditions which must be met before the relay's sync is started
+        // which is set by the ptps shim and the ptps shim when the interface is "connected"
         if (m_msgsdist && isRelay(m_tp) ) { initDone(); return; }
 
         // build function to get the key maker priority from a signing chain then
@@ -441,6 +455,7 @@ struct DistSGKey {
         m_kmpri = kmpri;
 
         // all members  subscribe to group key subcollection; keymakers subscribe in case of conflicts
+        // subscribe could result in finding a KRList in local collection from an elected keymaker
         m_sync.subscribe(m_krPrefix, [this](const auto& p){ receiveSGKeyRecords(p); });
         if (!m_subr || m_kmpri(m_tp) <= 0 || m_KMepoch > 0) {
             // we're not a non-keymaker or got a gkey that tells us the election is done
