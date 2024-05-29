@@ -121,7 +121,7 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     if (s->isRelay(c.computeTP()))  return;
     try {
         for (auto sp : transList)
-            if (sp != s) {
+            if (sp != s && sp->isConnected()) {
                 // print("relay::chainRecv: {} signing chain from {}-{} to interFace {}-{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                 sp->addRelayedChain(c, cs);
             }
@@ -146,7 +146,7 @@ static void keysRecv(ptps* s, const Publication& p) {
     try {
         for (auto sp : transList)
             if (sp != s) {
-                print("relay::keysRecv: {} from {}-{} to interFace {}-{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
+               // print("relay::keysRecv: {} from {}-{} to interFace {}-{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                sp->publishGKey(Publication(p));
             }
     } catch (const std::exception& e) {}
@@ -237,27 +237,29 @@ int main(int argc, char* argv[])
             std::cerr << "relay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;
             exit(1);
         }
-        auto& s = *transList.back();    // reach here implies must have RLY capability
+        dct::print("relay:: created transport {}-{}\n", transList.back()->label(), transList.back()->relayTo());
+    }
 
-        print("relay:: created transport {}-{}\n", s.label(), s.relayTo());
-
-        // Connect and pass in the handler
+    // Connect each sibling transport and pass in the handler
+    for (const auto s : transList) {
         try {
-            s.connect([&s](){
-                print("relay: DeftT transport {}-{} is connected\n", s.label(), s.relayTo());
-                s.subscribe(msgsRecv);} );
+            s->connect([s](){
+                dct::print("relay: DeftT transport {}-{} is connected\n", s->label(), s->relayTo());
+                // "pull" valid certs from sibling transports
+                for (auto sp : transList) if (sp != s) sp->passValidChains(s);
+                s->subscribe(msgsRecv);} );
         } catch (const std::exception& e) {
-            std::cerr << "main: encountered exception while trying to connect transport " << s.label() << " relaying to " << s.relayTo() << " (bundle " << l << "): " << e.what() << std::endl;
+            std::cerr << "main: encountered exception while trying to connect transport " << s->label() << " relaying to " << s->relayTo() << " : " << e.what() << std::endl;
             exit(1);
         } catch (int conn_code) {
-            std::cerr << "main: transport from bundle " << l << " failed to connect with code " << conn_code << std::endl;
+            std::cerr << "main: transport " <<s->label() << " failed to connect with code " << conn_code << std::endl;
             exit(1);
         } catch (...) {
             std::cerr << "default exception";
             exit(1);
         }
     }
-    //check if a "sub" trust schema is in use on a DeftT (thumbprint will differ)
+    //check if a "sub" schema is in use on a DeftT (thumbprint will differ)
     const auto& tp = transList.front()->schemaTP();
     // this could be more complex with different DeftT shims checked for pub compatiblity before passing pubs
     // between them, but the trust schema will take care of this, silently discarding non-conforming pubs

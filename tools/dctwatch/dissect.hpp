@@ -195,9 +195,9 @@ struct Dissect {
     constexpr void indentLess() noexcept { --indent_; };
     constexpr void indent(std::ostream& os) const noexcept { for (auto i = indent_; --i >= 0; ) os << "| "; }
 
-    void printType(tlv type, const DictStack& ds) { print(ss, "{} ({})", (int)type, ds[type]); }
+    void printType(tlv type, const DictStack& ds) { dct::print(ss, "{} ({})", (int)type, ds[type]); }
 
-    void printTL(tlv type, size_t len) { print(ss, "{} ({}) size {}:", (int)type, bdict[type], len); }
+    void printTL(tlv type, size_t len) { dct::print(ss, "{} ({}) size {}:", (int)type, bdict[type], len); }
 
     constexpr bool notPrintable(char c) const noexcept { return c < 0x20 || c >= 0x7f; }
 
@@ -221,7 +221,7 @@ struct Dissect {
         // but system clock date printing doesn't work unless it's an int.
         std::chrono::duration<double,std::micro> us{double(u)};
         std::chrono::sys_time<std::chrono::microseconds> ts{std::chrono::microseconds(u)};
-        fmt::print(ss, "{:%g-%m-%d@%R}:{:.6%S}", ts, us);
+        dct::print(ss, "{:%g-%m-%d@%R}:{:.6%S}", ts, us);
     }
 
     // dump a block as characters
@@ -313,7 +313,7 @@ struct Dissect {
             } catch (const std::runtime_error& e) {
                 // In general this 'error' is expected when parsing unknown content but uncommenting
                 // this print can help find things that should be marked 'leaf' so they won't be parsed.
-                //print(std::cerr, "Error parsing {}/{}: {}\n", (int)btype, blen, e.what());
+                //dct::print(std::cerr, "Error parsing {}/{}: {}\n", (int)btype, blen, e.what());
             }
         }
         if (nblks == 0 && blen > 0) {

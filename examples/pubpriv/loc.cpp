@@ -66,9 +66,9 @@ static int nMsgs = 10;
  * locRprtr reports location periodically
  */
 static void locRprtr(mbps &cm) {
-    print("{}:{}:{} publishing location report {}\n", role, myId, myPID, Cnt+1);
+    dct::print("{}:{}:{} publishing location report {}\n", role, myId, myPID, Cnt+1);
     // make a message to publish - hokey, but this is just for illustration
-    std::string s = format("Location sample #{} from {}:{}:{} at coords: {},{}", ++Cnt, role, myId, myPID,
+    std::string s = dct::format("Location sample #{} from {}:{}:{} at coords: {},{}", ++Cnt, role, myId, myPID,
         arc4random() % 91, arc4random() % 91);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
@@ -76,7 +76,7 @@ static void locRprtr(mbps &cm) {
     cm.publish(std::move(mp), toSend);
     if (Cnt >= nMsgs && nMsgs) {
         cm.oneTime(2*pubWait, [](){
-                    print("{}:{}:{} published {} location messages and exits\n", role, myId, myPID, Cnt);
+                    dct::print("{}:{}:{} published {} location messages and exits\n", role, myId, myPID, Cnt);
                     exit(0);
                 });
         return;
@@ -126,7 +126,7 @@ int main(int argc, char* argv[])
 
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-    fullId = format("{}:{}:{}", role, myId, myPID);
+    fullId = dct::format("{}:{}:{}", role, myId, myPID);
 
     // Connect and pass in the handler
     try {

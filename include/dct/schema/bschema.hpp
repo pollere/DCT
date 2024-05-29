@@ -157,18 +157,18 @@ struct bSchema {
 
     // return the name of the pub at index 'i'
     bTok pubName(pubidx i) const {
-        if (i >= pub_.size()) throw schema_error(format("no pub with index {} in schema", i));
+        if (i >= pub_.size()) throw schema_error(dct::format("no pub with index {} in schema", i));
         return tok_[pub_[i].pub];
     }
 
     // return index of pub with name 'nm'
     auto findPub(bTok nm) const {
         for (pubidx n = pub_.size(), i = 0; i < n; ++i) if (tok_[pub_[i].pub] == nm) return i;
-        throw schema_error(format("no pub {} in schema", nm));
+        throw schema_error(dct::format("no pub {} in schema", nm));
     }
     // return the first (or only) template of pub 'i'
     const bName& pubTmpl0(pubidx i) const {
-        if (i >= pub_.size()) throw schema_error(format("no pub with index {} in schema", i));
+        if (i >= pub_.size()) throw schema_error(dct::format("no pub with index {} in schema", i));
         auto t = discrim_[std::countr_zero(pub_[i].d)].tmpl;
         return tmplt_[t];
     }
@@ -179,7 +179,7 @@ struct bSchema {
             if (c < tok_.size()) {
                 res += tok_[c];
             } else {
-                res += format("{:02x}", c);
+                res += dct::format("{:02x}", c);
             }
         }
         return res;
@@ -290,34 +290,34 @@ struct bSchema {
 } // namespace dct
 
 template<>
-struct fmt::formatter<dct::bschema::corItem> {
+struct dct::formatter<dct::bschema::corItem> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
         return ctx.end();
     }
     auto format(const dct::bschema::corItem& v, format_context& ctx) const -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "{}.{}={}.{}", v.ct1, v.co1, v.ct2, v.co2);
+        return dct::format_to(ctx.out(), "{}.{}={}.{}", v.ct1, v.co1, v.ct2, v.co2);
     }
 };
 template<>
-struct fmt::formatter<dct::bschema::tDiscrim> {
+struct dct::formatter<dct::bschema::tDiscrim> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
         return ctx.end();
     }
     auto format(const dct::bschema::tDiscrim& v, format_context& ctx) const -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "(chns#{}, tmpl={}, comp={}, vals={}, cor={})",
+        return dct::format_to(ctx.out(), "(chns#{}, tmpl={}, comp={}, vals={}, cor={})",
                     v.cbm, v.tmpl, v.disc, v.vl, v.cor);
     }
 };
 template<>
-struct fmt::formatter<dct::bschema::tPub> {
+struct dct::formatter<dct::bschema::tPub> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
         return ctx.end();
     }
     auto format(const dct::bschema::tPub& v, format_context& ctx) const -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "(par#{:x}, disc#{:x}, tok={}, tags={})", v.par, v.d, v.pub, v.tag);
+        return dct::format_to(ctx.out(), "(par#{:x}, disc#{:x}, tok={}, tags={})", v.par, v.d, v.pub, v.tag);
     }
 };
 

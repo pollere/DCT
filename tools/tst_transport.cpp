@@ -57,7 +57,7 @@ static auto tfmt(auto ts1, auto ts2) {
     }
     // fmt's alternate duration format ('#.3') gives 3 digits of precision but
     // puts a zero after the decimal point for values in the range [100,1000).
-    auto r = format("{:#.3}", t/s);
+    auto r = dct::format("{:#.3}", t/s);
     if (r.size() != (t<0?6:5)) r.push_back(suffix);
     else r.back() = suffix;
     return r;
@@ -92,7 +92,7 @@ static void doSend() {
         hdr |= (s & 0xff) << 24;
     }
     pkt.insert(pkt.begin(), hdr);
-    io->send((uint8_t*)pkt.data(), pkt.size() * sizeof(pkt[0]));
+    io->send(pkt);
     if (--nsend <= 0) {
         timer->expires_after(2s);
         timer->async_wait([](const auto&) { exit(0); });
@@ -114,7 +114,7 @@ int main(int argc, const char* argv[]) {
 
     auto addr = "";
     if (argc < 1) {
-        print("- usage: {} [-n nsend] [-i|p|r] addr\n", argv[0]);
+        dct::print("- usage: {} [-n nsend] [-i|p|r] addr\n", argv[0]);
         exit(1);
     }
     while (argc > 1 && argv[1][0] == '-') {
@@ -147,7 +147,7 @@ int main(int argc, const char* argv[]) {
                                     std::memcpy(&ts, pkt + 8, 8);
                                     dat.insert(dat.begin(), ts);
                                     dat.pop_back();
-                                    print("got {} bytes, {} transit, {} rtt\n", len, tfmt(dat[0]), tfmt(dat[1]));
+                                    dct::print("got {} bytes, {} transit, {} rtt\n", len, tfmt(dat[0]), tfmt(dat[1]));
                                     if (reply) doSend();
                                 },
                                 []{
@@ -156,7 +156,7 @@ int main(int argc, const char* argv[]) {
                                 });
         io->connect();
         ioc.run();
-    } catch (const std::runtime_error& se) { print("error: {}\n", se.what()); }
+    } catch (const std::runtime_error& se) { dct::print("error: {}\n", se.what()); }
 
     exit(0);
 }

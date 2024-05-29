@@ -181,7 +181,7 @@ struct driver {
     auto makeParent(sComp child, sComp parent) {
         if (parent_.contains(child)) {
             if (parent_[child] == parent) return;
-            symtab_.throw_error(format("redefining parent of {}: {} to {}", to_string(child),
+            symtab_.throw_error(dct::format("redefining parent of {}: {} to {}", to_string(child),
                                        to_string(parent_[child]), to_string(parent)));
         }
         parent_[child] = parent;
@@ -446,20 +446,20 @@ struct driver {
             auto [b1, e1, b2, e2] = termLimits(con, b, e);
             res = handleConstraints(res, def, con, b1, e1);
             res = handleConstraints(res, def, con, b2, e2);
-            //print("u\n{}\n", to_string(res));
+            //dct::print("u\n{}\n", to_string(res));
         } else if (con[b].isResolve()) {
             // An 'or' results in two duplicates of 'res', each with the
             // constrains from one branch of the 'or'. These are concatenated.
             auto [b1, e1, b2, e2] = termLimits(con, b, e);
             res = append(handleConstraints(res, def, con, b1, e1), handleConstraints(res, def, con, b2, e2));
-            //print("or\n{}\n", to_string(res));
+            //dct::print("or\n{}\n", to_string(res));
         } else if (con[b].isField()) {
             // next two components are tag name & value
             auto [b1, e1, b2, e2] = termLimits(con, b, e);
             auto tags = tags_.at(def);
             auto tag = con[b1];
             if (! tags.contains(tag)) {
-                symtab_.throw_error(format("error: {} has no component named {}", to_string(def), to_string(tag)));
+                symtab_.throw_error(dct::format("error: {} has no component named {}", to_string(def), to_string(tag)));
             }
             int t = tags[tag];
 
@@ -478,10 +478,10 @@ struct driver {
                 r2.insert(r2.end(), rex.begin(), rex.end());
             }
             res = r2;
-            //print("f{}\n{}\n", t, to_string(res));
+            //dct::print("f{}\n{}\n", t, to_string(res));
         } else {
             // unknown operator
-            symtab_.throw_error(format("error: {} contains invalid operator {}", to_string(def), to_string(con[b])));
+            symtab_.throw_error(dct::format("error: {} contains invalid operator {}", to_string(def), to_string(con[b])));
         }
         return res;
     }
@@ -496,7 +496,7 @@ struct driver {
 
     sName handleConstraints(const sName& nm, const sComp def, const sName& con) {
         auto nv = handleConstraints(expand_or(nm, 0, nm.size()), def, con, 0, con.size());
-        //print("constraints {}:\n{}\n", to_string(def), to_string(nv));
+        //dct::print("constraints {}:\n{}\n", to_string(def), to_string(nv));
         return flatten(nv);
     }
 
@@ -529,7 +529,7 @@ struct driver {
         if (tags_.contains(comp)) return;
         const auto& parent = parent_[comp];
         if (comp != parent) finishTags(parent);
-        //print("finish tags for {} from {}\n", to_string(comp), to_string(parent));
+        //dct::print("finish tags for {} from {}\n", to_string(comp), to_string(parent));
         tags_[comp] = tags_[parent];
     }
 
@@ -537,7 +537,7 @@ struct driver {
         // set up self-linkage and tags for parents that didn't know they were parents
         for (const auto& [child, parent] : parent_) {
             if (child != parent && !parent_.contains(parent)) {
-                //print("make root {} for {}\n", to_string(parent), to_string(child));
+                //dct::print("make root {} for {}\n", to_string(parent), to_string(child));
                 makeParent(parent, parent);
             }
         }
@@ -547,7 +547,7 @@ struct driver {
                 // 'parent' definitions are their own parent and 'nm' is used
                 // both as their definition and tags.  Derived definitions have
                 // the name of their parent in 'nm' and inherit its tags.
-                //print("make tags for {}\n", to_string(parent));
+                //dct::print("make tags for {}\n", to_string(parent));
                 tags_[parent] = tagmap().init(symtab_[parent]);
             }
         }
@@ -609,23 +609,23 @@ struct driver {
         static const std::array nattr = { "", " [shape=octagon,color=\"gray\",fontcolor=\"gray\"]",
                                           " [color=\"red\",penwidth=2]" };
         static const std::array eattr = { "", " [style=dashed,color=\"gray\"]", " [color=\"red\",penwidth=2]" };
-        print("digraph certDag {{\n");
+        dct::print("digraph certDag {{\n");
         for (const auto& src : nodes) {
             // filter out some things based on verbosity level
             if (verbose_ < V_FULL && g.attr(src) == 1) continue;
             if (verbose_ < V_DETAIL && to_string(src) == "#chainInfo"s) continue;
 
-            if (g.attr(src) != 0) print("  \"{}\"{};\n", to_string(src), nattr[g.attr(src)]);
+            if (g.attr(src) != 0) dct::print("  \"{}\"{};\n", to_string(src), nattr[g.attr(src)]);
 
             const auto& l = g.links().at(src);
             if (l.size() == 0) {
-                print("  \"{}\";\n", to_string(src));
+                dct::print("  \"{}\";\n", to_string(src));
                 continue;
             }
-            for (const auto& dst : l) print("  \"{}\" -> \"{}\"{};\n", to_string(src), to_string(dst),
+            for (const auto& dst : l) dct::print("  \"{}\" -> \"{}\"{};\n", to_string(src), to_string(dst),
                                             eattr[g.attr(src)]);
         }
-        print("}}\n");
+        dct::print("}}\n");
     }
 
     sName childrenOf(const sComp pub) const {
@@ -647,15 +647,15 @@ struct driver {
         // signer_ gives the signing alternatives for each publication expressed as an sName
         // containing the sComps of each alternative's definition.
         // These specify a set of out-edges from the pub, not a path.
-        //for (const auto& [c,p] : parent_) print("c {} p {}\n", to_string(c), to_string(p));
+        //for (const auto& [c,p] : parent_) dct::print("c {} p {}\n", to_string(c), to_string(p));
         for (auto& [pub,signers] : signer_) {
-            //print("pub {} signer {}\n", to_string(pub), to_string(signers));
+            //dct::print("pub {} signer {}\n", to_string(pub), to_string(signers));
             sName pubs({pub});
             // if pub has children, its signers implicitly sign its children so make that explicit.
             // replace signed parent by 'or' of its children
             if (isParent(pub) && childrenOf(pub).size() > 0) {
                 pubs = childrenOf(pub);
-                //print("childrenOf pub {} : {}\n", to_string(pub), to_string(pubs));
+                //dct::print("childrenOf pub {} : {}\n", to_string(pub), to_string(pubs));
             }
  
             // if the signer is a parent, any of that parent's children can sign.
@@ -663,7 +663,7 @@ struct driver {
             if (signers.size() == 1 && isParent(signers[0])) {
                 //auto s = signers[0];
                 signers = childrenOf(signers[0]);
-                //print("childrenOf signer {} : {}\n", to_string(s), to_string(signers));
+                //dct::print("childrenOf signer {} : {}\n", to_string(s), to_string(signers));
             }
  
             for (auto&& c : pubs) {
@@ -682,7 +682,7 @@ struct driver {
         if (const auto cycle = dag.hasCycle(); cycle.size() > 0) {
             auto src = cycle.back();
             auto dst = std::find_if(cycle.rbegin(), cycle.rend(), [&src,&dag](auto n){ return dag.linked(src, n);});
-            print("error: cycle in cert chain due to edge from {} to {}\n", to_string(src), to_string(*dst));
+            dct::print("error: cycle in cert chain due to edge from {} to {}\n", to_string(src), to_string(*dst));
             dag.attr(src, 2);
             printGraph(dag, dag.nodes());
             exit(1);
@@ -693,7 +693,7 @@ struct driver {
         }
         certDag_ = dag;
         auto sinks = dag.sinks();
-        if (sinks.size() > 1) symtab_.throw_error(format("multiple trust anchors: {}", sinks));
+        if (sinks.size() > 1) symtab_.throw_error(dct::format("multiple trust anchors: {}", sinks));
         if (sinks.size()) {
             sComp root = *(sinks.cbegin());;
      
@@ -702,7 +702,7 @@ struct driver {
                 if (signer_.contains(pub)) {
                     for (auto&& chain : dag.paths(pub, root)) {
                         chains_.emplace_back(chain);
-                        //print("pub {} chain {}\n", to_string(pub), to_string(chain));
+                        //dct::print("pub {} chain {}\n", to_string(pub), to_string(chain));
                     }
                 }
             }
@@ -710,8 +710,8 @@ struct driver {
     }
 
     void printChildren() {
-        print("Children\n");
-        for (const auto& [c, n] : children_) print(" {} : {}\n", to_string(c), to_string(n));
+        dct::print("Children\n");
+        for (const auto& [c, n] : children_) dct::print(" {} : {}\n", to_string(c), to_string(n));
     }
 
     void expand_names(const sComp cert) {
@@ -719,7 +719,7 @@ struct driver {
  
         const auto& nm = symtab_[cert];
         certs_[cert] = expand_name(nm, 0, nm.size());
-        //print("expand {} : {}\n", to_string(cert), to_string(certs_[cert]));
+        //dct::print("expand {} : {}\n", to_string(cert), to_string(certs_[cert]));
         if (parent_.contains(cert)) {
             // record each parent's children
             auto root = rootComp(cert);
@@ -771,7 +771,7 @@ struct driver {
 
                 if (verbose_ >= V_DEBUG) {
                     n[c] = tags_[p].tags()[c];
-                    print("{}[{}]: {} var of {}\n", to_string(p), to_string(n[c]), cnt, to_string(n));
+                    dct::print("{}[{}]: {} var of {}\n", to_string(p), to_string(n[c]), cnt, to_string(n));
                 }
             }
         }
@@ -797,18 +797,18 @@ struct driver {
         computeCompressible();
 
         if (verbose_ >= V_DEBUG) {
-            print("Per-component instances:\n");
+            dct::print("Per-component instances:\n");
             for (const auto& [p, e] : entropy_) {
-                print(" {}: ", to_string(p));
+                dct::print(" {}: ", to_string(p));
                 const auto tags = tags_[p].tags();
                 const auto n = tags.size();
                 for (size_t c = 0; c < n; c++) {
                     auto cnt = e[c].count();
-                    if (cnt > 1) print(" {}: {}", to_string(tags[c]), cnt);
+                    if (cnt > 1) dct::print(" {}: {}", to_string(tags[c]), cnt);
                 }
-                print("\n");
+                dct::print("\n");
             }
-            print("\n");
+            dct::print("\n");
         }
         //printChildren();
     }
@@ -825,7 +825,7 @@ static inline driver drv_{};
 
 template <typename... T>
 static inline void dprint(fmt::format_string<T...> format_str, T&&... args) {
-    if (drv_.verbose_ >= V_DEBUG) print(format_str, std::forward<T>(args)...);
+    if (drv_.verbose_ >= V_DEBUG) dct::print(format_str, std::forward<T>(args)...);
 }
 
 #ifdef notyet
@@ -842,8 +842,8 @@ struct fmt::formatter<sComp> {
         return it;
     }
     auto format(const sComp& c, format_context& ctx) const -> format_context::iterator {
-        if (presentation == 'd') return format_to(ctx.out(), "({:02x},{:d})", c.flags(), c.id());
-        return format_to(ctx.out(), "{}", drv_.symtab().bare_string(c));
+        if (presentation == 'd') return fmt::format_to(ctx.out(), "({:02x},{:d})", c.flags(), c.id());
+        return fmt::format_to(ctx.out(), "{}", drv_.symtab().bare_string(c));
     }
 };
 #endif

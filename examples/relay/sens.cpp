@@ -64,16 +64,16 @@ static int nMsgs = 5;
  * reports environmental information periodically
  */
 static void sensRprtr(mbps &cm) {
-    print("{} publishing sensor report {}\n", fullId, Cnt+1);
+    dct::print("{} publishing sensor report {}\n", fullId, Cnt+1);
     // make a message to publish
-    std::string s = format("Sensor sample #{} from {}", ++Cnt, fullId);
+    std::string s = dct::format("Sensor sample #{} from {}", ++Cnt, fullId);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
     mp = msgParms{{"target", "sens"s},{"topic","rpt"s},{"args", myId}};
     cm.publish(std::move(mp), toSend);
     if (Cnt >= nMsgs && nMsgs) {
         cm.oneTime(2*pubWait, [](){
-                    print("{} published {} location messages and exits\n", fullId, Cnt);
+                    dct::print("{} published {} location messages and exits\n", fullId, Cnt);
                     exit(0);
                 });
         return;
@@ -96,7 +96,7 @@ void cmdRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
     auto now = std::chrono::system_clock::now();
     auto dt = ticks(now - mt.time("mts")).count() / 1000.;
 
-    print("{:%M:%S} {} rcvd ({:.3} mS transit): {} {}: {} | {}\n",
+    dct::print("{:%M:%S} {} rcvd ({:.3} mS transit): {} {}: {} | {}\n",
             ticks(now.time_since_epoch()), fullId, dt, mt["target"],
                 mt["topic"], mt["args"],
                 std::string(msgPayload.begin(), msgPayload.end()));
@@ -150,7 +150,7 @@ int main(int argc, char* argv[])
 
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-    fullId = format("{}:{}", role, myId);
+    fullId = dct::format("{}:{}", role, myId);
 
     // Connect and pass in the handler
     try {

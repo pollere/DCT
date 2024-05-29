@@ -36,15 +36,15 @@ static auto fileToVec(std::string_view fname) {
     // XXX "error: 'basic_ifstream' is unavailable: introduced in macOS 10.15"
     std::string f{fname};
     std::ifstream is(f, std::ios::binary|std::ios::ate);
-    if (! is) throw std::runtime_error(format("can't open file {}", fname));
+    if (! is) throw std::runtime_error(dct::format("can't open file {}", fname));
     int64_t sz = is.tellg();
     if (sz < 4 || sz > 65536) {
-        throw std::runtime_error(format("{} file size unreasonable ({} bytes)\n", fname, sz));
+        throw std::runtime_error(dct::format("{} file size unreasonable ({} bytes)\n", fname, sz));
     }
     is.seekg(0);
     std::vector<uint8_t> buf(sz);
     if (! is.read((char*)buf.data(), buf.size())) {
-        throw std::runtime_error(format("couldn't read file {}\n", fname));
+        throw std::runtime_error(dct::format("couldn't read file {}\n", fname));
     }
     is.close();
     return buf;

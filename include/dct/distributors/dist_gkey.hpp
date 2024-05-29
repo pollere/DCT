@@ -260,7 +260,7 @@ struct DistGKey {
      * gk names <m_gkPrefix><epoch><low tpId><high tpId><timestamp>
      */
     void receiveGKeyList(const rPub& p) {
-        if (m_msgsdist && isRelay(m_tp))  return;   // relays don't get pub keys
+        if (m_msgsdist && isRelay(m_tp))  return;   // relays don't get pub keys for msgs collection
 
         const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
         if (m_kmpri(tp) <= 0) {
@@ -542,6 +542,10 @@ struct DistGKey {
                 m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
                 return;
             }
+            // if there is an earlier signing key from the same identity, remove it
+            auto itp = m_certs[tp].thumbprint();
+            auto sameId = std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
+            if (sameId) print ("DistGKey::addGroupMem: found and erased {} earlier signing cert(s) from this identity\n", sameId);
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key

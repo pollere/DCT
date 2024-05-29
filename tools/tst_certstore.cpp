@@ -28,7 +28,7 @@
 #include <vector>
 
 #include "dct/format.hpp"
-#include "dct/schema/dct_model.hpp"
+#include "dct/schema/validate_bootstrap.hpp"
 
 using namespace dct;
 
@@ -38,11 +38,15 @@ int main(int argc, const char* argv[]) {
         print("- usage: {} bundle\n", argv[0]);
         exit(1);
     }
-    dct::DCTmodel dm(argv[1]);
+    certStore cs{};
     try {
+        auto bs = validateBootstrap(argv[1], cs);
         print("Signing chain of {}:\n", argv[1]);
-        dm.cs_.chain_for_each(dm.cs_.chains_[0], [](const auto& c){ print("{}\n", c.name()); });
+        cs.chain_for_each(cs.chains_[0], [](const auto& c){ print("  {}\n", c.name()); });
     } catch (const std::runtime_error& se) { print("runtime error: {}\n", se.what()); }
+
+    print("certs in {}:\n", argv[1]);
+    for (const auto& [k, c] : cs) print("  {}\n", c.name());
 
     exit(0);
 }

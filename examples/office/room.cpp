@@ -68,7 +68,7 @@ void cmdRecv(mbps &cm, const mbpsMsg& msg, std::vector<uint8_t>&)
     const auto& f = msg["func"];
     const auto& a = msg["args"];
 
-    print("{:%M:%S} {} in {} setting {} to {} ({:.3} mS transit)\n",
+    dct::print("{:%M:%S} {} in {} setting {} to {} ({:.3} mS transit)\n",
             ticks(now.time_since_epoch()), role, id, f, a, dt);
     //passes message to mbps to publish (message body is empty)
     cm.publish(msgParms{{"func", f},{"topic", "status"s},{"loc",room},{"args", a}});
@@ -97,15 +97,17 @@ int main(int argc, char* argv[])
     } else {
         acc = {"light", "door", "screen", "temp"};
     }
-    //subscribe to command topic for all my accessory functions
-    for(auto i=0u; i < acc.size(); i++) {
-        cm.subscribe(acc[i] + "/command/" + id, cmdRecv); // msgs to this instance
-        cm.subscribe(acc[i] + "/command/all", cmdRecv); // msgs to all instances
-    }
 
     // Connect and pass in the handler
     try {
-        cm.connect( [&cm]() {});    /* main task for this entity is to wait for messages from subscriptions */
+        cm.connect( [&cm,acc]() {
+            /* main task for this entity is to wait for messages from subscriptions */
+            //subscribe to command topic for all my accessory functions
+            for(auto i=0u; i < acc.size(); i++) {
+                cm.subscribe(acc[i] + "/command/" + id, cmdRecv); // msgs to this instance
+                cm.subscribe(acc[i] + "/command/all", cmdRecv); // msgs to all instances
+            }
+       });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);

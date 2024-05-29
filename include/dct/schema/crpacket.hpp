@@ -390,13 +390,13 @@ struct crCert : crData {
 
 } // namespace dct
 
-template<> struct fmt::formatter<dct::crName>: formatter<dct::rPrefix> {
+template<> struct dct::formatter<dct::crName>: formatter<dct::rPrefix> {
     template <typename FormatContext>
     auto format(const dct::crName& n, FormatContext& ctx) const -> decltype(ctx.out()) {
         return format_to(ctx.out(), "{}", dct::rPrefix(n));
     }
 };
-template<> struct fmt::formatter<dct::crPrefix>: formatter<dct::rPrefix> {
+template<> struct dct::formatter<dct::crPrefix>: formatter<dct::rPrefix> {
     template <typename FormatContext>
     auto format(const dct::crPrefix& n, FormatContext& ctx) const -> decltype(ctx.out()) {
         return format_to(ctx.out(), "{}", dct::rPrefix(n));

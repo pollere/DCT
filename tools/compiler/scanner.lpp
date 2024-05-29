@@ -68,11 +68,11 @@ WS      [ \t]
 %%
 
 static void usage(const char* prog) {
-    print("-usage: {} [-q|v|d] [-V|D] [-o schemaBin] input\n", prog);
+    dct::print("-usage: {} [-q|v|d] [-V|D] [-o schemaBin] input\n", prog);
 }
 static void help(const char* prog) {
     usage(prog);
-    print("   -q   quiet (no diagnostic output)\n"
+    dct::print("   -q   quiet (no diagnostic output)\n"
           "   -v   increase diagnostic level\n"
           "   -d   debug (highest diagnostic level)\n"
           "   -D   print schema's cert DAG then exit\n"
@@ -104,7 +104,7 @@ int main(int argc, const char *argv[])
         } else if (argv[i] == std::string ("-D")) {
             drv_.printDag_ = true;
         } else if (argv[i] == std::string ("-V")) {
-            print("{}, {}\n", copyright, version);
+            dct::print("{}, {}\n", copyright, version);
             exit(0);
         } else if (argv[i] == std::string ("-h")) {
             help(argv[0]);
@@ -113,7 +113,7 @@ int main(int argc, const char *argv[])
             file = argv[i];
         }
     }
-    if (drv_.verbose_ > 0) print("{}, {}\n", copyright, version);
+    if (drv_.verbose_ > 0) dct::print("{}, {}\n", copyright, version);
     if (file == "-") {
         yyin = stdin;
     } else if (!(yyin = fopen(file.c_str(), "r"))) {

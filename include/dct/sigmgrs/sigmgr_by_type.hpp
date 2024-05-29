@@ -107,13 +107,13 @@ static inline SigMgrAny sigMgrByType(uint8_t type) {
         case stPPSIGN:    return SigMgrPPSIGN();
         case stAEADSGN: return SigMgrAEADSGN();
     }
-    throw std::runtime_error(format("sigMgrByType: unknown signer type {}", type));
+    throw std::runtime_error(dct::format("sigMgrByType: unknown signer type {}", type));
 }
 
 [[maybe_unused]]
 static inline SigMgrAny sigMgrByType(std::string_view sv) {
     std::string s(sv);
-    if (! sigmgr_name_to_type.contains(s)) throw std::runtime_error(format("sigMgrByType: unknown signer type {}", s));
+    if (! sigmgr_name_to_type.contains(s)) throw std::runtime_error(dct::format("sigMgrByType: unknown signer type {}", s));
     return sigMgrByType(sigmgr_name_to_type.at(s));
 }
 

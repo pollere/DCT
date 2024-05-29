@@ -73,7 +73,7 @@ void rprtRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
     auto dt = ticks(now - mt.time("mts")).count() / 1000.;
-    print("{:%M:%S} {}:{} rcvd ({:.3} mS transit): {} {} \n\t{}\n",
+    dct::print("{:%M:%S} {}:{} rcvd ({:.3} mS transit): {} {} \n\t{}\n",
             ticks(now.time_since_epoch()), role, myId, dt, mt["topic"],
                 mt["args"], std::string(msgPayload.begin(), msgPayload.end()));
     Cnt++;
@@ -83,9 +83,9 @@ void rprtRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
  * sends commands periodically
  */
 static void cmdPubr(mbps &cm) {
-    // print("{}:{} publishing command {}\n", role, myId, Cmd+1);
+    // dct::print("{}:{} publishing command {}\n", role, myId, Cmd+1);
     // make a message to publish
-    std::string s = format("Command #{} from {}:{}", ++Cmd, role, myId);
+    std::string s = dct::format("Command #{} from {}:{}", ++Cmd, role, myId);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp = msgParms{{"target", "sens"s},{"topic","cmd"s},{"args","read"s}};
     cm.publish(std::move(mp), toSend);
@@ -132,7 +132,7 @@ int main(int argc, char* argv[])
     try {
         /* main task for this entity is to wait for location reports */
         cm.connect([&cm]{
-            print("{}:{} connected and waiting for location reports\n", role, myId);
+            dct::print("{}:{} connected and waiting for location reports\n", role, myId);
             cm.subscribe("sens/rpt", rprtRecv);     // if collection command acks, need to subscribe to that
             cmdPubr(cm);
         });

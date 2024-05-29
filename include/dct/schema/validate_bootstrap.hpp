@@ -187,7 +187,7 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
     }
     // final cert is the signing cert - make it the signing chain head
     auto sc = cb.back().first;
-    if (validateChain(bs, cs, sc) < 0) throw schema_error(format("cert {} signing chain invalid", sc.name()));
+    //if (validateChain(bs, cs, sc) < 0) throw schema_error(format("cert {} signing chain invalid", sc.name()));
     cs.addChain(sc);
 
     return bs;

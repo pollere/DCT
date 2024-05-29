@@ -588,6 +588,10 @@ struct DistSGKey {
                 m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
                 return;
             }
+            // if there is an earlier signing key from the same identity, remove it
+            auto itp = m_certs[tp].thumbprint();
+            auto sameId = std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
+            if (sameId) print ("DistSGKey::addGroupMem: found and erased {} earlier signing cert(s) from this identity\n", sameId);
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key

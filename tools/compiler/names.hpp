@@ -174,8 +174,8 @@ struct fmt::formatter<sComp> {
         return it;
     }
     auto format(const sComp& c, format_context& ctx) const -> format_context::iterator {
-        if (presentation == 'd') return format_to(ctx.out(), "({:02x},{:d})", c.flags(), c.id());
-        return format_to(ctx.out(), "{}", c.to_string());
+        if (presentation == 'd') return fmt::format_to(ctx.out(), "({:02x},{:d})", c.flags(), c.id());
+        return fmt::format_to(ctx.out(), "{}", c.to_string());
     }
 };
 

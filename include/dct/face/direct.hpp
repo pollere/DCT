@@ -102,6 +102,7 @@ class DirectFace {
 
     constexpr auto mtu() const noexcept { return io_.mtu(); }
     constexpr auto tts() const noexcept { return io_.tts(); }
+     constexpr auto unicast() const noexcept { return io_.unicast(); }
 
     std::shared_ptr<Timer> schedule(std::chrono::microseconds delay, TimerCb&& cb) {
         auto timer = std::make_shared<Timer>(ioContext_, delay);

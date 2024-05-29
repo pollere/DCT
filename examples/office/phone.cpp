@@ -51,7 +51,7 @@ static struct option opts[] = {
     {"wait", required_argument, nullptr, 'w'}
 };
 
-static void usage(const char* cname) { print("- {} usage: id [-w ms] [loc] function args\n", cname); }
+static void usage(const char* cname) { dct::print("- {} usage: id [-w ms] [loc] function args\n", cname); }
 
 /* Globals */
 static std::chrono::microseconds pubWait = std::chrono::seconds(5);
@@ -88,7 +88,7 @@ static void statusRecv(mbps &, const mbpsMsg& msg, std::vector<uint8_t>)
     const auto& a = msg["args"];
     const auto& l = msg["loc"];
 
-    print("{:%M:%S} {} {}: status of {} {} is {} ({:.3} mS transit)\n",
+    dct::print("{:%M:%S} {} {}: status of {} {} is {} ({:.3} mS transit)\n",
             ticks(now.time_since_epoch()), role, id, l, f, a, dt);
 }
 
@@ -131,15 +131,14 @@ int main(int argc, char* argv[])
     func = argv[optind++];
     args = argv[optind++];
 
-    // subscribe to status messages from all functions, any room
-    for (const auto& f : std::array{"light"s, "door"s, "temp"s, "screen"s}) {
-        cm.subscribe(f + "/status", statusRecv);
-    }
-
     // Connect and pass in the handler
     try {
         cm.connect([&cm]{
-            print("{} {}'s phone sending to {}\n", role, id, loc);
+            // subscribe to status messages from all functions, any room
+            for (const auto& f : std::array{"light"s, "door"s, "temp"s, "screen"s}) {
+                cm.subscribe(f + "/status", statusRecv);
+            }
+            dct::print("{} {}'s phone sending to {}\n", role, id, loc);
             cmdPubr(cm);
         });
         cm.run();

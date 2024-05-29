@@ -76,7 +76,7 @@ void locRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
     auto dt = ticks(now - mt.time("mts")).count() / 1000.;
-    print("{:%M:%S} {}:{}:{} rcvd ({:.3} mS transit): {} from {} \n\t{}\n",
+    dct::print("{:%M:%S} {}:{}:{} rcvd ({:.3} mS transit): {} from {} \n\t{}\n",
             ticks(now.time_since_epoch()), role, myId, myPID, dt, mt["target"],
                 mt["rptr"], std::string(msgPayload.begin(), msgPayload.end()));
     Cnt++;
@@ -117,13 +117,13 @@ int main(int argc, char* argv[])
 
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-    cm.subscribe("loc", locRecv);     // msgs to target loc
 
     // Connect and pass in the handler
     try {
         /* main task for this entity is to wait for location reports */
-        cm.connect([]{
-            print("{}:{}:{} connected and waiting for location reports\n", role, myId, myPID);
+        cm.connect([&cm]{
+            cm.subscribe("loc", locRecv);     // msgs to target loc
+            dct::print("{}:{}:{} connected and waiting for location reports\n", role, myId, myPID);
         });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;

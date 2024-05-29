@@ -37,7 +37,7 @@ static inline auto schemaCert(const bSchema& bs, const keyVal& pk, SigMgr& sm) {
     // schema names are derived from the schema and must have the form:
     //   <pubPrefix>/"schema"/<pubName>/"KEY"/<kId>/"self"/<creationTime>
     // where <pubName> is the name of the first pub in the schema.
-    auto certName = format("{}/schema/{}", bs.pubVal("#pubPrefix"), bs.pubName(0));
+    auto certName = dct::format("{}/schema/{}", bs.pubVal("#pubPrefix"), bs.pubName(0));
     return dctCert(certName, pk, sm);
 }
 

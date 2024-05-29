@@ -158,7 +158,6 @@ struct ptps
     std::unordered_set<dct::thumbPrint> m_unackedCerts{};
     std::unordered_map<dct::thumbPrint,std::set<Publication>> m_holdKeys{};
     std::unordered_map<dct::thumbPrint,std::set<Publication>> m_holdPubs{};
-    std::set<dct::rCert> m_holdCerts{};
     bool m_connected{false};
     bool isConnected() const { return m_connected; }
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
@@ -168,8 +167,9 @@ struct ptps
     // being forwarded before their signing keys.
     void certAck(const rData& c, bool acked)
     {
-        print ("certAck cb gets {} for {}\n", acked, c.name());
+        // print ("certAck cb gets {} for {}\n", acked, c.name());
         auto tp = c.computeTP();
+        m_unackedCerts.erase(tp);
         if (!acked) { // unlikely as implies cert expired, but remove from list
             print ("certAck cb fails for {}\n", c.name());
             if (m_holdKeys.contains(tp)) m_holdKeys.erase(tp);
@@ -177,16 +177,15 @@ struct ptps
             return;
         }
         if (m_holdKeys.contains(tp)) {
-            print ("certAck cb for {} finds keys on hold\n", c.name());
+            // print ("certAck cb for {} finds keys on hold\n", c.name());
             for (auto p : m_holdKeys[tp]) m_pb.publishKey(std::move(p));
             m_holdKeys.erase(tp);
         }
         if (m_holdPubs.contains(tp)) {
-            print ("certAck cb for {} finds pubs on hold\n", c.name());
+            // print ("certAck cb for {} finds pubs on hold\n", c.name());
             for (auto p : m_holdPubs[tp]) m_pb.publish(std::move(p));
             m_holdPubs.erase(tp);
-        }
-        m_unackedCerts.erase(tp);
+        }      
     }
 
     ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
@@ -229,7 +228,7 @@ struct ptps
      * The success callback scb is where the application starts work that involves communication.
      * If m_pb.start results in a callback indicating success, m_connectCb is invoked.
      * If fails, throws an error.
-     * If there is a gkey distributor, now subscribe to all its Pubs
+     * If there is a Pub gkey distributor, now subscribe to all its Pubs
      * (pubPrefix() is used for distributor pubprefix when created in DCTmodel)
      * This will subscribe to ALL the pub group key distributor publications to pass to relay
      *
@@ -240,21 +239,10 @@ struct ptps
     void connect(connectCb&& scb)
     {
         m_connectCb = std::move(scb);
-
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {
                 if (!success)  throw runtime_error("ptps failed to initialize connection");
                 m_connected = true;
-                if (m_holdCerts.size()) {
-                    for (auto c : m_holdCerts) {
-                        auto tp = c.computeTP();
-                        if (! m_pb.certs().contains(tp)) {
-                            m_pb.addRelayed(tp);    // add to list of certs that were (solely) relayed to this DeftT
-                            m_pb.addCert(c);           // will add to certs if validates
-                            if (m_pb.isSigningCert(c) && !m_pb.certs().contains(tp)) m_unackedCerts.erase(tp); // not valid
-                        }
-                    }
-                }
                 if (m_pb.m_pubDist) {
                     m_pb.m_gkSync->subscribe(m_pb.pubPrefix(),  [this](const rData p){ m_gkCb(this, p);});
                 }
@@ -327,7 +315,9 @@ struct ptps
      */
     bool publishGKey(Publication&& p)
     {
-        if (m_unackedCerts.contains(p.thumbprint())) {
+    print ("ptps::publishGKey: called for {} with {}\n", relayTo(), p.name());
+      //  if (m_unackedCerts.contains(p.thumbprint())) {
+        if (!isConnected()) {       // this may put keys on hold that I won't have signers for but can clean up later
             // print ("ptps::publishGKey: placed {} on holdKeys\n", p.name());
             m_holdKeys[p.thumbprint()].emplace(std::move(p));  //creates entry if doesn't exist; emplace should copy
             return true;    // if cert is on list has to be in my cert store so it is a known publication, just on hold
@@ -368,29 +358,37 @@ struct ptps
      * this is only useful for the case of identical trust schema for all DefTTs so is both
      * less general and not "belt and suspenders" security
      *
-     * m_unackedCerts is for ensuring that relayed identity chains
-     * get their publication acknowledged before ptps sends Publications signed by those certs.
+     * m_unackedCerts is for ensuring that relayed signing chains
+     * get their publication confirmed before ptps sends Publications signed by those certs.
      */
     void addRelayedChain(const rData sc, const auto& cs) {
-        auto tp = sc.computeTP();
-        // have already seen this signing chain
-        if (m_pb.certs().contains(tp) || m_unackedCerts.contains(tp)) return;
-        m_unackedCerts.emplace(tp); // add to unacked signing certs - the cert will be published with certAck cb
-        if (!m_connected) {
-            cs.chain_for_each(tp, [this](const auto &c) { m_holdCerts.emplace(std::move(c)); });
-            return;
-        }
-
+        auto tp = sc.computeTP();       
+        if (m_pb.certs().contains(tp)) return;   // have already seen this signing chain
         cs.chain_for_each(tp, [this](const auto &c) {    // for each cert on this signing chain
-            if (! m_pb.certs().contains(c.computeTP())) {
+            auto ctp = c.computeTP();
+            if (! m_pb.certs().contains(ctp)) {
                 //auto h = std::hash<tlvParser>{}(c);
-                m_pb.addRelayed(c.computeTP());    // add to list of certs that were (solely) relayed to this DeftT
-                m_pb.addCert(c);                               // if c valid, add sto certstore
+                m_pb.addRelayed(ctp);    // add to list of certs that were (solely) relayed to this DeftT
+                m_pb.addCert(c);                               // if c valid, add to certstore
+                if (m_pb.isSigningCert(c) && m_pb.certs().contains(ctp)) //check for the signing cert and if validated
+                     m_unackedCerts.emplace(ctp); // add to unacked signing certs - the cert is published with certAck cb
             }
         });
+    }
 
-        if (!m_pb.certs().contains(tp)) m_unackedCerts.erase(tp);  // cert will be in the certstore if is valid in my schema
-        //  print ("ptps::addRelayedChain: got an invalid signing cert {}\n", c.name());
+    /*
+     * Pass all my validated signing chains that were not relayed to me nor are relay identities to r
+     * Intended for use when a DeftT connects
+     */
+    void passValidChains(const auto& r) {
+        // print ("ptps:passValidChains: transport {} conn={} passing to {}\n", relayTo(), m_connected, r->relayTo());
+        for (auto kv : m_pb.certs()) {
+            auto c = kv.second;
+            if (m_pb.isSigningCert(c) && !m_pb.wasRelayed(kv.first)) {
+              if (!isRelay(kv.first))
+                    r->addRelayedChain(c, m_pb.certs());
+            }
+        }
     }
 
     // Can be used by application to schedule a cancelable timer. Note that

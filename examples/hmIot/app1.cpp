@@ -95,7 +95,7 @@ static void msgPubr(mbps &cm) {
         cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
                     auto now = std::chrono::system_clock::now();
                     auto dt = ticks(now - ts).count() / 1000.;
-                    print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
+                    dct::print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
                             tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
                     });
     } else {
@@ -107,7 +107,7 @@ static void msgPubr(mbps &cm) {
     } else {
         if(!Persist) {
             cm.oneTime(2*pubWait, [](){
-                    print("{}:{}-{} published {} messages and exits\n", role, myId, myPID, Cnt);
+                    dct::print("{}:{}-{} published {} messages and exits\n", role, myId, myPID, Cnt);
                     exit(0);
             });
         }
@@ -129,7 +129,7 @@ void msgRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
     auto now = tp2d(std::chrono::system_clock::now());
     auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
 
-    print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit): {} {}: {} {} | {}\n",
+    dct::print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit): {} {}: {} {} | {}\n",
             now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
             std::string(msgPayload.begin(), msgPayload.end()));
 
@@ -147,11 +147,11 @@ void messageConfirmation(bool s, uint32_t m)
     try {
             mesgBoard.at(m);
         } catch(const std::exception& e) {
-            print("exception {}\nNo message on mesgBoard with received ID", e.what());
+            dct::print("exception {}\nNo message on mesgBoard with received ID", e.what());
         }
         if(!s) {
             //could put another attempt here or other logic
-            print("{}:{} msg {} failed to reach collection\n", myId, myPID, m);
+            dct::print("{}:{} msg {} failed to reach collection\n", myId, myPID, m);
         }
         outstandingMsgs--;
         mesgBoard.erase(m);
@@ -225,18 +225,21 @@ int main(int argc, char* argv[])
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
 
-    if (role == "operator") {
-        cm.subscribe(msgRecv);   //single callback for all messages
-    } else {
-        //here devices just subscribe to command topic
-        cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
-        cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
-    }
+
 
     // Connect and pass in the handler
     try {
         // send initial msg when connected. msgPubr schedules next send each time its called
-        cm.connect( [&cm]() { msgPubr(cm); });
+        cm.connect( [&cm]() {
+            if (role == "operator") {
+                cm.subscribe(msgRecv);   //single callback for all messages
+            } else {
+                //here devices just subscribe to command topic
+                cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
+                cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
+            }
+            msgPubr(cm);
+         });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: "
                  << e.what() << std::endl;

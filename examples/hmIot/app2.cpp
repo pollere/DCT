@@ -116,18 +116,18 @@ static void msgPubr(mbps &cm) {
                     if (! quiet) {
                         auto now = std::chrono::system_clock::now();
                         auto dt = ticks(now - ts).count() / 1000.;
-                        print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
+                        dct::print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
                                 tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
                     } });
     } else {
 //         auto now = std::chrono::system_clock::now();
-//        print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
+//        dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
         cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
     }
 
     if (Cnt >= nMsgs && nMsgs) {
         cm.oneTime(2*pubWait, [](){
-                    print("{}:{}-{} published {} messages, received {} and exits\n", role, myId, myPID, Cnt, nRcv);
+                dct::print("{}:{}-{} published {} messages, received {} and exits\n", role, myId, myPID, Cnt, nRcv);
                     exit(0);
                 });
         return;
@@ -159,14 +159,14 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 
     if (role == "device") {
         // devices set their 'state' from the incoming 'arg' value then immediately reply
-        if (! quiet) print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
+        if (! quiet) dct::print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
                 now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
                 std::string(msgPayload.begin(), msgPayload.end()));
         myState = mt["topicArgs"] == "lock"? "locked":"unlocked";
         msgPubr(cm);
     } else if (!quiet) {
         auto rtt = (now - std::chrono::duration_cast<ticks>(lastSend)).count() / 1000.;
-        print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit, {:.3}ms rtt): {} {}: {} {} | {}\n",
+        dct::print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit, {:.3}ms rtt): {} {}: {} {} | {}\n",
                 now, role, myId, myPID, dt, rtt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
                 std::string(msgPayload.begin(), msgPayload.end()));
     }
@@ -243,19 +243,21 @@ int main(int argc, char* argv[])
     // DeftT modules through the shim but this may not be needed in a deployed application
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-    if (role == "operator") {
-        cm.subscribe(msgRecv);  // single callback for all messages
-    } else {
-        //here devices just subscribe to command topic
-        cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
-        cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
-    }
 
     // Connect and pass in the handler
     try {
         /* main task for this entity */
-        // cm.connect([&cm]{ if (role == "operator") msgPubr(cm); });
-        cm.connect([&cm]{ if (role == "operator") cm.oneTime(pubWait, [&cm](){ msgPubr(cm); }); });
+         cm.connect([&cm]{
+            auto now = std::chrono::system_clock::now();
+            print("{:%M:%S} {}:{}:{} is connected\n", ticks(now.time_since_epoch()), role, myId, myPID);
+            if (role == "operator") {
+                cm.subscribe(msgRecv);  // single callback for all messages
+                msgPubr(cm);
+            } else {    // devices just subscribe to command topic
+                cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
+                cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances
+            }
+        });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);

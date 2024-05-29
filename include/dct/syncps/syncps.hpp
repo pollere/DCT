@@ -234,6 +234,7 @@ struct SyncPS {
     constexpr auto maxInfoSize() const noexcept { return maxInfoSize_; }
     constexpr auto mtu() const noexcept { return face_.mtu(); }
     constexpr auto tts() const noexcept { return face_.tts(); }
+    auto unicast() { return face_.unicast(); }
 
     /**
      * @brief constructor
@@ -456,6 +457,7 @@ struct SyncPS {
 
     /**
      * @brief construct and send a cAdd appropriate for responding to cstate 'csName'
+     * returns false if nothing was sent
      *
      * The cAdd's name is the same as csName except the final component is replaced
      * with a murmurhash3 32 bit hash of csName which serves as both a compact
@@ -546,7 +548,8 @@ struct SyncPS {
         if (pv.empty() || !orderPub_(pv)) {
             if (need.size() > 0) {
                 face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-                sendCStateSoon();   // only waits the small random delay - may want to increase
+                if (unicast()) { sendCState(); return false;}
+                else sendCStateSoon();   // only waits the small random delay - may want to increase
             }
             // Next section of code is for sending non-local origin pubs for effective meshing
             //  only set up to send others pubs if the cState is from a member who has all my local origin pubs
@@ -555,22 +558,26 @@ struct SyncPS {
             if (phOth.empty() || have.size() - phOth.size() > 0) return false;
             // set up a delayed send of others Pubs that are missing from this cState
             uint32_t csId = mhashView(name);
-            if (auto it=pendOthers_.find(csId); it == pendOthers_.end()) {
+            if (!unicast() && pendOthers_.find(csId) == pendOthers_.end()) {
                 pendOthers_.emplace(csId, phOth);
                 oneTime(distDelay_ + std::chrono::milliseconds(randInt()), [this,csId]{ sendOthers(csId); });
             }
             return false;
          }
 
-        //if (! shipCAdd(name, pv)) return false; // ship all the local origin pubs that will fit in a cAdd packet
-
-        if (need.size()) {  // check if this cState shows Publications I need
-            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-            sendCStateSoon();     // only waits the small random delay - may want to increase
-            //return true;
+         // tries to ship all the local origin pubs that will fit in a cAdd packet
+        if (! shipCAdd(name, pv) && need.size()) {
+             // did not send Pubs but have needs from cState
+             face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
+             if (unicast()) { sendCState(); return false; }
+             else sendCStateSoon();     // only waits the small random delay - may want to increase
+             return false;
         }
-        if (! shipCAdd(name, pv)) return false; // ship all the local origin pubs that will fit in a cAdd packet
-        sendCStateSoon(2*distDelay_); // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
+        if (need.size()) {  // check if this cState had Publications I need
+            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
+            sendCStateSoon();
+        } else
+            sendCStateSoon(2*distDelay_); // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
         return true;
     }
 
@@ -697,6 +704,7 @@ struct SyncPS {
         }
         delivering_ = false;
         if (ap == 0) {  // nothing I need in this cAdd, no change to local cState
+            // consider skipping this for unicast
             sendCStateSoon(distDelay_); //canceled sending cState on entry, should actually do this sooner if there are "needs"
             return;
         }

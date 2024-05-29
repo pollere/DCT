@@ -118,12 +118,13 @@ struct DCTmodel {
         for (auto p : pv) addCert(p);
     }
 
+    // For certs received externally
     // Cryptographically and structurally validate a cert before adding it to the
     // cert store. Since certs can arrive in any order, a small number of certs
     // are held pending their signing cert's arrival.
     void addCert(rData d) {
         const auto tp = dctCert::computeThumbPrint(d);
-        if (cs_.contains(tp)) return;
+        if (cs_.contains(tp)) return;     
         // check if cert is consistent with the schema:
         //  - cert metainfo must say it's a key
         //  - siginfo has to include a validity period and now must be within the period
@@ -142,6 +143,12 @@ struct DCTmodel {
             const auto& stp = cert.thumbprint();
             if (dctCert::selfSigned(stp)) return; // can't add new root cert
             if (cname.size() >= 7 && cname[-6].toSv() == "schema") return; // can't add new schema
+
+            // check if receiving a cert signed by my identity, implying an earlier signing cert of my identity
+            // (this could also flag in case of duplicate identities handed out)
+            if (!cs_.contains(cs_.chains_[0])) std::runtime_error ("DCTmodel::addCert: this member has no signing cert");
+            auto itp = (cs_[cs_.chains_[0]]).getKeyLoc();
+            if (stp == itp)  return;
  
             // cert is structurally ok so see if it crytographically validates
             if (! cs_.contains(stp)) {
@@ -179,7 +186,7 @@ struct DCTmodel {
     // Handles adding the new cert to cs_, publishing it, and making it the new signing key  and informing the group key distributors, if any
     // Waits for a publication confirmation before making this pair the new signing pair and calling the group key distributors
     void getNewSP(const pairCb& spCb) {
-        auto sp = spCb();       //new signing key pair
+        auto sp = spCb();       //new signing key pair callback
         auto sc = sp.first;     // public cert of pair
         auto now = std::chrono::system_clock::now();
         auto nt = rCert(sc).validUntil() - certOverlap;   // schedule next rekey for certOverlap before expiration time
@@ -276,6 +283,8 @@ struct DCTmodel {
 
         // cert distributor needs a callback when cert added to certstore.
         cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
+        // cert distributor needs a callback to remove pubValidator for expiring signing certs
+        cs_.certRemoveCb_ = [this](const dctCert& cert) { if (isSigningCert(cert)) { pv_.erase(cert.computeThumbPrint()); return true;} return false; };
 
         for (const auto& [tp, cert] : cs_) m_ckd.initialPub(cert);
 

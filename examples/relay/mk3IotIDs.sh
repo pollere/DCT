@@ -39,7 +39,8 @@ HALinkSRVR=tcp:127.0.0.1:12345
 HALinkCLNT=tcp:12345
 PROTO=tcp:
 PORT=34567
-SRVR=<IP address of home relay host>:
+# SRVR=<IP address of home relay host>:
+SRVR=127.0.0.1:
 
 echo $PROTO$SRVR$PORT
 

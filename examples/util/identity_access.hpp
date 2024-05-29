@@ -78,21 +78,28 @@ static inline void readBootstrap(std::string_view bootstrap) {
     // cb is made up of certItems - pair <dctCert,keyVal> where all keyVals are empty except last
     auto cb = rdCertBundle(fileToVec(bootstrap));
     if(cb.size() < 3) {
-        print("readBootstrap for shim {} only has {} certs when at least 3 are needed\n", root.size(), cb.size());
+        dct::print("readBootstrap for shim {} only has {} certs when at least 3 are needed\n", root.size(), cb.size());
         exit(0);
     }
     // first item must be a trust anchor - to be validated by the DeftT
     if (! root.size())
         root = cb[0].first;
     else if ((cb[0].first).computeThumbPrint() != root.computeThumbPrint()) {
-        print("readBootstrap for shim {} has different root of trust\n", schema.size());
+        dct::print("readBootstrap for shim {} has different root of trust\n", schema.size());
         exit(0);
     }
+    auto etm = rCert(root).validUntil();
     // schema is next
     schema.push_back(cb[1].first);
     // extract the identity chain of certs
     std::vector<dctCert> ic{};
     for (size_t c = 2; c < cb.size(); c++) {
+      /*  if (rCert(cb[c].first).validUntil() > etm) {
+             dct::print("readBootstrap: cert {}, position {} on chain, valid longer than its signer\n", cb[c].first.name(), c);
+            exit(0);
+        }
+        */
+        etm = rCert(cb[c].first).validUntil();
         ic.push_back(cb[c].first);     //add to
     }
     idChain.push_back(ic);  // add this identity chain to the vector
@@ -119,9 +126,9 @@ static inline certItem currentSigningPair(int i=0) {
             // new signing pair hasn't been done yet.
             // Extract the component used in the signing cert (here "sgn") from the schema in future
             signingPair.push_back( signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), certLifetime) );
-         } catch (const std::runtime_error& se)     { print("runtime error: {}\n", se.what()); }
+         } catch (const std::runtime_error& se)     { dct::print("runtime error: {}\n", se.what()); }
     } else if (std::cmp_greater(i, signingPair.size())) {
-        print ("currentSigningPair called with out-of-range id {}\n", i);
+        dct::print ("currentSigningPair called with out-of-range id {}\n", i);
         exit (0);
     }
     return signingPair[i];
@@ -141,6 +148,11 @@ static inline certItem getSigningPair( int i=0) {
              // make a signature manager of the correct type and set it up to use the identity key for signing
             auto sm{sigMgrByType(root.getSigType())};
             sm.ref().updateSigningKey(idSecretKey[i], idChain[i].back());
+            auto now = std::chrono::system_clock::now();
+            if ( rCert(idChain[i].back()).validUntil() <= now) {
+                dct::print("getSigningPair called with expired identity cert");
+                exit(0);
+            }
             // makes a public/secret key pair, then  a cert with public key and signs it
             // the signing cert has a distinguishing component appended to the identity cert's unique name
             // (the last four components of a DCT cert name are pre-defined)
@@ -148,10 +160,13 @@ static inline certItem getSigningPair( int i=0) {
             // Not currently a way to separately set the validity period start time (that is, starts now) in the library
             // Extract the component used in the signing cert (here "sgn") from the schema in future
             // If the last element (the start time) is not set, it uses now
-           return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), certLifetime+certOverlap, std::chrono::system_clock::now()-certOverlap/2);
-         } catch (const std::runtime_error& se)     { print("getSigningPair runtime error: {}\n", se.what()); }
+            // Don't let signing cert expire after the identity that signs it
+            //auto lt = certLifetime+certOverlap > rCert(idChain[i].back()).validUntil() - now ?  rCert(idChain[i].back()).validUntil() - now : certLifetime+certOverlap;
+            //return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), lt, now-certOverlap/2);
+            return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), certLifetime+certOverlap, now-certOverlap/2);
+         } catch (const std::runtime_error& se)     { dct::print("getSigningPair runtime error: {}\n", se.what()); }
     } else  {
-        print ("getSigningPair called with out-of-range identity chain id {}\n", i);
+        dct::print ("getSigningPair called with out-of-range identity chain id {}\n", i);
         exit (0);
     }
     return certItem{};

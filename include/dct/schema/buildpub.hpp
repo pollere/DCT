@@ -53,15 +53,15 @@ template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 template<>
-struct fmt::formatter<dct::paramVal> {
+struct dct::formatter<dct::paramVal> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
         return ctx.end();
     }
     auto format(const dct::paramVal& v, format_context& ctx) const -> format_context::iterator {
         return std::visit(overloaded {
-            [&](const std::monostate&) { return fmt::format_to(ctx.out(), "(empty)"); },
-            [&](const auto& val) { return fmt::format_to(ctx.out(), "{}", val); },
+            [&](const std::monostate&) { return dct::format_to(ctx.out(), "(empty)"); },
+            [&](const auto& val) { return dct::format_to(ctx.out(), "{}", val); },
         }, v);
     }
 };
@@ -86,7 +86,7 @@ struct pubBldr {
     // make a 'builder' for pub 'pub' of binary schema 'bs' using certificate store 'cs'.
     pubBldr(const bSchema& bs, certStore& cs, bTok pub) : bs_{bs}, cs_{cs} {
         pidx_ = bs_.findPub(pub);
-        if (pidx_ < 0) throw schema_error(format("pub {} not found", pub));
+        if (pidx_ < 0) throw schema_error(dct::format("pub {} not found", pub));
         makePubTmplts(findCerts());
     }
     // internal struct and utility definitions
@@ -98,7 +98,7 @@ struct pubBldr {
         using std::unordered_map<bTok,compidx>::unordered_map;
         compidx operator[](bTok key) const {
             if (const auto& v = find(key); v != end()) return v->second;
-            throw schema_error(format("no {} parameter for pub", key));
+            throw schema_error(dct::format("no {} parameter for pub", key));
         }
     };
 
@@ -112,7 +112,7 @@ struct pubBldr {
         } else if (c == SC_ANON) {
             res = "_";
         } else {
-            res = format("{:02x}", c);
+            res = dct::format("{:02x}", c);
         }
         return res;
     }
@@ -170,7 +170,7 @@ struct pubBldr {
     // table and used to back tok.
     bComp newTok(bTok ntok) {
         bComp t = ptok_.size();
-        if (t > SC_VALUE) throw schema_error(format("no room for token {}", ntok));
+        if (t > SC_VALUE) throw schema_error(dct::format("no room for token {}", ntok));
         bTok tok{};
         if (auto p = bs_.stab_.find(ntok); p == std::string::npos) {
             // add to pub-specific strings
@@ -203,7 +203,7 @@ struct pubBldr {
         for (const auto& [cert1, comp1, cert2, comp2] : bs_.cor_[cor]) {
             if (cert1 == idx && c == comp1) return findOrAddTok(cert[cert2-1][comp2].toSv());
         }
-        throw schema_error(format("no corespondence for {:02x}({})", c, tag_[typeValue(c)]));
+        throw schema_error(dct::format("no corespondence for {:02x}({})", c, tag_[typeValue(c)]));
     }
 
     int exists(const pTmplt& pt) const noexcept {
@@ -321,8 +321,8 @@ struct pubBldr {
 
     // common routine for checking and adding one parameter value 'val' at component index 'c' of 'par'
     void doOneParam(Params& par, compidx c, paramVal val) {
-        if (c >= parmbm_.size() || !parmbm_[c]) throw schema_error(format("component {} isn't a parameter", c));
-        if (par[c].index() != 0)  throw schema_error(format("param {} set twice", c));
+        if (c >= parmbm_.size() || !parmbm_[c]) throw schema_error(dct::format("component {} isn't a parameter", c));
+        if (par[c].index() != 0)  throw schema_error(dct::format("param {} set twice", c));
         par[c] = val;
     }
 
@@ -352,12 +352,12 @@ struct pubBldr {
                             [&res](timeVal val) { return res / val; },
                             [&res](uint64_t val) { return res / val; },
                         }, par[typeValue(c)]);
-        if (!isCall(c)) throw schema_error(format("invalid comp {} in template", c));
+        if (!isCall(c)) throw schema_error(dct::format("invalid comp {} in template", c));
         // handle 'call()' ops
         c = typeValue(c);
         if (c == 0) return res / std::chrono::system_clock::now();
         if (c == 1) return res / sysID();
-        throw schema_error(format("invalid call {} in template", c));
+        throw schema_error(dct::format("invalid call {} in template", c));
     }
     crName fillTmplt(const Params& par, pTmplt pt) const {
         crName res{};
@@ -365,7 +365,7 @@ struct pubBldr {
         return crName(res);
     }
     bComp parToTok(const Params& par, compidx c) const {
-        auto pval = format("{}", par[c]);
+        auto pval = dct::format("{}", par[c]);
         if (const auto v = bs_.tm_.find(pval); v != bs_.tm_.end()) return v->second;
         return maxTok;
     }
@@ -374,7 +374,7 @@ struct pubBldr {
         auto cv = pt.tmplt_[c];
         if (isParam(cv)) return true;     // template doesn't constrain value
         if (auto v = parToTok(par, c); v == cv) return true; // value must match template
-        if (isIndex(cv)) return ptok_[typeValue(cv)] == format("{}", par[c]); // value must match cor
+        if (isIndex(cv)) return ptok_[typeValue(cv)] == dct::format("{}", par[c]); // value must match cor
         return false;
     }
     // check that all literal params in the template match the correponding user pars
@@ -399,7 +399,7 @@ struct pubBldr {
         for (auto c = 0u; c < par.size(); c++) {
             if (parmbm_[c] && par[c].index() == 0) {
                 if (c >= pdefault_.size() || pdefault_[c].index() == 0)
-                    throw schema_error(format("param {} missing", bs_.tok_[tag_[c]]));
+                    throw schema_error(dct::format("param {} missing", bs_.tok_[tag_[c]]));
                 par[c] = pdefault_[c];
             }
         }

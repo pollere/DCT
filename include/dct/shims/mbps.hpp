@@ -130,7 +130,7 @@ struct mbps
     void connect(connectCb&& scb)
     {
         m_connectCb = std::move(scb);
-        m_uniqId = format("{}", rName(m_pb.pubVal("#chainInfo")));
+        m_uniqId = dct::format("{}", rName(m_pb.pubVal("#chainInfo")));
 
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {

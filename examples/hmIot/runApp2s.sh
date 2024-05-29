@@ -11,8 +11,8 @@ members=(gate frontdoor backdoor bob)
 killall app2
 # DCT_DEFAULT_IF=en0
 # export DCT_DEFAULT_IF
-# DCT_MULTICAST_ADDR=ff02::1234
-# export DCT_MULTICAST_ADDR
+DCT_MULTICAST_ADDR=ff01::1234
+export DCT_MULTICAST_ADDR
 for mbr in ${members[@]}; do
   ./app2 -n 10 bundles/$mbr.bundle &
   echo -n " $mbr"

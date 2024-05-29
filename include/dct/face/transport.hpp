@@ -70,6 +70,7 @@ struct Transport {
      * space are required leaving at least 1400 for payload.
      */
     static constexpr size_t max_pkt_size = 8192;
+    bool unicast_ = false;
     using onRcv = std::function<void(const uint8_t* pkt, size_t len)>;
     using onConnect = std::function<void()>;
 
@@ -98,6 +99,8 @@ struct Transport {
     virtual void close() = 0;
     virtual void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) = 0;
 
+    bool unicast() { return unicast_; }
+
     /*
      * semantics of 'send' is that it takes a container (*not* a view), steals
      * its contents and async sends them. Since the contents have to stay around
@@ -105,11 +108,12 @@ struct Transport {
      * lambda so they'll be destructed when the async op completes.
      */
     void send(auto&& v) {
-        if (v.size() > max_pkt_size) throw runtime_error( "send: packet too big");
-        send_pkt(v.data(), v.size(),
+        size_t len = v.size() * sizeof(v[0]);
+        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
+        send_pkt((const uint8_t*)v.data(), len,
                 [buf = std::move(v)](const boost::system::error_code& ec, size_t) {
                     if (ec.failed() && ec.value() != ECONNREFUSED)
-                        //throw runtime_error(format("send failed: {}", ec.message()));
+                        //throw runtime_error(dct::format("send failed: {}", ec.message()));
                         print("send failed: {}", ec.message());
                 });
     }
@@ -141,7 +145,7 @@ struct TransportUdp : Transport {
         sock_.async_receive(asio::buffer(rcvbuf_),
                 [this](boost::system::error_code ec, std::size_t len) {
                     if (ec.failed() && ec.value() != ECONNREFUSED)
-                            throw runtime_error(format("recv failed: {}", ec.message()));
+                            throw runtime_error(dct::format("recv failed: {}", ec.message()));
                     //if (ec.failed()) print("recv failed: {} len {}\n", ec.message(), len);
                     if (len > 0) rcb_(rcvbuf_.data(), len);
                     issueRead();
@@ -289,6 +293,7 @@ struct TransportUdpA final : TransportUdp {
 
     TransportUdpA(std::string_view host, std::string_view port, asio::io_context& ioc,
             onRcv&& rcb, onConnect&& ccb) : TransportUdp(ioc, std::move(rcb), std::move(ccb)) {
+        unicast_ = true;
         auto dst = udp::resolver(ioc).resolve(host, port, udp::resolver::query::numeric_service);
         asio::connect(sock_, dst.begin());
     }
@@ -325,6 +330,7 @@ struct TransportUdpP final : TransportUdp {
 
     TransportUdpP(uint16_t port, asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : TransportUdp(port, ioc, std::move(rcb), std::move(ccb)), acceptor_{ioc, listen_} {
+        unicast_ = true;
         acceptor_.set_option(udp::socket::reuse_address(true));
         sock_.open(listen_.protocol());
         sock_.set_option(udp::socket::reuse_address(true));
@@ -353,7 +359,7 @@ struct TransportUdpP final : TransportUdp {
     void issueInitialRead() {
         acceptor_.async_receive_from(asio::buffer(rcvbuf_), sender_,
                 [this](boost::system::error_code ec, std::size_t len) {
-                    if (ec) throw runtime_error(format("receive_from failed: {} len {}", ec.message(), len));
+                    if (ec) throw runtime_error(dct::format("receive_from failed: {} len {}", ec.message(), len));
                     startSession();
                     rcb_(rcvbuf_.data(), len);
                     issueInitialRead();
@@ -388,7 +394,7 @@ struct TransportTcp : Transport {
     constexpr std::chrono::milliseconds tts() const noexcept final  { return std::chrono::milliseconds(1500/(1000/8)); }
 
     TransportTcp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
-        : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
+        : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { unicast_ = true;}
 
     void close() {
         roff_ = 0;
@@ -457,7 +463,7 @@ struct TransportTcp : Transport {
                             [len, this, cb = std::move(cb)](const boost::system::error_code& ec, std::size_t sent) {
                                 if (ec.failed()) {
                                     if (ec.value() != EPIPE && ec.value() != ECONNRESET)
-                                        throw std::runtime_error(format("send failed: {}", ec.message()));
+                                        throw std::runtime_error(dct::format("send failed: {}", ec.message()));
                                     restart(); // try to reconnect
                                     return;
                                 }
@@ -472,7 +478,7 @@ struct TransportTcpA final : TransportTcp {
 
     void on_connect(const boost::system::error_code& ec) {
         if (ec.failed()) {
-            if (ec.value() != ECONNREFUSED) throw runtime_error(format("connect failed: {}", ec.message()));
+            if (ec.value() != ECONNREFUSED) throw runtime_error(dct::format("connect failed: {}", ec.message()));
             restart();
             return;
         }
@@ -488,7 +494,7 @@ struct TransportTcpA final : TransportTcp {
             onRcv&& rcb, onConnect&& ccb) : TransportTcp(ioc, std::move(rcb), std::move(ccb)) {
         boost::system::error_code ec{};
         auto dst = tcp::resolver(ioc).resolve(host, port, tcp::resolver::query::numeric_service, ec);
-        if (ec.failed()) throw runtime_error(format("resolve {} failed: {}", host, ec.message()));
+        if (ec.failed()) throw runtime_error(dct::format("resolve {} failed: {}", host, ec.message()));
         peer_ = dst.begin()->endpoint(); //XXX maybe try entire list?
     }
 
@@ -510,7 +516,7 @@ struct TransportTcpP final : TransportTcp {
 
     void doAccept() {
         acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
-            if (ec.failed()) throw std::runtime_error(format("accept failed: {}", ec.message()));
+            if (ec.failed()) throw std::runtime_error(dct::format("accept failed: {}", ec.message()));
 
             startSession(socket);;
         });
@@ -563,7 +569,7 @@ static Transport& transport(std::string_view addr, asio::io_context& ioc,
     if (sep == addr.npos) {
         uint16_t port{};
         std::from_chars(addr.data(), addr.data()+addr.size(), port);
-        if (port == 0) throw runtime_error(format("invalid listen port {}", addr));
+        if (port == 0) throw runtime_error(dct::format("invalid listen port {}", addr));
         if (!isUdp) return *new TransportTcpP(port, ioc, std::move(rcb), std::move(ccb));
         return *new TransportUdpP(port, ioc, std::move(rcb), std::move(ccb));
     }

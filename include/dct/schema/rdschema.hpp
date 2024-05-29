@@ -62,7 +62,7 @@ struct rdSchema {
         } else if (c == SC_ANON) {
             res = "_";
         } else {
-            res = format("{:02x}", c);
+            res = dct::format("{:02x}", c);
         }
         return res;
     }
@@ -76,7 +76,7 @@ struct rdSchema {
     }
     std::string formatNameVec(const std::vector<bName>& nms) {
         std::string res{};
-        for (int n = nms.size(), i = 0; i < n; i++) res += format(" {}: {}\n", i, formatName(nms[i]));
+        for (int n = nms.size(), i = 0; i < n; i++) res += dct::format(" {}: {}\n", i, formatName(nms[i]));
         return res;
     }
 
@@ -103,7 +103,7 @@ struct rdSchema {
     }
     void checkTLV(sTLV typ) {
         auto x = getByte();
-        if (x != uint8_t(typ)) throw schema_error(format("wrong tlv {} not {}", x, uint8_t(typ)));
+        if (x != uint8_t(typ)) throw schema_error(dct::format("wrong tlv {} not {}", x, uint8_t(typ)));
     }
     int checkHDR(sTLV typ) {
         checkTLV(typ);
@@ -282,7 +282,7 @@ struct rdSchema {
 
                 // 'cor' is an index of the cert chain component correspondences that must hold
                 // for a publication with this discrim.
-                if (cor >= bs_.cor_.size() && cor > 0) throw schema_error(format("invalid discrim cor index {}", cor));
+                if (cor >= bs_.cor_.size() && cor > 0) throw schema_error(dct::format("invalid discrim cor index {}", cor));
                 return n;
             });
     }
@@ -305,7 +305,7 @@ struct rdSchema {
                 if (std::log2p1(disc) - 1u >= bs_.discrim_.size()) throw schema_error("invalid pub discrim index");
 #else
                 if (std::bit_width(disc) - 1u >= bs_.discrim_.size())
-                    throw schema_error(format("invalid pub discrim index {} ({:x}) >= {}",
+                    throw schema_error(dct::format("invalid pub discrim index {} ({:x}) >= {}",
                                 std::bit_width(disc) - 1u, disc, bs_.discrim_.size()));
 #endif
 

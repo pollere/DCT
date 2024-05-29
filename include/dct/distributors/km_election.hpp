@@ -46,9 +46,8 @@
  * epoch are ignored.  Current epoch publications are ordered by km value
  * then thumbprint and the highest value announced wins the election.
  * The election winner increments the epoch and sends a 'finalize' publication
- * to end the election. The winner republishes this announcement at a
- * fixed keepalive interval so late joiners can learn the election outcome.
- * The epoch semantics and keepalive also allow for keyMaker failure detection
+ * to end the election.
+ * The epoch semantics also allow for keyMaker failure detection
  * and Paxos-like re-election proposals but this has not been implemented yet.
  *
  * All candidates send their initial proposal with an epoch of 0.  If they receive
@@ -90,7 +89,8 @@ struct kmElection {
     // This is called when the local election timer times out. If this instance didn't win
     // (signaled by priority_ <= 0) nothing more is done. Otherwise, the winning instance
     // increments epoch_ then sends an 'elected' pub to tell other candidate KMs that it
-    // has won. It then sends a group key list to everyone which will take them out of init state.
+    // has won. It then sends an empty group key list with its own tp to everyone which
+    // will cause them to send member requests.
     void electionDone() {
         if (elecDone_) return;
         elecDone_ = true;
@@ -128,7 +128,7 @@ struct kmElection {
 
             if (std::cmp_greater(priority_, pri)) return; // candidate loses
             if (std::cmp_greater(pri, priority_) || tp > ourTP_) priority_ = -priority_; // we lose
-            //print("cand {:02x} pri {}  us {:02x} {}\n", fmt::join(std::span(tp).first(4),""), pri,
+            //dct::print("cand {:02x} pri {}  us {:02x} {}\n", fmt::join(std::span(tp).first(4),""), pri,
             //      fmt::join(std::span(ourTP_).first(4),""), priority_);
         } catch (std::runtime_error& ex) { return; }
     }

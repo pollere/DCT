@@ -22,26 +22,43 @@
  *  More information on DCT is available from info@pollere.net
  */
 
+// defining DCT_USE_STD_FORMAT will attempt to use the c++ standard libraries
+// 'format' routines instead of the github.com/fmtlib/fmt equivalents.
+// Note that as of April 2024 the clang standard library <format> was too incomplete
+// to compile DCT.
+#if DCT_USE_STD_FORMAT
+#include <format>
+
+namespace dct {
+    using std::format;
+    using std::format_to;
+    using std::formatter;
+
+template <typename... T>
+inline void print(std::format_string<T...> fmt, T&&... args) {
+    std::cout << format(fmt, args...);
+}
+
+} // namespace dct
+#else
+
 // use local version of c++20 formatted output until std library catches up.
 // Download fmt from https://fmt.dev/latest/index.html or https://github.com/fmtlib/fmt
 
-// As of June 2021, get spurious warnings when compiling fmt because
-// std::codecvt is deprecated but there is no standardized replacement.
-// Theses pragmas are to prevent the warning from this.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-
 #define FMT_HEADER_ONLY
 #include "fmt/format.h"
-#include "fmt/compile.h"
 #include "fmt/ostream.h"
 #include "fmt/ranges.h"
 #include "fmt/chrono.h"
 #include "fmt/color.h"
 
-#pragma GCC diagnostic pop
+namespace dct {
+    using fmt::format;
+    using fmt::format_to;
+    using fmt::formatter;
+    using fmt::print;
+} // namespace dct
 
-using fmt::print;
-using fmt::format;
+#endif
 
 #endif //FORMAT_HPP

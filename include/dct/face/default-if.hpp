@@ -95,7 +95,7 @@ static inline auto getIp6Addr(std::string_view ifnm) {
         if (ifa->ifa_addr->sa_family != AF_INET6) continue;
         break;
     }
-    if (! ifa) throw std::runtime_error(format("error: interface {} not found", ifnm));
+    if (! ifa) throw std::runtime_error(dct::format("error: interface {} not found", ifnm));
     auto saddr = *(struct sockaddr_in6*)(ifa->ifa_addr);
     freeifaddrs(ifaList);
     return saddr;

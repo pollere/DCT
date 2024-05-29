@@ -43,7 +43,7 @@ inline static const std::string& sysID() noexcept {
         if (gethostname(&h[0], sizeof(h)-1) != 0) {
             h[0] = h[1] = '?'; h[2] = 0;
         }
-        sysid = format("p{}@{}", getpid(), h);
+        sysid = dct::format("p{}@{}", getpid(), h);
     }
     return sysid;
 }

@@ -52,7 +52,7 @@ namespace dct {
 using runtime_error = std::runtime_error;
 
 struct AsIO {
-    using onRcv = std::function<void(const uint8_t* pkt, size_t len, uint16_t sport)>;
+    using onRcv = std::function<void(const uint8_t* pkt, size_t len, uint16_t sport, TimePoint when)>;
 
     boost::asio::ip::udp::endpoint listen_;
     boost::asio::ip::udp::endpoint sender_; // most recent received packet's sender
@@ -92,8 +92,8 @@ struct AsIO {
     void issueRead() {
         rsock_.async_receive_from(boost::asio::buffer(rcvbuf_), sender_,
                 [this](boost::system::error_code ec, std::size_t len) {
-                    if (ec) throw runtime_error(format("receive_from failed: {} len {}", ec.message(), len));
-                    rcb_(rcvbuf_.data(), len, sender_.port());
+                    if (ec) throw runtime_error(dct::format("receive_from failed: {} len {}", ec.message(), len));
+                    rcb_(rcvbuf_.data(), len, sender_.port(), std::chrono::system_clock::now());
                     issueRead();
                 });
     }

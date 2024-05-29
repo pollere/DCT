@@ -178,7 +178,7 @@ struct semantics {
                     auto val = tmpl[c];
                     tmpl[c] = tags[c];
                     dmap[{tuniq.add(tmpl),c,signers}].set(val.id()); 
-                    //print("{} {} {} : {}\n", to_string(tmpl), c, signers, to_string(val));
+                    //dct::print("{} {} {} : {}\n", to_string(tmpl), c, signers, to_string(val));
                     continue;
                 }
                 // not part of a set. check for a high entropy literal parameter
@@ -188,12 +188,12 @@ struct semantics {
                         });
                 if (emax > 0) {
                     dmap[{tuniq.add(var),emax,signers}].reset();
-                    //print("{} {} {} : ({})\n", to_string(var), emax, signers, to_string(var[emax]));
+                    //dct::print("{} {} {} : ({})\n", to_string(var), emax, signers, to_string(var[emax]));
                     continue;
                 }
                 // nothing distinguishing
                 dmap[{tuniq.add(var),bschema::maxTok,signers}].reset();
-                //print("{} {} {} : nothing\n", to_string(var), "-", signers);
+                //dct::print("{} {} {} : nothing\n", to_string(var), "-", signers);
             }
         }
         drv_.discrim_.emplace(parent, std::move(dmap));
@@ -204,23 +204,23 @@ struct semantics {
         auto tags = drv_.tags_.at(pri).tags();
         for (const auto& [tps,cs] : drv_.discrim_.at(pri)) {
             const auto& [t, p, s] = tps;
-            print("    {} {{ ", to_string(drv_.templates_[t]));
-            for (auto chn : s) print("{} ", to_string(drv_.chains()[chn][1]));
-            print("}}\n      [ ");
+            dct::print("    {} {{ ", to_string(drv_.templates_[t]));
+            for (auto chn : s) dct::print("{} ", to_string(drv_.chains()[chn][1]));
+            dct::print("}}\n      [ ");
             if (p == bschema::maxTok) {
-                print("*");
+                dct::print("*");
             } else {
-                print("{}", to_string(tags[p]));
+                dct::print("{}", to_string(tags[p]));
             }
             if (p != bschema::maxTok && cs.count() == 0) {
-                print(": ({})", to_string(drv_.templates_[t][p].id()));
+                dct::print(": ({})", to_string(drv_.templates_[t][p].id()));
             } else if (cs.count() > 0) {
                 cs.for_each([this,sep=": "](sCompId b) mutable {
-                        print("{}{}", sep, to_string(b));
+                        dct::print("{}{}", sep, to_string(b));
                         sep = " | ";
                     });
             }
-            print(" ]\n");
+            dct::print(" ]\n");
         }
     }
 
@@ -253,11 +253,11 @@ struct semantics {
             if (drv_.isExported(cert)) continue;
 
             if (nms.size() == 0) {
-                print("cert {} undefined\n", drv_.to_string(cert));
+                dct::print("cert {} undefined\n", drv_.to_string(cert));
                 continue;
             }
             if (nms.size() > 1) {
-                print("cert {} multiply ({}) defined: {}\n", drv_.to_string(cert), nms.size(), drv_.to_string(nms));
+                dct::print("cert {} multiply ({}) defined: {}\n", drv_.to_string(cert), nms.size(), drv_.to_string(nms));
                 continue;
             }
             needed.emplace(cert);
@@ -266,14 +266,14 @@ struct semantics {
         for (const auto& cert : drv_.certDag_.topo()) {
             if (! needed.contains(cert)) continue;
             const auto& nm = drv_.certs_.at(cert)[0];
-            print("  cert {}: {}\n", to_string(cert), to_string(nm));
+            dct::print("  cert {}: {}\n", to_string(cert), to_string(nm));
         }
         std::cout << '\n';
     }
 
     void printChain(int indx) const {
         const auto chain = drv_.chains_[indx];
-        print("    chain {}: {}", indx, to_string(chain[0]));
+        dct::print("    chain {}: {}", indx, to_string(chain[0]));
         for (size_t i = 1, n = chain.size(); i < n; ++i) {
             std::cout << " <= " << to_string(chain[i]);
         }
@@ -281,7 +281,7 @@ struct semantics {
             // print component corespondences
             std::cout << "\n              ";
             for (const auto& [cert1,comp1,cert2,comp2] : drv_.corespondences_[indx]) {
-                print("  {}[{}]=={}[{}]", to_string(drv_.chains_[indx][cert1]), comp1,
+                dct::print("  {}[{}]=={}[{}]", to_string(drv_.chains_[indx][cert1]), comp1,
                       to_string(drv_.chains_[indx][cert2]), comp2);
             }
         }
@@ -331,20 +331,20 @@ struct semantics {
     void addCorsToMap(auto cert, const auto& certnm, auto& cm) const {
         const sName& nm = drv_.certs_.at(certnm)[0];
         const sName& tags = cert > 0 && drv_.tags_.contains(certnm)?  drv_.tags_.at(certnm).tags() : nm;
-        //print("{} {}:\n nm  {}\n tags {} : ", cert, to_string(certnm), to_string(nm), to_string(tags));
+        //dct::print("{} {}:\n nm  {}\n tags {} : ", cert, to_string(certnm), to_string(nm), to_string(tags));
 
         for (size_t comp = 0, n = tags.size(); comp < n; comp++) {
             const auto c = tags[comp];
             if (isVar(c)) {
                 cm.emplace(c, corComp{ cert, comp });
-                //print(" {}", to_string(c));
+                //dct::print(" {}", to_string(c));
             }
             if (c != nm[comp] && isVar(nm[comp])) {
                 cm.emplace(nm[comp], corComp{ cert, comp });
-                //print(" +{}", to_string(nm[comp]));
+                //dct::print(" +{}", to_string(nm[comp]));
             }
         }
-        //print("\n");
+        //dct::print("\n");
     }
 
     // record the potential cor components of all the certs in 'chain'

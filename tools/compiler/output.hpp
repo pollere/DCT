@@ -42,7 +42,7 @@ using namespace bschema;
 // Lengths >= 64K are not allowed.
 static inline void encodeLen(std::ostream& os, int len) {
     if (len < 0 || len >= (1 << 16)) {
-        print("-error: invalid tlv length {}\n", len);
+        dct::print("-error: invalid tlv length {}\n", len);
         abort();
     }
     if (len >= 253) {
@@ -149,7 +149,7 @@ struct schemaOut {
         if (c.isCall() || c.isValid() || c.isIndex()) return 0;
         auto s = bareString(c);
         if (s2c_.contains(s)) {
-            if (s2c_.at(s) != c) print("mult types for {}: {} & {}\n", s, s2c_.at(s), c);
+            if (s2c_.at(s) != c) dct::print("mult types for {}: {} & {}\n", s, s2c_.at(s), c);
             return 1;
         } else {
             s2c_[s] = c;
@@ -230,7 +230,7 @@ struct schemaOut {
             ++n;
         }
         if (drv_.verbose_ >= V_FULL) {
-            print("{} strings, {} bytes ({} overlaps, {} bytes in stab)\n", n, b,
+            dct::print("{} strings, {} bytes ({} overlaps, {} bytes in stab)\n", n, b,
                     n - u, stab_.size());
         }
         // tokens need to be created in the ranked order that 'ss' was
@@ -246,13 +246,13 @@ struct schemaOut {
         for (uint8_t n = nm.size(), i = 0; i < n; i++) {
             if (c == nm[i]) return i;
         }
-        print("error: no token {} in name {}\n", drv_.symtab().to_string(c), drv_.to_string(nm));
+        dct::print("error: no token {} in name {}\n", drv_.symtab().to_string(c), drv_.to_string(nm));
         abort();
     }
     uint8_t rawTok(const sComp c) const noexcept {
         auto s = bareString(c);
         if (! tok_.m_.contains(s)) {
-            print("error: token table missing token \"{}\"\n", s);
+            dct::print("error: token table missing token \"{}\"\n", s);
             abort();
         }
         return tok_[s];
@@ -266,7 +266,7 @@ struct schemaOut {
         auto oc = rawTok(c);
         if (c.isLit() || drv_.isParam(c)) return oc;
         if (!c.isStr()) {
-            print("error: unexpected token type {}\n", drv_.symtab().to_string(c));
+            dct::print("error: unexpected token type {}\n", drv_.symtab().to_string(c));
             abort();
         }
         // must be a cor - encode its position in the name
@@ -287,11 +287,11 @@ struct schemaOut {
             if (drv_.isExported(cert)) continue; // pub, not a cert
  
             if (nms.size() == 0) {
-                print("cert {} undefined\n", drv_.to_string(cert));
+                dct::print("cert {} undefined\n", drv_.to_string(cert));
                 continue;
             }
             if (nms.size() > 1) {
-                print("cert {} multiply ({}) defined: {}\n", drv_.to_string(cert), nms.size(), drv_.to_string(nms));
+                dct::print("cert {} multiply ({}) defined: {}\n", drv_.to_string(cert), nms.size(), drv_.to_string(nms));
                 continue;
             }
             needed.emplace(cert);
@@ -389,7 +389,7 @@ struct schemaOut {
                 }
                 auto c = chain_[ch];
                 if (c > sizeof(cbm)*8) {
-                    print("error: chain index too large ({} when max is {})\n", c, sizeof(cbm)*8);
+                    dct::print("error: chain index too large ({} when max is {})\n", c, sizeof(cbm)*8);
                     abort();
                 }
                 cbm |= 1ul << c;
@@ -439,7 +439,7 @@ struct schemaOut {
         discVals_.writex(os);
         discrim_.write(os);
         pub_.write(os);
-        print("binary schema {} is {} bytes\n", drv_.output(), os.str().size());
+        dct::print("binary schema {} is {} bytes\n", drv_.output(), os.str().size());
 
 #ifdef notyet
         if (drv_.certInstall_) {

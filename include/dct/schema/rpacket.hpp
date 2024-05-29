@@ -156,7 +156,7 @@ template<> struct std::hash<dct::rPrefix> {
  * leave it then re-enter it after these defs.
  */
 
-template<> struct fmt::formatter<dct::rPrefix> {
+template<> struct dct::formatter<dct::rPrefix> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
         return ctx.end();
@@ -169,36 +169,36 @@ template<> struct fmt::formatter<dct::rPrefix> {
             if (blk.isType(dct::tlv::Timestamp)) {
                 auto ts = blk.toTimestamp();
                 if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
-                    out = fmt::format_to(out, "/@{:%H:%M:%S}", ts.time_since_epoch());
+                    out = dct::format_to(out, "/@{:%T}", ts);
                 } else {
-                    out = fmt::format_to(out, "/{:%g-%m-%d@%R}", ts);
+                    out = dct::format_to(out, "/{:%g-%m-%d@%T}", ts);
                 }
             } else if (np(s)) {
                 // if there are any non-printing characters, format as hex. Otherwise format as a string.
                 //XXX look for 'tagged' timestamps (should change to TLV and get rid of this)
                 if (s.size() > 10) {
-                    out = fmt::format_to(out, "/^{:02x}..", fmt::join(s.begin(), s.begin()+8, ""));
+                    out = dct::format_to(out, "/^{:02x}..", fmt::join(s.begin(), s.begin()+8, ""));
                 } else if (s.size() == 9 && s[0] == 0xfc && s[1] == 0) {
                     auto us = ((uint64_t)s[2] << 48) | ((uint64_t)s[3] << 40) | ((uint64_t)s[4] << 32) |
                               ((uint64_t)s[5] << 24) | ((uint64_t)s[6] << 16) | ((uint64_t)s[7] << 8) | s[8];
                     auto ts = std::chrono::system_clock::time_point(std::chrono::microseconds(us));
                     if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
-                        out = fmt::format_to(out, "/@{:%H:%M:%S}", ts.time_since_epoch());
+                        out = dct::format_to(out, "/@{:%T}", ts);
                     } else {
-                        out = fmt::format_to(out, "/{:%g-%m-%d@%R}", ts);
+                        out = dct::format_to(out, "/{:%g-%m-%d@%T}", ts);
                     }
                 } else {
-                    out = fmt::format_to(out, "/^{:02x}", fmt::join(s, ""));
+                    out = dct::format_to(out, "/^{:02x}", fmt::join(s, ""));
                 }
             } else {
-                out = fmt::format_to(out, "/{}", std::string_view((char*)s.data(), s.size()));
+                out = dct::format_to(out, "/{}", std::string_view((char*)s.data(), s.size()));
             }
         }
         return out;
     }
 };
 
-template<> struct fmt::formatter<dct::rName> {
+template<> struct dct::formatter<dct::rName> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator {
         //if (ctx.begin() != ctx.end()) throw_format_error("invalid format");
         return ctx.end();
@@ -320,7 +320,7 @@ struct rData : tlvParser {
 // so it can include its ordering operators
 struct iso8601 : std::array<uint8_t,15> {
     iso8601(std::chrono::system_clock::time_point tp) {
-        auto s = fmt::format("{:%G%m%dT%H%M%S}", fmt::gmtime(tp));
+        auto s = dct::format("{:%G%m%dT%H%M%S}", fmt::gmtime(tp));
         std::copy(s.begin(), s.begin()+this->size(), this->begin());
     }
     auto toTP() const {

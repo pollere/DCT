@@ -37,6 +37,6 @@ int main(int argc, char* argv[])
         auto v = dct::fileToVec(argc > 1 ? argv[1] : "/dev/stdin");
         dct::Dissect().dissect(std::cout, v);
         exit(0);
-    } catch (const std::runtime_error& e) { print(std::cerr, "- error: {}\n", e.what()); }
+    } catch (const std::runtime_error& e) { fmt::print(std::cerr, "- error: {}\n", e.what()); }
     exit(1);
 }
