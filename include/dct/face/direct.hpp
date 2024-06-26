@@ -68,11 +68,11 @@ class DirectFace {
     cSts cSts_{UNCONNECTED};
 
     auto rcvCb(auto pkt, auto len) -> void {
-        // Packet receive handler: decode and process as Interest or Data (silently ignore anything else).
-        // Since a matching interest might already be in the PIT or there might be
-        // no matching interests for a data, don't do anything heavyweight here.
+        // Packet receive handler: decode and process as cState or Data (silently ignore anything else).
+        // Since a matching cState might already be in the PST or there might be
+        // no matching cState for a Data, don't do anything heavyweight here.
         // The handle* routines validity check all the contents of the cState/cAdd but the call
-        // site here constructs the outer rInterest/rData and that can fail if the received
+        // site here constructs the outer rState/rData and that can fail if the received
         // packet length 'len' doesn't agree with the outer TLV length in 'pkt'. The try..catch
         // makes sure that packets with this error are silently ignored.
         try {
@@ -102,7 +102,7 @@ class DirectFace {
 
     constexpr auto mtu() const noexcept { return io_.mtu(); }
     constexpr auto tts() const noexcept { return io_.tts(); }
-     constexpr auto unicast() const noexcept { return io_.unicast(); }
+    constexpr auto unicast() const noexcept { return io_.unicast(); }
 
     std::shared_ptr<Timer> schedule(std::chrono::microseconds delay, TimerCb&& cb) {
         auto timer = std::make_shared<Timer>(ioContext_, delay);

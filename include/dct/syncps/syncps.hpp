@@ -2,7 +2,7 @@
 #define SYNCPS_SYNCPS_HPP
 #pragma once
 /*
- * Copyright (C) 2019-2 Pollere LLC
+ * Copyright (C) 2019-2024 Pollere LLC
  * Pollere authors at info@pollere.net
  *
  * This file is part of syncps (DCT pubsub via Collection Sync)
@@ -147,6 +147,8 @@ struct SyncPS {
         constexpr CE(Item&& i, uint8_t s) : i_{std::forward<Item>(i)}, s_{s} {}
         static constexpr uint8_t act = 1;  // 0 = expired, 1 = active
         static constexpr uint8_t loc = 2;  // 0 = from net, 2 = local
+        static constexpr uint8_t net = 0;  // 0 = from net, 2 = local
+        static constexpr uint8_t sts = act|loc;  // mask for all status bits
         auto active() const noexcept { return (s_ & act) != 0; }
         auto fromNet() const noexcept { return (s_ & (act|loc)) == act; }
         auto local() const noexcept { return (s_ & (act|loc)) == (act|loc); }
@@ -163,6 +165,11 @@ struct SyncPS {
 
         template<typename C=Item> requires hasView<C>
         constexpr auto contains(decltype(C().asView())&& c) const noexcept { return Base::contains(hashPub(c)); }
+
+        template<typename UnOp> requires hasView<Item>
+        constexpr void forEach(UnOp&& cb, decltype(Ent::s_) cond) const noexcept {
+            for (const auto& [h, e] : *(Base*)this) if ((e.s_ & Ent::sts) == (cond|Ent::act)) cb(e.i_);
+        }
 
         PubHash add(PubHash h, Item&& i, decltype(Ent::s_) s) {
             if (const auto& [it,added] = Base::try_emplace(h, std::forward<Item>(i), s); !added) return 0;
@@ -202,7 +209,7 @@ struct SyncPS {
     SigMgr& pktSigmgr_;               // cAdd packet signing and validation
     SigMgr& pubSigmgr_;             // Publication validation
     size_t maxPubSize_;                // max space in bytes available in Content of a cAdd
-     size_t maxInfoSize_;               // max space in bytes for Publication Name plus Content
+    size_t maxInfoSize_;               // max space in bytes for Publication Name plus Content
     std::chrono::milliseconds cStateLifetime_{stateLifetime};
     std::chrono::milliseconds pubLifetime_{maxPubLifetime};
     std::chrono::milliseconds pubExpirationGB_{maxPubLifetime};
@@ -234,7 +241,12 @@ struct SyncPS {
     constexpr auto maxInfoSize() const noexcept { return maxInfoSize_; }
     constexpr auto mtu() const noexcept { return face_.mtu(); }
     constexpr auto tts() const noexcept { return face_.tts(); }
-    auto unicast() { return face_.unicast(); }
+    constexpr auto unicast() const noexcept { return face_.unicast(); }
+
+    template<typename UnOp>
+    constexpr void forFromNet(UnOp&& cb) const noexcept { pubs_.forEach(std::forward<UnOp>(cb), CE<crData>::net); }
+    template<typename UnOp>
+    constexpr void forFromLoc(UnOp&& cb) const noexcept { pubs_.forEach(std::forward<UnOp>(cb), CE<crData>::loc); }
 
     /**
      * @brief constructor
@@ -549,7 +561,7 @@ struct SyncPS {
             if (need.size() > 0) {
                 face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
                 if (unicast()) { sendCState(); return false;}
-                else sendCStateSoon();   // only waits the small random delay - may want to increase
+                sendCStateSoon();   // only waits the small random delay - may want to increase
             }
             // Next section of code is for sending non-local origin pubs for effective meshing
             //  only set up to send others pubs if the cState is from a member who has all my local origin pubs
@@ -567,11 +579,11 @@ struct SyncPS {
 
          // tries to ship all the local origin pubs that will fit in a cAdd packet
         if (! shipCAdd(name, pv) && need.size()) {
-             // did not send Pubs but have needs from cState
-             face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-             if (unicast()) { sendCState(); return false; }
-             else sendCStateSoon();     // only waits the small random delay - may want to increase
-             return false;
+            // did not send Pubs but have needs from cState
+            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
+            if (unicast()) { sendCState(); return false; }
+            sendCStateSoon();     // only waits the small random delay - may want to increase
+            return false;
         }
         if (need.size()) {  // check if this cState had Publications I need
             face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());

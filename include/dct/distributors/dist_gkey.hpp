@@ -270,9 +270,13 @@ struct DistGKey {
 
         auto n = p.name();
         auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
-        // check if keylist is from earlier signing key of same signing identity
+        // check if keylist is from earlier signing key of my signing identity
         if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
-            if (m_keyMaker) return; // ignore if I'm still keymaker
+            if (m_keyMaker) {
+                // ignore if I'm still keymaker
+                print("ignore my {}\n", p.name());
+                return;
+            }
             // keylist from my identity when I haven't set keymaker implies I've restarted
             // (some other keymaker may have already taken over but that should get resolved eventually - do something better later)
             m_keyMaker = true;

@@ -77,9 +77,12 @@ struct DCTmodelPT final : DCTmodel  {
 
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
     void addRelayed(thumbPrint tp) { m_rlyCerts[tp] = true;}
+    const auto& keysColl() { return m_gkSync; }
 
     // ensure a publication is *structurally* valid on the outgoing DeftT
     bool isValidPub(const Publication& pub) {
+       // if (!certs().contains(dctCert::getKeyLoc(pub)))
+            // print ("DCTmodelPT::isValidPub: this DeftT's cert store does not contain signer of {}\n", pub.name());
         try {
             const auto& pubval = pv_.at(dctCert::getKeyLoc(pub));
             return pubval.matchTmplt(bs_, pub.name());  // structurally validate 'pub'
@@ -268,9 +271,8 @@ struct ptps
     /*
      * p is a complete schema compliant (structurally valid) Publication on the input Face and goes directly to the syncps
      * unless its signing cert hasn't been confirmed
-     * Use of holdKeys and holdPubs keeps from relaying distributor/msgs until their signing cert has been ackd/confirmed
-     * But there is no clean up of these data structures so if an interface of a relay goes unconnected this could eat up
-     * memory. FIgure out how to deal with this and still have the convenience of a set in the future.
+     * Use of holdPubs keeps from relaying msgs until their signing cert has been ackd/confirmed
+     * There is no clean up of this data structures. Figure out how to deal with this in the future.
      */
     void publish(Publication&& p)
     {
@@ -310,17 +312,17 @@ struct ptps
      * p is a complete schema-compliant Publication on the *input* Face
      * This is used to pass keys collection Publications
      * This allows checking of the Publication against this (outgoing) Face's schema
+     * Only called for DeftTs that are connected
      * Use of holdKeys keeps from relaying keys/msgs until their signing cert has been ackd/confirmed
      * Returns true if p was passed to gk syncps, false otherwise
      */
     bool publishGKey(Publication&& p)
     {
-    print ("ptps::publishGKey: called for {} with {}\n", relayTo(), p.name());
-      //  if (m_unackedCerts.contains(p.thumbprint())) {
-        if (!isConnected()) {       // this may put keys on hold that I won't have signers for but can clean up later
+        // print ("ptps::publishGKey: called for {} with {}\n", relayTo(), p.name());
+        if (m_unackedCerts.contains(p.thumbprint())) {  // this may put keys on hold that I won't have signers for - should clean up later
             // print ("ptps::publishGKey: placed {} on holdKeys\n", p.name());
             m_holdKeys[p.thumbprint()].emplace(std::move(p));  //creates entry if doesn't exist; emplace should copy
-            return true;    // if cert is on list has to be in my cert store so it is a known publication, just on hold
+            return true;    // if cert is on list has to be in my cert store so it is a known Publication, just on hold
         }
         return m_pb.publishKey(std::move(p));
     }
@@ -352,7 +354,7 @@ struct ptps
      * be distinguished from chains that arrived via interface of this DefTT's cert distributor and tested to
      * see if this DefTT already was relayed this chain. (Local relayed chain list could hold tps of
      * all signing certs and have 0 or "false" if locally received, but currently that is tested in
-     * basicRelay by not calling this method for chains that arrive locally
+     * relay by not calling this method for chains that arrive locally
      *
      * Although the passed in cert should be valid against the trust schema of the originating DeftT,
      * this is only useful for the case of identical trust schema for all DefTTs so is both
@@ -361,19 +363,24 @@ struct ptps
      * m_unackedCerts is for ensuring that relayed signing chains
      * get their publication confirmed before ptps sends Publications signed by those certs.
      */
-    void addRelayedChain(const rData sc, const auto& cs) {
+    bool addRelayedChain(const rData sc, const auto& cs) {
         auto tp = sc.computeTP();       
-        if (m_pb.certs().contains(tp)) return;   // have already seen this signing chain
+        if (m_pb.certs().contains(tp)) return true;   // have already seen this signing chain
+
         cs.chain_for_each(tp, [this](const auto &c) {    // for each cert on this signing chain
             auto ctp = c.computeTP();
             if (! m_pb.certs().contains(ctp)) {
                 //auto h = std::hash<tlvParser>{}(c);
-                m_pb.addRelayed(ctp);    // add to list of certs that were (solely) relayed to this DeftT
-                m_pb.addCert(c);                               // if c valid, add to certstore
-                if (m_pb.isSigningCert(c) && m_pb.certs().contains(ctp)) //check for the signing cert and if validated
-                     m_unackedCerts.emplace(ctp); // add to unacked signing certs - the cert is published with certAck cb
-            }
+                m_pb.addRelayed(ctp);    // add to list of certs that were (solely) relayed to this DeftT                
+                m_pb.addCert(c);             // if c valid, add to certstore
+                }
         });
+
+        if (m_pb.certs().contains(tp)) {     //check if the signing cert validated
+            m_unackedCerts.emplace(tp); // add to unacked signing certs - the cert is published with certAck cb
+            return true;
+        }
+        return false;
     }
 
     /*
@@ -389,6 +396,23 @@ struct ptps
                     r->addRelayedChain(c, m_pb.certs());
             }
         }
+    }
+
+    /*
+     * Pass all the active Publications in my keys/msgs collection that I received from the network to r
+     * Intended for use when a DeftT connects
+     */
+    void passGroupKeys(const auto & r) {
+        m_pb.keysColl()->forFromNet([r](const auto& p) { r->publishGKey(Publication(p)); });
+    }
+
+    /*
+     * Pass all the active Publications in my msgs collection that I received from the network to r
+     * Intended for use when a DeftT connects
+     */
+    void passMsgs(const auto & r, bool skip) {
+        if (skip) m_pb.m_sync.forFromNet([r](const auto& p) { r->publish(Publication(p)); });
+       else m_pb.m_sync.forFromNet([r](const auto& p) {  if (r->validPub(p)) r->publish(Publication(p)); });
     }
 
     // Can be used by application to schedule a cancelable timer. Note that

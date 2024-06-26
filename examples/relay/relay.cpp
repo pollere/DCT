@@ -99,7 +99,7 @@ static void msgsRecv(ptps* s, const Publication& p) {
      // print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
-            if (sp != s) {
+            if (sp != s && sp->isConnected()) {
                 if(skipValidatePubs || sp->validPub(p)) {
                     sp->publish(Publication(p));
                     // print("\trelayed to {}-{}\n",  sp->label(), sp->relayTo());
@@ -122,8 +122,9 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     try {
         for (auto sp : transList)
             if (sp != s && sp->isConnected()) {
-                // print("relay::chainRecv: {} signing chain from {}-{} to interFace {}-{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                 sp->addRelayedChain(c, cs);
+                // if (!sp->addRelayedChain(c, cs))
+                    // print("relay::chainRecv: {} signing chain from {}-{} does not validate at interFace {}-{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
             }
     } catch (const std::exception& e) { }
 }
@@ -145,7 +146,7 @@ static void keysRecv(ptps* s, const Publication& p) {
     // print("{:%M:%S} relay:{}:{}\tkeyRcv {}\n", ticks(now.time_since_epoch()), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
-            if (sp != s) {
+            if (sp != s && sp->isConnected()) {
                // print("relay::keysRecv: {} from {}-{} to interFace {}-{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                sp->publishGKey(Publication(p));
             }
@@ -241,13 +242,19 @@ int main(int argc, char* argv[])
     }
 
     // Connect each sibling transport and pass in the handler
+    // The handler will go through all the sibling transports' collections and pull out active Publications
     for (const auto s : transList) {
         try {
             s->connect([s](){
                 dct::print("relay: DeftT transport {}-{} is connected\n", s->label(), s->relayTo());
-                // "pull" valid certs from sibling transports
+                // pull certs from sibling transports by signing chains
                 for (auto sp : transList) if (sp != s) sp->passValidChains(s);
-                s->subscribe(msgsRecv);} );
+                // pull Publications in keys/msgs from sibling transports
+                for (auto sp : transList) if (sp != s) sp->passGroupKeys(s);
+                // pull Publications in msgs from sibling transports
+                for (auto sp : transList) if (sp != s) sp->passMsgs(s, skipValidatePubs);
+                s->subscribe(msgsRecv);
+                } );
         } catch (const std::exception& e) {
             std::cerr << "main: encountered exception while trying to connect transport " << s->label() << " relaying to " << s->relayTo() << " : " << e.what() << std::endl;
             exit(1);

@@ -82,7 +82,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
  */
 static void msgPubr(mbps &cm) {
     // make a message to publish
-    std::string s = format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
+    std::string s = dct::format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
 

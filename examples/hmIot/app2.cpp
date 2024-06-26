@@ -100,7 +100,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
  */
 static void msgPubr(mbps &cm) {
     // make a message to publish
-    std::string s = format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
+    std::string s = dct::format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
 
@@ -249,7 +249,7 @@ int main(int argc, char* argv[])
         /* main task for this entity */
          cm.connect([&cm]{
             auto now = std::chrono::system_clock::now();
-            print("{:%M:%S} {}:{}:{} is connected\n", ticks(now.time_since_epoch()), role, myId, myPID);
+            dct::print("{:%M:%S} {}:{}:{} is connected\n", ticks(now.time_since_epoch()), role, myId, myPID);
             if (role == "operator") {
                 cm.subscribe(msgRecv);  // single callback for all messages
                 msgPubr(cm);

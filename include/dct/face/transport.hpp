@@ -70,7 +70,6 @@ struct Transport {
      * space are required leaving at least 1400 for payload.
      */
     static constexpr size_t max_pkt_size = 8192;
-    bool unicast_ = false;
     using onRcv = std::function<void(const uint8_t* pkt, size_t len)>;
     using onConnect = std::function<void()>;
 
@@ -99,7 +98,7 @@ struct Transport {
     virtual void close() = 0;
     virtual void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) = 0;
 
-    bool unicast() { return unicast_; }
+    virtual constexpr bool unicast() const noexcept { return true; }
 
     /*
      * semantics of 'send' is that it takes a container (*not* a view), steals
@@ -162,9 +161,11 @@ struct TransportUdp : Transport {
     }
 };
 
-struct TransportMulticast : TransportUdp {
+struct TransportMulticast final : TransportUdp {
     udp::socket tsock_;
     udp::endpoint our_;
+
+    constexpr bool unicast() const noexcept { return false; }
 
     // MESHTEST>0 adds special code to test the automatic peer-to-peer meshing
     // capabilities of DeftT. It does by accumulating a sorted list of all the
@@ -293,7 +294,6 @@ struct TransportUdpA final : TransportUdp {
 
     TransportUdpA(std::string_view host, std::string_view port, asio::io_context& ioc,
             onRcv&& rcb, onConnect&& ccb) : TransportUdp(ioc, std::move(rcb), std::move(ccb)) {
-        unicast_ = true;
         auto dst = udp::resolver(ioc).resolve(host, port, udp::resolver::query::numeric_service);
         asio::connect(sock_, dst.begin());
     }
@@ -330,7 +330,6 @@ struct TransportUdpP final : TransportUdp {
 
     TransportUdpP(uint16_t port, asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : TransportUdp(port, ioc, std::move(rcb), std::move(ccb)), acceptor_{ioc, listen_} {
-        unicast_ = true;
         acceptor_.set_option(udp::socket::reuse_address(true));
         sock_.open(listen_.protocol());
         sock_.set_option(udp::socket::reuse_address(true));
@@ -394,7 +393,7 @@ struct TransportTcp : Transport {
     constexpr std::chrono::milliseconds tts() const noexcept final  { return std::chrono::milliseconds(1500/(1000/8)); }
 
     TransportTcp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
-        : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { unicast_ = true;}
+        : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
 
     void close() {
         roff_ = 0;

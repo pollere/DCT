@@ -40,7 +40,8 @@
 namespace dct {
 
 // defaults
-static constexpr size_t MAX_NAME=80; //max Name size in bytes is a function of particular schema
+static constexpr size_t MAX_NAME=80; //max Name size in bytes is determined by a particular schema
+                                                                // If not large enough or overly large, change here and recompile
 static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
 
 /* 
@@ -183,7 +184,7 @@ struct mbps
         SegCnt k = p.number("sCnt"), n = 1u;
         std::vector<uint8_t> msg{}; //for message body
         if (p.name().size() > MAX_NAME)
-            print ("mbps::receivePub: pub name size {} exceeds preset max {}\n", p.name().size(), MAX_NAME);
+            print ("mbps::receivePub: pub name size {} ({}) exceeds preset max {}\n", p.name().size(), sizeof(p.name()), MAX_NAME);
 
         auto content = p.content().rest();
         if (k == 0) { //single publication in this message
@@ -278,6 +279,17 @@ struct mbps
      * Return message id if successful, 0 otherwise.
      */
 
+    constexpr void doPublish(auto&& p, bool hasCH) {
+        if (p.name().size() > MAX_NAME) {
+            dct::print ("mbps::publish: pub name size {} exceeds  MAX_NAME value {} (update MAX_NAME)\n", p.name().size(), MAX_NAME);
+        }
+        if (hasCH) {
+            m_pb.publish(std::move(p), [this](auto p, bool s){ confirmPublication(mbpsPub(p),s); });
+            return;
+        }
+        m_pb.publish(std::move(p));
+    }
+
     MsgID publish(msgParms&& mp, std::span<const uint8_t> msg = {}, const confHndlr&& ch = nullptr)
     {
         /*
@@ -285,6 +297,7 @@ struct mbps
          * can check here for required arguments
          * msgID is an uint32_t hash of the message, incorporating ID and timestamp to make unique
          */
+        const bool hasCH = (bool)ch;
         auto size = msg.size();
         auto mts = std::chrono::system_clock::now();
         mp.emplace_back("mts", mts);
@@ -299,6 +312,7 @@ struct mbps
         crypto_generichash(h.data(), h.size(), emsg.data(), emsg.size(), NULL, 0);
         uint32_t mId = h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24;
         mp.emplace_back("msgID", mId);
+        if (ch) m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
 
         // determine number of message segments: sCnt forces n < 256,
         // iblt is sized for 80 but 64 fits in an int bitset
@@ -309,30 +323,18 @@ struct mbps
 
         // try...catch for errors in building the pub
         try {
-            if(size == 0) { //empty message body
-                if(ch)
-                    m_pb.publish(m_pb.pub({}, mp), [this](auto p, bool s) { confirmPublication(mbpsPub(p),s); });
-                else
-                    m_pb.publish(m_pb.pub({}, mp));
+            if (size == 0) { //empty message body
+                doPublish(m_pb.pub({}, mp), hasCH);
                 return mId;
             }
 
             // publish as many segments as needed
             for (auto off = 0u; off < size; off += maxContent_) {
                 auto len = std::min(size - off, maxContent_);
-                if(ch) {
-                    m_pb.publish(m_pb.pub(msg.subspan(off, len), mp),
-                                  [this](auto p, bool s) { confirmPublication(mbpsPub(p),s); });
-                } else {
-                    m_pb.publish(m_pb.pub(msg.subspan(off, len), mp));
-                }
+                doPublish(m_pb.pub(msg.subspan(off, len), mp), hasCH);
                 sCnt += 256;    //segment names differ only in sCnt
                 mp.pop_back();   //sCnt is last argument on the list
                 mp.emplace_back("sCnt", sCnt);
-            }
-
-            if(ch) {
-                m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
             }
         } catch (const std::exception& e) {
             std::cerr << "mbps::publish: " << e.what() << std::endl;
