@@ -85,7 +85,7 @@ struct mbps
     DCTmodel m_pb;
     crName m_pubpre{};        // full prefix for Publications
     std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids
-    size_t maxContent_;      //in bytes
+    size_t maxContent_;      // max number of bytes of application message per Publication
     std::unordered_map<MsgID, confHndlr> m_msgConfCb;
     MsgInfo m_pending{};    // unconfirmed published messages
     MsgInfo m_received{};   //received publications of a message
@@ -95,7 +95,8 @@ struct mbps
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr)
         : m_pb{rootCb, schemaCb, idChainCb, signIdCb, addr}, m_pubpre{m_pb.pubPrefix()}
         {
-            if ((maxContent_ = m_pb.maxInfoSize() - MAX_NAME) <= 0)
+            // Pub maxContent is bytes left after space for Pub name and the TL bytes for both Name and Content
+            if ((maxContent_ = m_pb.maxInfoSize() - (MAX_NAME + 4)) <= 0)
                 throw runtime_error("mbps: no room for Pub Content");
         }
 
