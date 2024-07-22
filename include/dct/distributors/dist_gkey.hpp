@@ -155,16 +155,17 @@ struct DistGKey {
                                                                              // if members might sleep after request could be m_keyLifetime
         }); // end of getLifetimeCb
 
-        // get our identity thumbprint, check if we're allowed to make keys,
-        // then set up our public and private signing keys.
-        m_tp = m_certs.Chains()[0];
-        updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
-         // compute space for content for the gkr Publication. Other Pubs are smaller, so gkr is worst-case
+       // compute space for content for the gkr Publication. Other Pubs are smaller, so gkr is worst-case
         m_maxContent -= m_prefix.size() + 2 +3 + 9 + 2 + 2 + 2*(4+2);    // all the components of Name
         if (m_maxContent < (sizeof(thumbPrint) + encGKeySz))
             throw ("DistGKey: not enough space in Pub Content to carry group key list");
         m_maxKR = (m_maxContent) / (sizeof(thumbPrint) + encGKeySz);
         // print ("DistGKey: maxContent is {} max num key records is {}\n", m_maxContent, m_maxKR);
+
+        // get our identity thumbprint, check if we're allowed to make keys,
+        // then set up our public and private signing keys.
+        m_tp = m_certs.Chains()[0];
+        updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
     }
 
     auto isRelay(const thumbPrint& tp) { return m_relayChk(tp).first; }    // identity 'tp' has RLY capability?
@@ -267,30 +268,31 @@ struct DistGKey {
             print("DistGKey:receiveGKeyList ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
             return;
         }
+        if (tp == m_tp) return; //signed by my signing key, ignore
 
         auto n = p.name();
         auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
-        // check if keylist is from earlier signing key of my signing identity
+        // is keylist is from earlier signing key of my signing identity?
         if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
             if (m_keyMaker) {
-                // ignore if I'm still keymaker
-                print("ignore my {}\n", p.name());
-                return;
+                if (epoch < m_KMepoch) return;   // old keylist should be ignored
+                print("DistGKey:receiveGKeyList: received key list has epoch {} and mine is {} - dup id?\n", epoch, m_KMepoch);
+                m_KMepoch = ++epoch;  // increment from prior signing key unless larger
+                makeGKey();                     // redo gklists under my current signing cert
+            } else {  // keylist from my identity when I haven't set keymaker implies I've restarted (unless two of this identity!)
+                        // (some other keymaker may have already taken over but that should get resolved eventually - do something better later)
+                m_keyMaker = true;
+                m_KMepoch = ++epoch;  // increment from prior signing key
+                m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); }); // keymakers need the member requests
+                gkeyTimeout();  //create a group key and reschedule group key creation with this  epoch and current signing cert
             }
-            // keylist from my identity when I haven't set keymaker implies I've restarted
-            // (some other keymaker may have already taken over but that should get resolved eventually - do something better later)
-            m_keyMaker = true;
-            m_KMepoch = ++epoch;
-            m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); }); // keymakers need the member requests
-            gkeyTimeout();  //create a group key and reschedule group key creation
             return;
         }
 
         if (m_keyMaker) {
             // another member claims to be a keyMaker - largest thumbPrint and most recent epoch wins
-            if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
-                // relinquish keymaker status
-                m_keyMaker = false;
+            if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {              
+                m_keyMaker = false; // relinquish keymaker status
                 m_kmtp = tp;
                 m_curKeyCT = 0;
                 m_KMepoch = epoch;
@@ -300,36 +302,46 @@ struct DistGKey {
             return;
         }
 
-        // still in m_init and not the keymaker; set this gklist sender as my keymaker, publish a membership request
-        if (m_init && !m_mrPending) {
+        // in init state and not the keymaker; set this gklist sender as my keymaker
+        if (m_init && m_KMepoch < epoch) {
             m_kmtp = tp;
             m_KMepoch = epoch;
-            publishMembershipReq();
-            return;
+            if (!m_mrPending) { // if needed, publish a membership request and return
+                publishMembershipReq();
+                return;
+            }
         }
 
         /*
-         * I am a member and have an outstanding membership request that this gklist may service.
+         * I am a member that has issued at least one membership request in the past
+         * (set m_kmtp but may or may not have received a copy of the group key)
+         * This gklist may service that request or may be an updated gk or updated keymaker
          * Parse the name and make checks to determine if this key record publication should be used.
-         * if this msg was from an earlier Key Maker epoch, ignore it. If from a later
-         * epoch, wrongEpoch will cancel any in-progress election and update our epoch.
+         * if this msg was from an earlier Key Maker epoch, test for restarted keymaker, otherwise ignore it.
          */
-        if (epoch != m_KMepoch) {
-            if (epoch < m_KMepoch) { // XXX change this when re-elections supported
+        if (tp == m_kmtp) {  //signed by my keymaker's signing key
+            if (epoch != m_KMepoch) { // keymakers bump epoch when they update sk pairs, so makes no sense
                 print("DistGKey:receiveGKeyList  keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
-                return;
+                return; // probably should abort
             }
-            m_KMepoch = epoch;
-            m_kmtp.fill(0);     //new epoch, reset my record of keymaker tp so I'll change km below
+        } else if (m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
+            // same keymaker identity, different signing key could be updated key or restart of same keymaker
+            uint64_t pt = std::chrono::duration_cast<std::chrono::microseconds>(p.name().lastBlk().toTimestamp().time_since_epoch()).count();
+            if (epoch > m_KMepoch || m_curKeyCT < pt) { // older CT or not set yet
+                m_KMepoch = epoch;
+                m_curKeyCT = 0;
+                m_kmtp = tp;    // update keymaker and epoch
+            } else return;  // this seems to be a gklist from keymaker's past so ignore it
+        } else { // from different identity from my keymaker
+            // if this keymaker has a larger tp than my previous keymaker
+            // (can resolve conflict after elections though can happen in relayed domains in particular)
+            // (re)set my km and curkey ct records so I get a new key and publish MR (below)
+            if (m_kmtp < tp)    {
+                m_KMepoch = epoch;
+                m_kmtp = tp;    // changing keymaker
+                m_curKeyCT = 0;
+            } else if (m_kmtp > tp) return;   // from a keymaker that has been displaced by one I've already heard from
         }
-        // check if this keymaker has a larger tp than my previous km (stored)
-        // (can resolve conflict after elections though can happen in relayed domains in particular)
-        // if so, (re)set my km and curkey ct records so I get a new key and publish MRs until get a good gk
-        // if keyMaker rekeys itself with a smaller tp it sets a new epoch so members reset their m_kmtp values
-        if (m_kmtp < tp)    {
-            m_kmtp = tp;    // changing keymaker
-            m_curKeyCT = 0;
-        } else if (m_kmtp > tp) return;   // from a keymaker that has been displaced by one I've already heard from
 
         static constexpr auto less = [](const auto& a, const auto& b) -> bool {
             auto asz = a.size();
@@ -422,10 +434,7 @@ struct DistGKey {
 
         // subscribe could result in finding a GKList in local collection that could be from the elected keymaker
         m_sync.subscribe(m_gkPrefix, [this](const auto& p){ receiveGKeyList(p); });
-        if (m_kmpri(m_tp) <= 0 || m_KMepoch > 0) {  // check for not keymaker capability or got a gkey that tells us the election is done
-            //if (m_KMepoch > 0) print("{} found {} elected epoch {}\n",  m_certs[m_tp].name(), m_certs[m_kmtp].name(), m_KMepoch);
-            return;
-        }
+
         // check if keymaker candidate and whether election is over
         auto eDone = [this](auto elected, auto epoch) {
                 m_keyMaker = elected;
@@ -548,8 +557,7 @@ struct DistGKey {
             }
             // if there is an earlier signing key from the same identity, remove it
             auto itp = m_certs[tp].thumbprint();
-            auto sameId = std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
-            if (sameId) print ("DistGKey::addGroupMem: found and erased {} earlier signing cert(s) from this identity\n", sameId);
+            std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key

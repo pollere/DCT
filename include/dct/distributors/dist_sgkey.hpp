@@ -283,25 +283,31 @@ struct DistSGKey {
             print("ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
             return;
         }
+        if (tp == m_tp) return; //signed by my signing key, ignore
+
         auto n = p.name();
         auto epoch = n.nextAt(m_krPrefix.size()).toNumber();
         // if keylist is from earlier signing key of same identity
         if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
-            if (m_keyMaker) return; // ignore if I'm still keymaker
-            // kr from my identity when I haven't set keymaker implies I've restarted
-            // (some other keymaker may have already taken over but that should get resolved eventually - do something better later)
-            m_keyMaker = true;
-            m_KMepoch = ++epoch;
-            m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); });
-            sgkeyTimeout();  //create a group key, publish it, callback parent with key
+           if (m_keyMaker) {
+                if (epoch < m_KMepoch) return;   // old keylist should be ignored
+                print("DistSGKey:receiveGKeyList: received key list has epoch {} and mine is {} - dup id?\n", epoch, m_KMepoch);
+                m_KMepoch = ++epoch;  // increment from prior signing key unless larger
+                makeSGKey();                     // redo sgklists under my current signing cert
+            } else {  // keylist from my identity when I haven't set keymaker implies I've restarted (unless two of this identity!)
+                        // (some other keymaker may have already taken over but that should get resolved eventually - do something better later)
+                m_keyMaker = true;
+                m_KMepoch = ++epoch;  // increment from prior signing key
+                m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); }); // keymakers need the member requests
+                sgkeyTimeout();  //create a group key and reschedule group key creation with this  epoch and current signing cert
+            }
             return;
         }
 
         if (m_keyMaker) {
             // another member claims to be a keyMaker - largest thumbPrint and most recent epoch wins
-           if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
-                // relinquish keymaker status
-                m_keyMaker = false;
+           if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {      
+                m_keyMaker = false; // relinquish keymaker status
                 m_kmtp = tp;
                 m_curKeyCT = 0;
                 m_KMepoch = epoch;
@@ -316,32 +322,41 @@ struct DistSGKey {
         if (m_init && m_subr && !m_mrPending) {
             m_kmtp =tp;
             m_KMepoch = epoch;
-            publishMembershipReq();
-            return;
-        }
-
-        /*
-         * I am a sub group member and have an outstanding membership request that this krlist may service.
-         * Or a pure publisher that needs to get the new public key
-         * Parse the name and make checks to determine if this key record publication should be used.
-         * if this msg was from an earlier Key Maker epoch, ignore it. If from a later
-         * epoch, wrongEpoch will cancel any in-progress election and update our epoch.
-         */
-        if (epoch != m_KMepoch) {
-            if (epoch < m_KMepoch) { // XXX change this when re-elections supported
-                print("keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
+            if (!m_mrPending) { // if needed, publish a membership request and return
+                publishMembershipReq();
                 return;
             }
-            //assert(m_KMepoch == 0);
-            m_KMepoch = epoch;
-            m_kmtp.fill(0);     //new epoch, reset my record of keymaker tp
+        }        
+        /*
+         * I am a member that has issued at least one membership request in the past
+         * or a pure publisher that needs to get the new public key
+         * This krlist may service that request or may be an updated gk or updated keymaker
+         * Parse the name and make checks to determine if this key record publication should be used.
+         * if this msg was from an earlier Key Maker epoch, test for restarted keymaker, otherwise ignore it.
+         */
+        if (tp == m_kmtp) {  //signed by my keymaker's signing key
+            if (epoch != m_KMepoch) { // keymakers bump epoch when they update sk pairs, so makes no sense
+                print("DistSGKey:receiveSGKeyList  keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
+                return; // probably should abort
+            }
+        } else if (m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
+            // same keymaker identity, different signing key could be updated key or restart of same keymaker
+            uint64_t pt = std::chrono::duration_cast<std::chrono::microseconds>(p.name().lastBlk().toTimestamp().time_since_epoch()).count();
+            if (epoch > m_KMepoch || m_curKeyCT < pt) { // older CT or not set yet
+                m_KMepoch = epoch;
+                m_curKeyCT = 0;
+                m_kmtp = tp;    // update keymaker and epoch
+            } else return;  // this seems to be a gklist from keymaker's past so ignore it
+        } else { // from different identity from my keymaker
+            // if this keymaker has a larger tp than my previous keymaker
+            // (can resolve conflict after elections though can happen in relayed domains in particular)
+            // (re)set my km and curkey ct records so I get a new key and publish MR (below)
+            if (m_kmtp < tp)    {
+                m_KMepoch = epoch;
+                m_kmtp = tp;    // changing keymaker
+                m_curKeyCT = 0;
+            } else if (m_kmtp > tp) return;   // from a keymaker that has been displaced by one I've already heard from
         }
-        // check if keymaker has a larger tp than my stored value (can resolve conflict after elections this can happen in
-        // relayed domains in particular), if so, (re)set my saved value and cur key ct so I get a new key
-         if (m_kmtp < tp) {
-            m_kmtp = tp;    // changing keymaker
-            m_curKeyCT = 0;
-        } else if (m_kmtp > tp) return;   // from a keymaker that has been displaced by one I've already heard from
 
         static constexpr auto less = [](const auto& a, const auto& b) -> bool {
             auto asz = a.size();

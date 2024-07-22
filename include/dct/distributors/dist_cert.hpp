@@ -68,7 +68,6 @@ struct DistCert
         m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref())
     {
         m_sync.cStateLifetime(4789ms);
-        m_sync.pubLifetime(0ms); // cert lifetime comes from its validity period
         m_sync.getLifetimeCb([](auto p) {
                 auto lt = rCert(p).validUntil() - std::chrono::system_clock::now();
                 return std::chrono::duration_cast<std::chrono::milliseconds>(lt);

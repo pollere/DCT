@@ -295,7 +295,6 @@ struct SyncPS {
         // interval to prevent a peer with a late clock giving it back to us as soon
         // as we delete it.
 
-        if (localPub) oneTime(lt, [this, hash]{ if (pubCbs_.size() > 0) doDeliveryCb(hash, false); });
         oneTime(lt + maxClockSkew, [this, hash]{ pubs_.deactivate(hash); });
         oneTime(lt + pubExpirationGB_, [this, hash]{
                 //if (auto p = pubs_.find(hash); p != pubs_.end()) {
@@ -320,6 +319,8 @@ struct SyncPS {
         //print("{:%M:%S} publish {:x} d {} r {}\n", std::chrono::system_clock::now(), h, delivering_, registering_);
         if (h == 0) return h;
         ++publications_;
+        // if a delivery callback is waiting on this pub, call it
+        doDeliveryCb(h, true);
         // new pub is always sent if 1) not delivering 2) not registering and 3) a cState is in collection
         // If no cStates, send a cState including this pub
         if (!delivering_ && !registering_)   {   // don't send publications until completely registered for responses
@@ -335,11 +336,29 @@ struct SyncPS {
      * Takes a callback so pub arrival at other entity(s) can be confirmed or
      * failure reported so "at least once" semantics can be built into shim.
      *
+     * Mainly for relays, Publications may altready have been received via the
+     * network from another member and in this case the confirmation cb
+     * should be invoked since this Publication is not just locally known
+     *
+     * returns 0 if Publication was neither added nor in the collection
+     *
      * @param pub the object to publish
      */
     PubHash publish(crData&& pub, DelivCb&& cb) {
-        auto h = publish(std::move(pub));
-        if (h != 0) pubCbs_.addLocal(h, std::move(cb));
+        auto h = hashPub(pub);
+        if (pubs_.contains(h)) {
+            if ((pubs_.at(h)).fromNet())
+                cb((pubs_.find(h))->second.i_,true);
+            return h;     // if already in collection and is local assume it has already set cb (?)
+        }
+        h = publish(std::move(pub));
+        if (h != 0) {
+            // add delivery callback and expire it after default publifetime
+            pubCbs_.addLocal(h, std::move(cb));
+            auto cd = pubLifetime_ < cStateLifetime_ ? cStateLifetime_ : pubLifetime_;
+            oneTime(cd, [this, h]{ doDeliveryCb(h, false); });
+            // oneTime(pubLifetime_, [this, h]{ doDeliveryCb(h, false); });
+        }
         return h;
     }
 

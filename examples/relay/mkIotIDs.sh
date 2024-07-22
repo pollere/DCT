@@ -31,7 +31,7 @@ schemaCompile -o $Eschema ../iote.rules
 PubPrefix=iot
 CertValidator=$(schema_info -t $Bschema "#certValidator");
 LLM=llm:ff02::1234
-PROTO=udp:
+PROTO=tcp:
 PORT=34567
 SRVR=127.0.0.1:
 

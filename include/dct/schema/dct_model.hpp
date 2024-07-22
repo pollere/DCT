@@ -124,7 +124,8 @@ struct DCTmodel {
     // are held pending their signing cert's arrival.
     void addCert(rData d) {
         const auto tp = dctCert::computeThumbPrint(d);
-        if (cs_.contains(tp)) return;     
+        if (cs_.contains(tp)) return;
+
         // check if cert is consistent with the schema:
         //  - cert metainfo must say it's a key
         //  - siginfo has to include a validity period and now must be within the period
@@ -140,15 +141,18 @@ struct DCTmodel {
             auto cname = tlvVec(cert.name());
             if (matchesAny(bs_, cname) < 0) return; // name doesn't match schema
 
-            const auto& stp = cert.thumbprint();
+            const auto& stp = cert.thumbprint();    // cert's signer's (identity) thumbprint
             if (dctCert::selfSigned(stp)) return; // can't add new root cert
             if (cname.size() >= 7 && cname[-6].toSv() == "schema") return; // can't add new schema
 
             // check if receiving a cert signed by my identity, implying an earlier signing cert of my identity
-            // (this could also flag in case of duplicate identities handed out)
             if (!cs_.contains(cs_.chains_[0])) std::runtime_error ("DCTmodel::addCert: this member has no signing cert");
-            auto itp = (cs_[cs_.chains_[0]]).getKeyLoc();
-            if (stp == itp)  return;
+
+            if (stp == (cs_[cs_.chains_[0]]).getKeyLoc())  {  // compare to my identity cert thumbprint
+                if (cert.validAfter() > rCert(cs_[cs_.chains_[0]]).validAfter() )
+                    print ("DCTmodel::addCert: appears to be another instance of this identity {}\n", cert.name());
+                return;      // ignore if appears to be an earlier signing cert
+            }
  
             // cert is structurally ok so see if it crytographically validates
             if (! cs_.contains(stp)) {
@@ -167,6 +171,12 @@ struct DCTmodel {
                 // against the schema. If the chain is ok, set up structural validation
                 // state for pubs signed with this thumbprint.
                 if (validateChain(bs_, cs_, cert) < 0) return; // chain structure invalid
+                /*
+                // if there is another signing cert signed by the same identity (has same keyLocator)
+               // and signing cert validity period starts before current one, ignore
+                for (auto kv : cs_) if (isSigningCert(kv.second) && (kv.second).getKeyLoc() == stp &&                   
+                        cert.validAfter() < rCert(kv.second).validAfter()) return;
+                    */
                 cs_.add(cert);
                 setupPubValidator(tp);
                 return; // done since nothing can be pending on a signing cert

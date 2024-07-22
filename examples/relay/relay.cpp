@@ -89,6 +89,7 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
 /*
  * msgsRecv is the callback passed to subscribe() which is invoked upon arrival of each validated (crypto
  * and structural) Publication in the msgs collection of DeftT s
+ * This is only called for "connected" DeftTs
  * Publication p is published to all the (other) DeftTs for which it is structurally valid (against their schema)
  *
  * skipValidatePubs can be used if schema is the same for all DeftTs and the security through the relay is
@@ -96,25 +97,25 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  */
 static void msgsRecv(ptps* s, const Publication& p) {
      // auto now = std::chrono::system_clock::now();
-     // print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
+     // dct::print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
             if (sp != s && sp->isConnected()) {
                 if(skipValidatePubs || sp->validPub(p)) {
                     sp->publish(Publication(p));
-                    // print("\trelayed to {}-{}\n",  sp->label(), sp->relayTo());
-                }   // else print("\tdiscarded at {}-{}\n", sp->label(), sp->relayTo());
+                    // dct::print("\trelayed to {}-{}\n",  sp->label(), sp->relayTo());
+                }   // else dct::print("\tdiscarded (not valid in subschema) at {}-{}\n", sp->label(), sp->relayTo());
             }
     } catch (const std::exception& e) {}
 }
 
 /*
  * chainRecv is callback set when each ptps is constructed.
- *  It is invoked upon reception of a crypto validated signing cert by DeftT s which contains its validated chain
- *  The chain's signing cert and pointer to the arrival cert store is then relayed to all the (other) DeftTs
- *  for validation and publication
+ *  It is invoked upon reception of a crypto validated signing cert by DeftT s
+ *  The chain's signing cert and pointer to the arrival cert store is then relayed to all (other) connected DeftTs
+ *  for validation and publication. (cs will contain the entire chain or else c would not be validated)
  *
- *  Any cert that is not defined  in a DeftT's trust schema should not be forwarded.
+ *  Any cert that is not defined  in a DeftT's schema should not be forwarded.
  */
 static void chainRecv(ptps* s, const rData c, const certStore& cs) {
     // don't pass through relay certs - only useful on their subnet
@@ -142,12 +143,12 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
  *  determine if a  pub's signer is known (in the  DeftT's cert store) to a shim before it is forwarded there.
  */
 static void keysRecv(ptps* s, const Publication& p) {
-   // auto now = std::chrono::system_clock::now();
-    // print("{:%M:%S} relay:{}:{}\tkeyRcv {}\n", ticks(now.time_since_epoch()), s->label(), s->relayTo(), p.name());
+    //auto now = std::chrono::system_clock::now();
+    //print("{:%M:%S} relay:{}:{}\tkeyRcv {}\n", ticks(now.time_since_epoch()), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
             if (sp != s && sp->isConnected()) {
-               // print("relay::keysRecv: {} from {}-{} to interFace {}-{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
+               //print("relay::keysRecv: {} from {}-{} to interFace {}-{}\n", p.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
                sp->publishGKey(Publication(p));
             }
     } catch (const std::exception& e) {}
@@ -249,11 +250,12 @@ int main(int argc, char* argv[])
                 dct::print("relay: DeftT transport {}-{} is connected\n", s->label(), s->relayTo());
                 // pull certs from sibling transports by signing chains
                 for (auto sp : transList) if (sp != s) sp->passValidChains(s);
-                // pull Publications in keys/msgs from sibling transports
-                for (auto sp : transList) if (sp != s) sp->passGroupKeys(s);
-                // pull Publications in msgs from sibling transports
-                for (auto sp : transList) if (sp != s) sp->passMsgs(s, skipValidatePubs);
-                s->subscribe(msgsRecv);
+                // pull Publications in keys/msgs from sibling transports (if there is a keys/msgs collection)
+                if (s->haveKeys())
+                    for (auto sp : transList) if (sp != s) sp->passGroupKeys(s);
+                // pull Publications in msgs from sibling transports that are connected
+                for (auto sp : transList) if (sp != s && sp->isConnected()) sp->passMsgs(s, skipValidatePubs);
+                s->subscribe(msgsRecv); // first subscribe will get everything that is in the Collection
                 } );
         } catch (const std::exception& e) {
             std::cerr << "main: encountered exception while trying to connect transport " << s->label() << " relaying to " << s->relayTo() << " : " << e.what() << std::endl;
