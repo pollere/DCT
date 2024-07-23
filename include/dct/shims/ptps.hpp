@@ -78,7 +78,7 @@ struct DCTmodelPT final : DCTmodel  {
     thumbPrint m_tp{};                  // for testing for capability
 
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
-    void addRelayed(thumbPrint tp) { m_rlyCerts[tp] = true;}
+    void addRelayed(const thumbPrint tp, const dctCert& c) { m_rlyCerts[tp] = true;  addCert(c); }  // if c valid, add to certstore
     const auto& keysColl() { return m_gkSync; }
 
     // ensure a publication is *structurally* valid on the outgoing DeftT
@@ -172,25 +172,27 @@ struct ptps
     // following routine MUST have same type signature as DelivCb
     // this is used to prevent Publications (specifically in /keys/msgs) from
     // being forwarded before their signing keys.
+    // To use for blocking any pubs whose signing chain hasn't been acked, will
+    // need to add a discard after timeout
     void certAck(const rData& c, bool acked)
     {
         // print ("certAck cb with success={} for {}\n", acked, c.name());
         auto tp = c.computeTP();
-        if (!acked) { // unlikely as implies cert expired, but remove from list
+        if (!acked) {
             print ("certAck cb fails for {}\n", c.name());
-            if (m_holdKeys.contains(tp)) m_holdKeys.erase(tp);
+            /* if (m_holdKeys.contains(tp)) m_holdKeys.erase(tp);
             if (m_holdPubs.contains(tp)) m_holdPubs.erase(tp);
-            // m_unackedCerts.erase(tp); // don't want to publish items signed by this cert but might want to discard in future
-            return;
+            m_unackedCerts.erase(tp); // if don't want to pass items signed by this cert might discard in future
+            return; */
         }
         m_unackedCerts.erase(tp);
         if (m_holdKeys.contains(tp)) {
-            print ("certAck cb for {} finds keys on hold\n", c.name());
+            // print ("certAck cb for {} finds keys on hold\n", c.name());
             for (auto p : m_holdKeys[tp]) m_pb.publishKey(std::move(p));
             m_holdKeys.erase(tp);
         }
         if (m_holdPubs.contains(tp)) {
-            print ("certAck cb for {} finds pubs on hold\n", c.name());
+            // print ("certAck cb for {} finds pubs on hold\n", c.name());
             for (auto p : m_holdPubs[tp]) m_pb.publish(std::move(p));
             m_holdPubs.erase(tp);
         }      
@@ -329,7 +331,7 @@ struct ptps
     bool publishGKey(Publication&& p)
     {
         // print ("ptps::publishGKey: called for {} with {}\n", relayTo(), p.name());
-        if (m_unackedCerts.contains(p.thumbprint())) {  // this may put keys on hold that I won't have signers for - should clean up later
+        if (m_unackedCerts.contains(p.thumbprint())) {
             // print ("ptps::publishGKey: placed {} on holdKeys\n", p.name());
             m_holdKeys[p.thumbprint()].emplace(std::move(p));  //creates entry if doesn't exist; emplace should copy
             return true;    // if cert is on list has to be in my cert store so it is a known Publication, just on hold
@@ -355,8 +357,6 @@ struct ptps
     /*
      * Add a cert chain relayed from another DefTT's cert store (cs)  to mine. Traverses the chain and adds each cert.
      *
-     * Calls the dct model's checker m_pb.addCert(&c) just like is done on reception from a cAdd
-     * which will check the cert for validity against this DefTT's trust schema.
      * In smart "trust-based" pass through, the cert gets checked against the
      * trust schema before it is published to this DefTT's cert collection
      * rather than simply moving any cryptographically valid cert to other attached transports.
@@ -365,6 +365,9 @@ struct ptps
      * see if this DefTT already was relayed this chain. (Local relayed chain list could hold tps of
      * all signing certs and have 0 or "false" if locally received, but currently that is tested in
      * relay by not calling this method for chains that arrive locally
+     *
+     * addRelayed() alls the dct model's checker m_pb.addCert(&c) just like is done on reception from a cAdd
+     * which will check the cert for validity against this DefTT's trust schema.
      *
      * Although the passed in cert should be valid against the trust schema of the originating DeftT,
      * this is only useful for the case of identical trust schema for all DefTTs so is both
@@ -376,11 +379,7 @@ struct ptps
 
         cs.chain_for_each(tp, [this](const auto &c) {    // for each cert on this signing chain
             auto ctp = c.computeTP();
-            if (! m_pb.certs().contains(ctp)) {
-                //auto h = std::hash<tlvParser>{}(c);
-                m_pb.addRelayed(ctp);    // add to list of certs that were (solely) relayed to this DeftT                
-                m_pb.addCert(c);             // if c valid, add to certstore
-                }
+            if (! m_pb.certs().contains(ctp))   m_pb.addRelayed(ctp, c);    // add as a cert that was relayed to this DeftT
         });
 
         if (m_pb.certs().contains(tp)) {     //check if the signing cert validated

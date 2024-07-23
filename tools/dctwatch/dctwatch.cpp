@@ -96,7 +96,7 @@ int main(int argc, char* argv[])
             case 'c': ofmt = oFmt::compact; break;
             case 'd': doData = true;  doState = false; break;
             case 'f': ofmt = oFmt::full; break;
-            case 'h': hashIBLT = true; break;
+            case 'h': hashIBLT = !hashIBLT; break;
             case 'n': ofmt = oFmt::names; break;
             case 's': doData = false; doState = true; break;
 

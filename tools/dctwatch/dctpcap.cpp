@@ -1,6 +1,4 @@
-//#include <iomanip>
 #include <iostream>
-//#include <sstream>
 
 #include "dct/format.hpp"
 #include "dctprint.hpp"
@@ -10,12 +8,19 @@
 #include "tins/packet.h"
 #include "tins/ip_address.h"
 #include "tins/ipv6_address.h"
+#include "tins/udp.h"
+#include "tins/tcp.h"
+#include "tins/rawpdu.h"
 
 using Tins::Sniffer;
 using Tins::SnifferConfiguration;
 using Tins::FileSniffer;
+using Tins::BaseSniffer;
 using Tins::Packet;
 using Tins::PDU;
+using Tins::TCP;
+using Tins::UDP;
+using Tins::RawPDU;
 using Tins::TCPIP::StreamFollower;
 using Tins::TCPIP::Stream;
 
@@ -33,7 +38,8 @@ static void new_tcp_data(Stream& s, bool isClient) {
     const auto& dat = isClient? s.client_payload() : s.server_payload();
     if (dat.size() == 0) return;
 
-    const auto p = isClient? s.client_port() : s.server_port();
+    const auto p = isClient? dct::format("{}>{}", s.client_port(), s.server_port()) :
+                             dct::format("{}>{}", s.server_port(), s.client_port());
     auto len = dat.size();
     const uint8_t* d = dat.data();
     while (len > 4) {
@@ -73,64 +79,62 @@ static void on_new_connection(Stream& s) {
 }
 
 static void usage(const char* pname) {
-    std::cerr << "usage: " << pname << " [-f|c|n] [-d|s|a] file port [regex]\n";
+    std::cerr << "usage: " << pname << " [-f|c|n] [-d|s|a] [-r pcapFile] [-i interface] [bpfExpr] [regex]\n";
     exit(1);
 }
 
 int main(int argc, char* argv[])
 {
     const char* pname = argv[0];
+    const char* interface{};
+    const char* pcap{};
+    const char* bpfExpr = "udp port 56362";
     while (--argc > 0 && **++argv == '-') {
         switch (argv[0][1]) {
             case 'a': doData = true;  doState = true; break;
             case 'c': ofmt = oFmt::compact; break;
             case 'd': doData = true;  doState = false; break;
             case 'f': ofmt = oFmt::full; break;
-            case 'h': hashIBLT = true; break;
+            case 'h': hashIBLT = !hashIBLT; break;
+            case 'i': interface = *++argv; --argc; break;
             case 'n': ofmt = oFmt::names; break;
+            case 'r': pcap = *++argv; --argc; break;
             case 's': doData = false; doState = true; break;
 
             default: usage(pname);
         }
     }
-    if (argc < 2) usage(pname);
+    if (argc > 2 || (!interface && !pcap)) usage(pname);
 
-    const char* file = *argv++; --argc;
-    const char* port = *argv++; --argc;
-
-    if (argc == 1) {
+    if (argc > 0) {
+        bpfExpr = *argv++; --argc;
+    }
+    if (argc > 0) {
         filtering = true;
         filter = std::regex(argv[0]);
+        ++argv; --argc;
     }
 
     try {
-        // Construct the sniffer configuration object
         SnifferConfiguration config;
+        if (bpfExpr) config.set_filter(bpfExpr);
 
-        // Only capture TCP traffic sent from/to the given port
-        config.set_filter(dct::format("tcp port {}", port));
-
-        // Construct the sniffer we'll use
-        //Sniffer sniffer(argv[1], config);
-        FileSniffer sniffer(file, config);
-
+        BaseSniffer& sniffer = (BaseSniffer&)*(pcap? (BaseSniffer*)new FileSniffer(pcap, config) :
+                                                     (BaseSniffer*)new Sniffer(interface, config));
         StreamFollower f;
-
-        // We just need to specify the callback to be executed when a new 
-        // stream is captured. In this stream, you should define which callbacks
-        // will be executed whenever new data is sent on that stream 
-        // (see on_new_connection)
         f.new_stream_callback(&on_new_connection);
-
-        // Allow following partial TCP streams (e.g. streams that were
-        // open before the sniffer started running)
         f.follow_partial_streams(true);
 
-        // Now start capturing. Every time there's a new packet, call 
-        // follower.process_packet
         sniffer.sniff_loop([&f](Packet& p) {
             last_packet_time = TimePoint(p.timestamp());
-            f.process_packet(p);
+            if (const UDP* u = p.pdu()->find_pdu<UDP>()) {
+                if (const RawPDU* r = u->find_pdu<RawPDU>())
+                handlePkt(r->payload().data(), r->payload().size(),
+                          dct::format("{}>{}",u->sport(),u->dport()), last_packet_time);
+            }
+            else if (p.pdu()->find_pdu<TCP>()) {
+                f.process_packet(p);
+            }
             return true;
         });
     } catch (std::exception& ex) {

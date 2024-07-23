@@ -1,0 +1,31 @@
+Tue Jul 23 2024
+
+The tool 'dctpcap' can do dctwatch-style output from a pcap file
+(captured via 'tcpdump -w foo.pcap ...') or live from a network
+interface tap. E.g.,
+
+  dctpcap -r foo.pcap 'udp or tcp'
+    will try to interpret all the packets in 'foo.pcap' as dct
+    packets (which will give errors if they're not) 
+
+  dctpcap -i lo0 'port 56362 or 22222'
+    will capture any traffic on the loopback interface using udp or tcp 
+    ports 56362 or 22222 (udp port 56362 is the default port used by
+    multicast DCT sessions).
+
+dctpcap is not built by default because it currently requires libtins 
+(https://github.com/mfontanini/libtins) to do TCP stream reassembly.
+To build it:
+  1. (Once) "git clone https://github.com/mfontanini/libtins" somewhere
+     outside of the DCT source tree then build it via:
+       mkdir build; cd build; cmake ../ -DLIBTINS_BUILD_SHARED=0 \
+          -DLIBTINS_ENABLE_CXX11=1 -DLIBTINS_ENABLE_ACK_TRACKER=1 \
+          -DLIBTINS_ENABLE_WPA2=0 -DLIBTINS_ENABLE_DOT11=0 \
+          -DCMAKE_INSTALL_PREFIX=`dirname $PWD`
+     then go back to the DCT tools/dctwatch directory and create a
+     symlink to the directory where libtins lives:
+           ln -s ~/src/libtins .
+
+  2. (when a new dct release is installed):
+     cd tools/dctwatch; rm -f dctpcap; make dctpcap
+

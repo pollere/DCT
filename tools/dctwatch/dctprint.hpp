@@ -91,10 +91,10 @@
 using namespace std::literals;
 using namespace dct;
 
-static enum oFmt { compact, names, full } ofmt{compact};
+static enum oFmt { compact, names, full } ofmt{names};
 static bool doData = true;
 static bool doState = true;
-static bool hashIBLT = false;
+static bool hashIBLT = true;
 static bool filtering = false;
 static std::regex filter{};
 
@@ -131,7 +131,7 @@ static auto tfmt(durmilli when) {
     return r;
 }
 
-static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport, TimePoint when) {
+static auto compactPrint(const uint8_t* d, size_t s, std::string src, TimePoint when) {
     rName n{};
     const char* ptype{};
     switch (d[0]) {
@@ -148,14 +148,14 @@ static auto compactPrint(const uint8_t* d, size_t s, uint16_t sport, TimePoint w
     }
     //std::chrono::local_time<durmicro> now = durmicro(std::chrono::system_clock::now().time_since_epoch());
     auto w = durmicro(when.time_since_epoch());
-    print("{:%H:%M:%S}  {}  {}  {:5} {:4}", w, tfmt(w), ptype, sport, s);
+    print("{:%H:%M:%S}  {}  {}  {:5} {:4}", w, tfmt(w), ptype, src, s);
     if (hashIBLT) print("  {:08x} ", d[0] != 6? mhashView(n) : n.lastBlk().toNumber());
     print(" {}\n", n);
     return ptype;
 }
 
-static auto namePrint(const uint8_t* d, size_t s, uint16_t sport, TimePoint when) {
-    auto pt = compactPrint(d, s, sport, when);
+static auto namePrint(const uint8_t* d, size_t s, std::string src, TimePoint when) {
+    auto pt = compactPrint(d, s, src, when);
     if (!pt || d[0] != 6) return pt;
 
     try {
@@ -172,15 +172,15 @@ static auto namePrint(const uint8_t* d, size_t s, uint16_t sport, TimePoint when
     return pt;
 }
 
-static auto fullPrint(const uint8_t* d, size_t s, uint16_t sport, TimePoint when) {
-    auto pt = namePrint(d, s, sport, when);;
+static auto fullPrint(const uint8_t* d, size_t s, std::string src, TimePoint when) {
+    auto pt = namePrint(d, s, src, when);;
     if (! pt) return pt;
     di.dissect(std::cout, tlvParser(d, s));
     std::cout << '\n';
     return pt;
 }
 
-static void handlePkt(const uint8_t* d, size_t s, uint16_t sport, TimePoint when) {
+static void handlePkt(const uint8_t* d, size_t s, std::string src, TimePoint when) {
     switch (d[0]) {
         case 5: if (! doState) return; break;
         case 6: if (! doData) return; break;
@@ -191,9 +191,9 @@ static void handlePkt(const uint8_t* d, size_t s, uint16_t sport, TimePoint when
         if (! std::regex_search(format("{}", n), filter)) return;
     }
     switch (ofmt) {
-        case oFmt::compact: compactPrint(d, s, sport, when); return;
-        case oFmt::names: namePrint(d, s, sport, when); return;
-        case oFmt::full: fullPrint(d, s, sport, when); return;
+        case oFmt::compact: compactPrint(d, s, src, when); return;
+        case oFmt::names: namePrint(d, s, src, when); return;
+        case oFmt::full: fullPrint(d, s, src, when); return;
     }
 }
 

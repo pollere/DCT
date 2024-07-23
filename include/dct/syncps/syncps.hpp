@@ -220,6 +220,7 @@ struct SyncPS {
     uint32_t publications_{};       // # locally originated publications
     bool delivering_{false};        // currently processing a cAdd
     bool registering_{true};        // RST not set up yet
+    bool batching_{false};          // can be used to hold off cState for a batch of new Publications
     bool autoStart_{true};          // call 'start()' when done registering
     GetLifetimeCb getLifetime_{ [this](auto){ return pubLifetime_; } };
     IsExpiredCb isExpired_{
@@ -242,6 +243,9 @@ struct SyncPS {
     constexpr auto mtu() const noexcept { return face_.mtu(); }
     constexpr auto tts() const noexcept { return face_.tts(); }
     constexpr auto unicast() const noexcept { return face_.unicast(); }
+
+    void batchPubs() { batching_ = true; }
+    void batchDone() { batching_ = false; }
 
     template<typename UnOp>
     constexpr void forFromNet(UnOp&& cb) const noexcept { pubs_.forEach(std::forward<UnOp>(cb), CE<crData>::net); }
@@ -323,7 +327,7 @@ struct SyncPS {
         doDeliveryCb(h, true);
         // new pub is always sent if 1) not delivering 2) not registering and 3) a cState is in collection
         // If no cStates, send a cState including this pub
-        if (!delivering_ && !registering_)   {   // don't send publications until completely registered for responses
+        if (!delivering_ && !registering_ && !batching_)   {   // don't send publications until completely registered for responses
             if (sendCAdd() == false) sendCState();
         }
         return h;
@@ -349,7 +353,7 @@ struct SyncPS {
         if (pubs_.contains(h)) {
             if ((pubs_.at(h)).fromNet())
                 cb((pubs_.find(h))->second.i_,true);
-            return h;     // if already in collection and is local assume it has already set cb (?)
+            return h;     // if already in collection and is local assume it has already set cb
         }
         h = publish(std::move(pub));
         if (h != 0) {
