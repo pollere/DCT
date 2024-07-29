@@ -89,6 +89,7 @@ struct DistCert
      * chain and we have theirs).
      */
     void initDone() {
+        m_sync.pubLifetime_ = 2s;
         m_initDone = true;
         m_connCb(true);
     }
@@ -131,10 +132,10 @@ struct DistCert
         if (! m_initDone) {
             auto h = std::hash<tlvParser>{}(c);
             m_initialPubs.emplace(h);
+            m_sync.pubLifetime_ = m_sync.getLifetime_(c);
             m_sync.publish(c, [this, h](const auto& /*d*/, bool /*acked*/) {
-                        // since cert pub lifetime is infinite 'acked' should always be true
-                        // when this routine is called. If all the initial pubs have been acked
-                        // and we have at least one peer's signing chain, initialization is done.
+                        // when all the initial pubs have been acked and we have
+                        // at least one peer's signing chain, initialization is done.
                         m_initialPubs.erase(h);
                         if (m_havePeer && m_initialPubs.empty())
                             initDone();

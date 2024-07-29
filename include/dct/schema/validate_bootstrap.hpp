@@ -52,7 +52,6 @@ static inline const bSchema& loadSchema(const dctCert& scert) {
     return schemas.try_emplace(tp, certToSchema(scert, tp)).first->second;
 }
 
-
 // 'bootstrap' of a Defined-trust transport instance requires the following certs and one secret key
 //      0: the trust anchor
 //      1: the schema
@@ -61,7 +60,6 @@ static inline const bSchema& loadSchema(const dctCert& scert) {
 // This routine retrieves the required certs, performs validation, and distributes the contents to the cert & schema
 // stores. Nothing is trusted implicitly so all of the certs are validated.
 static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, certStore& cs) {
-
     // first cert needed is a validly signed trust anchor
     // all certs must use the same signature type so use root's
     // type to get a sigMgr then validate the root.

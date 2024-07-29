@@ -174,17 +174,17 @@ struct ptps
     // being forwarded before their signing keys.
     // To use for blocking any pubs whose signing chain hasn't been acked, will
     // need to add a discard after timeout
-    void certAck(const rData& c, bool acked)
+    void certAck(const rData& c, bool /*acked*/)
     {
         // print ("certAck cb with success={} for {}\n", acked, c.name());
         auto tp = c.computeTP();
-        if (!acked) {
-            print ("certAck cb fails for {}\n", c.name());
-            /* if (m_holdKeys.contains(tp)) m_holdKeys.erase(tp);
+        /* if (!acked) { don't do anything since this can happen with relay restarts or overlaps - new ignorePubs coming to deal with this
+            // print ("certAck cb fails for {}\n", c.name());
+            if (m_holdKeys.contains(tp)) m_holdKeys.erase(tp);
             if (m_holdPubs.contains(tp)) m_holdPubs.erase(tp);
             m_unackedCerts.erase(tp); // if don't want to pass items signed by this cert might discard in future
-            return; */
-        }
+            return;
+        }  */
         m_unackedCerts.erase(tp);
         if (m_holdKeys.contains(tp)) {
             // print ("certAck cb for {} finds keys on hold\n", c.name());

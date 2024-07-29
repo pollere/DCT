@@ -399,8 +399,14 @@ struct TransportTcp : Transport {
         roff_ = 0;
         isConnected_ = false;
         boost::system::error_code ec;
-        sock_.set_option(asio::socket_base::linger{}, ec);
+        sock_.set_option(asio::socket_base::linger{false,0}, ec);
         sock_.close(ec);
+    }
+
+    void doAfter(std::chrono::milliseconds delay, auto cb) {
+        using Timer = boost::asio::system_timer;
+        auto timer = std::make_unique<Timer>(sock_.get_executor(), delay);
+        timer->async_wait([t=std::move(timer),cb=std::move(cb)](const auto& e) { if (e == boost::system::errc::success) cb(); });
     }
 
     virtual void restart() = 0;
@@ -477,7 +483,10 @@ struct TransportTcpA final : TransportTcp {
 
     void on_connect(const boost::system::error_code& ec) {
         if (ec.failed()) {
-            if (ec.value() != ECONNREFUSED) throw runtime_error(dct::format("connect failed: {}", ec.message()));
+            if (ec.value() != ECONNREFUSED && ec.value() != ETIMEDOUT) {
+                dct::print("tcp connect failed: {}", ec.message());
+                throw runtime_error(dct::format("connect failed: {}", ec.message()));
+            }
             restart();
             return;
         }
@@ -486,7 +495,9 @@ struct TransportTcpA final : TransportTcp {
 
     void restart() {
         close();
-        sock_.async_connect(peer_, [this](const boost::system::error_code& ec){ on_connect(ec); });
+        doAfter(100ms, [this](){
+                           sock_.async_connect(peer_, [this](const boost::system::error_code& ec){ on_connect(ec); });
+                        });
     }
 
     TransportTcpA(std::string_view host, std::string_view port, asio::io_context& ioc,
@@ -510,13 +521,17 @@ struct TransportTcpP final : TransportTcp {
 
     void startSession(tcp::socket& socket) {
         sock_ = std::move(socket);
+        boost::system::error_code ec;
+        sock_.set_option(asio::socket_base::linger{false,0}, ec);
         finishRestart();
     }
 
     void doAccept() {
         acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
-            if (ec.failed()) throw std::runtime_error(dct::format("accept failed: {}", ec.message()));
-
+            if (ec.failed()) {
+                dct::print("tcp accept failed: {}", ec.message());
+                throw std::runtime_error(dct::format("accept failed: {}", ec.message()));
+            }
             startSession(socket);;
         });
     }

@@ -106,7 +106,8 @@ static void msgPubr(mbps &cm) {
 
     if(role == "operator") {
         lastSend = std::chrono::system_clock::now().time_since_epoch();
-        std::string l = (std::rand() & 2)? "gate" : "frontdoor"; // randomly toggle targeted location
+      //  std::string l = (std::rand() & 2)? "gate" : "frontdoor"; // randomly toggle targeted location
+        std::string l = "frontdoor";
         std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
         mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",l},{"topicArgs", a}};
     } else {

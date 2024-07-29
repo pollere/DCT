@@ -147,7 +147,7 @@ struct certStore {
     }
 
     // add a new signing pair after update. Publishing is handled by calling routine
-    // so by passes the addCb_ which would normally handle that
+    // so by passes the addCb_ which is for certs of others arriving through my face
     auto addNewSP(const dctCert& c, const keyVal& k) {
         if (! c.valid()) {
             print("cert {} invalid\n", c.name());

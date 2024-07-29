@@ -128,6 +128,7 @@ struct DistSGKey {
              m_relayChk{Cap::checker("RLY", pPre, cs)},
              m_reKeyInt(reKeyInterval), m_keyRand(reKeyRandomize),
              m_keyLifetime(m_reKeyInt + m_keyRand) {
+        m_sync.autoStart(false); // shouldn't start until cert distributor is done initializing
         // compute space for content for the sgkr Publication. Other Pubs are smaller, so sgkr is worst-case
         m_maxContent -= m_prefix.size() + 2 +3 + 9 + 2 + 2 + 2*(4+2);    // all the components of Name
         if (m_maxContent < (6 + kxpkKeySz  + sizeof(thumbPrint) + encSGKeySz))
@@ -283,79 +284,84 @@ struct DistSGKey {
             print("ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
             return;
         }
-        if (tp == m_tp) return; //signed by my signing key, ignore
 
         auto n = p.name();
         auto epoch = n.nextAt(m_krPrefix.size()).toNumber();
-        // if keylist is from earlier signing key of same identity
+        // if keylist is from earlier signing key of my identity
         if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
-           if (m_keyMaker) {
-                if (epoch < m_KMepoch) return;   // old keylist should be ignored
-                print("DistSGKey:receiveGKeyList: received key list has epoch {} and mine is {} - dup id?\n", epoch, m_KMepoch);
-                m_KMepoch = ++epoch;  // increment from prior signing key unless larger
-                makeSGKey();                     // redo sgklists under my current signing cert
-            } else {  // keylist from my identity when I haven't set keymaker implies I've restarted (unless two of this identity!)
-                        // (some other keymaker may have already taken over but that should get resolved eventually - do something better later)
+            // keylist is from earlier signing key of my signing identity
+            if (m_init) {
+                // seem to be restarted keymaker, grab keymaker status and return
                 m_keyMaker = true;
-                m_KMepoch = ++epoch;  // increment from prior signing key
+                m_KMepoch = ++epoch;    // epoch is incremented when KM gets new signing pair
                 m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); }); // keymakers need the member requests
-                sgkeyTimeout();  //create a group key and reschedule group key creation with this  epoch and current signing cert
-            }
-            return;
-        }
+                gkeyTimeout();  //create a group key and schedule group key creation with this  epoch and current signing cert
+             }
+             return;
+         }
 
         if (m_keyMaker) {
-            // another member claims to be a keyMaker - largest thumbPrint and most recent epoch wins
-           if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {      
-                m_keyMaker = false; // relinquish keymaker status
-                m_kmtp = tp;
-                m_curKeyCT = 0;
+             // another member claims to be a keyMaker - largest thumbPrint and most recent epoch wins
+            if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
+                 m_keyMaker = false; // relinquish keymaker status
+                m_kmtp = tp;            // set my keymaker to this one
+                 m_curKeyCT = 0;
                 m_KMepoch = epoch;
-                m_sync.unsubscribe(m_mrPrefix);
+                 m_sync.unsubscribe(m_mrPrefix);
                 publishMembershipReq();
             }
             return;
         }
 
-        // not the keymaker
-        // if m_subr in m_init set this kr list sender as my keymaker, publish a membership request
-        if (m_init && m_subr && !m_mrPending) {
-            m_kmtp =tp;
-            m_KMepoch = epoch;
-            if (!m_mrPending) { // if needed, publish a membership request and return
+        // tests for non-keymakers in init state. If no MR has been sent, can't be a gk for me
+        if (m_init && m_kmtp != tp) {
+            // in init state and this is not my keymaker (may not have set one yet)
+            if (m_KMepoch == 0) {
+                m_kmtp = tp;        //  first time to set a keymaker
+                m_KMepoch = epoch;
                 publishMembershipReq();
                 return;
             }
-        }        
+            if ((m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
+                m_kmtp = tp;        //  set this sgklist sender as my keymaker
+                m_KMepoch = epoch;
+                if (! m_mrPending) { // if needed, publish a membership request and return
+                    publishMembershipReq();
+                    return;
+                }
+            }
+        }
+
         /*
          * I am a member that has issued at least one membership request in the past
-         * or a pure publisher that needs to get the new public key
-         * This krlist may service that request or may be an updated gk or updated keymaker
+         * (set m_kmtp but may or may not have received a copy of the group key)
+         * and may or may not be in init state
+         * This sgklist may service that request or may be an updated gk or updated keymaker
          * Parse the name and make checks to determine if this key record publication should be used.
          * if this msg was from an earlier Key Maker epoch, test for restarted keymaker, otherwise ignore it.
          */
         if (tp == m_kmtp) {  //signed by my keymaker's signing key
-            if (epoch != m_KMepoch) { // keymakers bump epoch when they update sk pairs, so makes no sense
-                print("DistSGKey:receiveSGKeyList  keylist ignored: bad epoch {} in {} from {}\n", epoch, p.name(), m_certs[p].name());
-                return; // probably should abort
-            }
+            if (epoch != m_KMepoch) m_KMepoch = epoch; // keymakers bump epoch when they update signing pairs, so shouldn't happen
         } else if (m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
             // same keymaker identity, different signing key could be updated key or restart of same keymaker
-            uint64_t pt = std::chrono::duration_cast<std::chrono::microseconds>(p.name().lastBlk().toTimestamp().time_since_epoch()).count();
-            if (epoch > m_KMepoch || m_curKeyCT < pt) { // older CT or not set yet
-                m_KMepoch = epoch;
+            uint64_t pt = std::chrono::duration_cast<std::chrono::microseconds>(n.lastBlk().toTimestamp().time_since_epoch()).count();
+            if (epoch > m_KMepoch || m_curKeyCT < pt) {
+                // new epoch and and signing cert for my KM or my curKeyCT is older than this packet  or not set yet
+                m_KMepoch = epoch;   // update KM and epoch
                 m_curKeyCT = 0;
-                m_kmtp = tp;    // update keymaker and epoch
-            } else return;  // this seems to be a gklist from keymaker's past so ignore it
-        } else { // from different identity from my keymaker
+                m_kmtp = tp;
+                // a new MR is sent (below) if none for me in this gklist
+            } else return;  // this seems to be a sgklist from keymaker's past so ignore it
+        } else { // from different identity from my KM
             // if this keymaker has a larger tp than my previous keymaker
             // (can resolve conflict after elections though can happen in relayed domains in particular)
             // (re)set my km and curkey ct records so I get a new key and publish MR (below)
-            if (m_kmtp < tp)    {
-                m_KMepoch = epoch;
-                m_kmtp = tp;    // changing keymaker
+            if ((m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
+                m_KMepoch = epoch;   // changing KM
+                m_kmtp = tp;
                 m_curKeyCT = 0;
-            } else if (m_kmtp > tp) return;   // from a keymaker that has been displaced by one I've already heard from
+                // a new MR is sent (below) if none for me in this sgklist
+            } else return;   // from a KM that is displaced by my KM
         }
 
         static constexpr auto less = [](const auto& a, const auto& b) -> bool {
@@ -426,7 +432,8 @@ struct DistSGKey {
         m_curKeyCT = newCT;
         m_newKeyCb(sgPK, sgSK, m_curKeyCT);   //call back parent to pass the new sg key pair to pub privacy sigmgr
         receivedGK();   // got new sg key, cancel pending member request
-        if (m_init) initDone(); // have a key, can exit initialization
+        // am in init state now have key, can exit init. Send a confirming cState in case KM starting, too
+        if (m_init)  { m_sync.sendCState(); initDone();}
     }
 
     /*
@@ -449,6 +456,7 @@ struct DistSGKey {
     void setup(connectedCb&& ccb) {
         m_connCb = std::move(ccb);
         if ( m_sync.collName_.last().toSv() == "msgs") m_msgsdist = true;    // this will need to be changed if put in names for subscriber groups
+        m_sync.start();     // all distributors "before" me have initialized
 
         // relay: doesn't participate in pub group as it doesn't do encryption or decryption
         // but needs to pass through the sgklists so has a sgk distributor active with its own subscription cb
@@ -477,6 +485,7 @@ struct DistSGKey {
             return;
         }
         auto eDone = [this](auto elected, auto epoch) {
+                        if (m_keyMaker) return;    // this can happen when restarted and  just take over previous role
                         m_keyMaker = elected;
                         m_KMepoch = epoch;
                         if (! elected) return;
@@ -546,7 +555,8 @@ struct DistSGKey {
 
             if(i==0) {  // once every time the keymaker makes a new key publish empty secret key record
                            //  with public cert to continue to assert keyMaker role (and to get key to pure publishers) ("assertion kr")
-                sgkp.addArray(130, pubPairs);     
+                // sgkp.addArray(130, pubPairs);
+                sgkp.addArray(130, std::vector<egkr>{});
                 publishKeyRange(m_tp, m_tp, pubTS, sgkp.vec(), m_init);    // use own tp in range
                 if (s==0) break;
             }

@@ -203,6 +203,7 @@ struct SyncPS {
     Collection<DelivCb> pubCbs_{};          // pubs requesting delivery callbacks
     lpmLT<crPrefix,SubCb> subscriptions_{}; // subscription callbacks
     std::map<uint32_t,PubHashVec> pendOthers_{};    // for effective meshing, need to send non-local origin pubs
+    std::unordered_map<dct::thumbPrint,std::vector<PubHash>> cachePubs_{};
 
     DirectFace& face_;
     const crName collName_;         // 'name' of the collection
@@ -220,6 +221,7 @@ struct SyncPS {
     uint32_t publications_{};       // # locally originated publications
     bool delivering_{false};        // currently processing a cAdd
     bool registering_{true};        // RST not set up yet
+    bool netCState_{false};        // no cState from net seen in this collection yet
     bool batching_{false};          // can be used to hold off cState for a batch of new Publications
     bool autoStart_{true};          // call 'start()' when done registering
     GetLifetimeCb getLifetime_{ [this](auto){ return pubLifetime_; } };
@@ -321,14 +323,14 @@ struct SyncPS {
         if (pub.size() > maxPubSize_) return 0;
         auto h = addToActive(std::move(pub), true);
         //print("{:%M:%S} publish {:x} d {} r {}\n", std::chrono::system_clock::now(), h, delivering_, registering_);
-        if (h == 0) return h;
+        if (h == 0) return h;   // already in actives
         ++publications_;
         // if a delivery callback is waiting on this pub, call it
-        doDeliveryCb(h, true);
+        // doDeliveryCb(h, true);
         // new pub is always sent if 1) not delivering 2) not registering and 3) a cState is in collection
         // If no cStates, send a cState including this pub
         if (!delivering_ && !registering_ && !batching_)   {   // don't send publications until completely registered for responses
-            if (sendCAdd() == false) sendCState();
+            if (netCState_ == false || sendCAdd() == false) sendCState();
         }
         return h;
     }
@@ -351,8 +353,10 @@ struct SyncPS {
     PubHash publish(crData&& pub, DelivCb&& cb) {
         auto h = hashPub(pub);
         if (pubs_.contains(h)) {
-            if ((pubs_.at(h)).fromNet())
+            if ((pubs_.at(h)).fromNet()) {
+            print("syncps::publish w cb instant cb for {}\n", pub.name());
                 cb((pubs_.find(h))->second.i_,true);
+                }
             return h;     // if already in collection and is local assume it has already set cb
         }
         h = publish(std::move(pub));
@@ -369,8 +373,9 @@ struct SyncPS {
     /**
      * @brief sign then publish pub
      */
-    PubHash signThenPublish(crData&& pub) {
+    PubHash signThenPublish(crData&& pub, DelivCb&& cb={}) {
         pubSigmgr_.sign(pub);
+        if(cb)   return publish(std::move(pub), std::move(cb));
         return publish(std::move(pub));
     }
 
@@ -559,6 +564,7 @@ struct SyncPS {
         //   need - (hashes of) items we need that they have
         //
         // pubs_ contains all pubs we have so send the ones we have & the peer doesn't.
+        netCState_ = true;
         auto iblt{name2iblt(name)};
         handleDeliveryCb(iblt);
         const auto& [have, need] = (pubs_.iblt() - iblt).peel();
@@ -717,10 +723,16 @@ struct SyncPS {
                 continue;
             }
 
-            if (d.size() > maxPubSize_ || isExpired_(d) || ! pubSigmgr_.validate(d)) {
-                // print("pub {}: {}\n", isExpired_(d)? "expired":"failed validation", d.name());
+            if (d.size() > maxPubSize_ || isExpired_(d)) {
+                // print("pub {}: {}\n", isExpired_(d)? "expired":"exceeds maxPubSize", d.name());
                 // unwanted pubs have to go in our iblt or we'll keep getting them
                 ignorePub(d);
+                continue;
+            }
+            if (! pubSigmgr_.validate(d)) {
+                //if ()
+                    ignorePub(d); // already have cert so not waiting
+                // cachePub(d);
                 continue;
             }
 
@@ -775,6 +787,25 @@ struct SyncPS {
         auto hash = hashPub(pub);
         pubs_.iblt().insert(hash);
         oneTime(pubLifetime_ + maxClockSkew, [this, hash] { pubs_.iblt().erase(hash); });
+    }
+    void cachePub(const rPub& pub) {
+        auto hash = hashPub(pub);
+        pubs_.iblt().insert(hash);
+        auto tp = pub.thumbprint();
+        cachePubs_[tp].push_back(hash);
+        // with the addition of cachePubs, would like to find this pub and remove it, need hash-to-signer tp
+        oneTime(pubLifetime_ + maxClockSkew, [this, hash/*, tp*/] {
+            pubs_.iblt().erase(hash);
+         //    for (auto h : cachePubs_[tp]) {  if (h == hash) /*remove this entry and if tp list empty, remove it*/; }
+            });
+    }
+
+    void checkCachedPubs (auto& tp) {
+        if (cachePubs_.contains(tp)) {
+            for (auto h : cachePubs_[tp]) {  pubs_.iblt().erase(h); }
+            cachePubs_.erase(tp);
+            sendCState();
+        }
     }
 
     /**
