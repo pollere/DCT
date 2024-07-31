@@ -108,6 +108,10 @@ struct mbps
     auto maxContent() { return maxContent_; }
     const auto& pubPrefix() const noexcept { return m_pubpre; }
 
+    auto startMsgsBatch() { return m_pb.m_sync.batchPubs(); }
+    void endMsgsBatch() { m_pb.m_sync.batchDone(0); }   // zero forces sendCAdd attempt
+    auto msgsBatching() { return m_pb.m_sync.batching_; }
+
     /* relies on communication schema using mbps conventions of collecting all the signing chain
      * identity information (_role, _roleId, _room, etc.) in pseudo-pub "#chainInfo" so
      * the app can extract what it needs to operate.
@@ -329,6 +333,8 @@ struct mbps
                 return mId;
             }
 
+            if (n > 1)  // batch publications of same message
+                startMsgsBatch();
             // publish as many segments as needed
             for (auto off = 0u; off < size; off += maxContent_) {
                 auto len = std::min(size - off, maxContent_);
@@ -339,8 +345,10 @@ struct mbps
             }
         } catch (const std::exception& e) {
             std::cerr << "mbps::publish: " << e.what() << std::endl;
+            endMsgsBatch();
             return 0;
         }
+        endMsgsBatch();
         return mId;
     }
 

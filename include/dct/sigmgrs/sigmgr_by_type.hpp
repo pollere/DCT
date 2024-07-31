@@ -38,6 +38,7 @@
  *  0x0b PPAEAD
  *  0x0c PPSIGN
  *  0x0d AEADSGN
+ *  0x0e AEGIS
  */
 #include <string>
 #include <string_view>
@@ -45,6 +46,7 @@
 #include <unordered_map>
 #include "../format.hpp"
 #include "sigmgr_aead.hpp"
+#include "sigmgr_aegis.hpp"
 #include "sigmgr_eddsa.hpp"
 #include "sigmgr_rfc7693.hpp"
 #include "sigmgr_sha256.hpp"
@@ -60,7 +62,7 @@ using namespace std::string_literals;
 template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
 template<class... Ts> overload(Ts...) -> overload<Ts...>;
 
-using Variants = std::variant<SigMgrSHA256,SigMgrAEAD,SigMgrRFC7693,SigMgrNULL,SigMgrEdDSA,SigMgrPPAEAD,SigMgrPPSIGN,SigMgrAEADSGN>;
+using Variants = std::variant<SigMgrSHA256,SigMgrAEAD,SigMgrAEGIS,SigMgrRFC7693,SigMgrNULL,SigMgrEdDSA,SigMgrPPAEAD,SigMgrPPSIGN,SigMgrAEADSGN>;
 
 struct SigMgrAny : Variants {
     using Variants::Variants;
@@ -88,6 +90,7 @@ struct SigMgrAny : Variants {
 static inline const std::unordered_map<std::string,uint8_t> sigmgr_name_to_type {
     {"SHA256"s,  stSHA256},
     {"AEAD"s,    stAEAD},
+    {"AEGIS"s,    stAEGIS},
     {"EdDSA"s,   stEdDSA},
     {"RFC7693"s, stRFC7693},
     {"NULL"s,    stNULL},
@@ -100,11 +103,12 @@ static inline SigMgrAny sigMgrByType(uint8_t type) {
     switch (type) {
         case stSHA256:  return SigMgrSHA256();
         case stAEAD:    return SigMgrAEAD();
+        case stAEGIS:   return SigMgrAEGIS();
         case stEdDSA:   return SigMgrEdDSA();
         case stRFC7693: return SigMgrRFC7693();
         case stNULL:    return SigMgrNULL();
         case stPPAEAD:  return SigMgrPPAEAD();
-        case stPPSIGN:    return SigMgrPPSIGN();
+        case stPPSIGN:  return SigMgrPPSIGN();
         case stAEADSGN: return SigMgrAEADSGN();
     }
     throw std::runtime_error(dct::format("sigMgrByType: unknown signer type {}", type));

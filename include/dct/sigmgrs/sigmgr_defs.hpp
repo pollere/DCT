@@ -59,6 +59,7 @@ namespace dct {
     static constexpr SigType stPPAEAD = 11;
     static constexpr SigType stPPSIGN = 12;
     static constexpr SigType stAEADSGN = 13;
+    static constexpr SigType stAEGIS = 14;
 
 } // namespace dct
 

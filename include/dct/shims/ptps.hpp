@@ -80,6 +80,8 @@ struct DCTmodelPT final : DCTmodel  {
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
     void addRelayed(const thumbPrint tp, const dctCert& c) { m_rlyCerts[tp] = true;  addCert(c); }  // if c valid, add to certstore
     const auto& keysColl() { return m_gkSync; }
+    auto& certColl() { return m_ckd.m_sync; }
+    const auto& msgsColl() { return m_sync; }
 
     // ensure a publication is *structurally* valid on the outgoing DeftT
     bool isValidPub(const Publication& pub) {
@@ -141,7 +143,7 @@ struct DCTmodelPT final : DCTmodel  {
                                    ckd.publishConfCert(cert,  m_ackCb); //cb for signing cert
                                } else
                                    ckd.publishRlyCert(cert);
-                           } else { //not a relayed cert
+                           } else { //not a relayed cert - from local subnet
                                ckd.publishCert(cert);
                                if (isSigningCert(cert))
                                    m_rlyCertCb(cert, certs());  //pass the signing cert and the cert store containing its chain
@@ -169,6 +171,16 @@ struct ptps
     bool isConnected() const { return m_connected; }
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
 
+    auto startMsgsBatch() { return m_pb.m_sync.batchPubs(); }
+    void endMsgsBatch(size_t n) { m_pb.m_sync.batchDone(n); }
+    auto msgsBatching() { return m_pb.m_sync.batching_; }
+    auto startCertBatch() { return m_pb.certColl().batchPubs(); }
+    void endCertBatch(size_t n) { m_pb.certColl().batchDone(n); }
+    auto certBatching() { return m_pb.certColl().batching_; }
+    auto startKeysBatch() { return m_pb.keysColl()->batchPubs(); }
+    void endKeysBatch(size_t n) { m_pb.keysColl()->batchDone(n); }
+     auto keysBatching() { return m_pb.keysColl()->batching_; }
+
     // following routine MUST have same type signature as DelivCb
     // this is used to prevent Publications (specifically in /keys/msgs) from
     // being forwarded before their signing keys.
@@ -188,12 +200,16 @@ struct ptps
         m_unackedCerts.erase(tp);
         if (m_holdKeys.contains(tp)) {
             // print ("certAck cb for {} finds keys on hold\n", c.name());
+            auto n = startKeysBatch();
             for (auto p : m_holdKeys[tp]) m_pb.publishKey(std::move(p));
+            endKeysBatch(n);
             m_holdKeys.erase(tp);
         }
         if (m_holdPubs.contains(tp)) {
             // print ("certAck cb for {} finds pubs on hold\n", c.name());
+            auto n = startMsgsBatch();
             for (auto p : m_holdPubs[tp]) m_pb.publish(std::move(p));
+            endMsgsBatch(n);
             m_holdPubs.erase(tp);
         }      
     }
@@ -262,6 +278,23 @@ struct ptps
                 }
                 m_connectCb();
             });
+    }
+
+    void setup(const auto& sibs, bool skipVal) {
+        // pull certs from sibling transports by signing chains
+        auto n = startCertBatch();
+        for (auto sp : sibs) if (sp != this) sp->passValidChains(this);
+        endCertBatch(n);
+        // pull Publications in keys/msgs from sibling transports (if there is a keys/msgs collection)
+        if (haveKeys()) {
+            n = startKeysBatch();
+            for (auto sp : sibs) if (sp != this) sp->passGroupKeys(this);
+            endKeysBatch(n);
+        }
+        // pull Publications in msgs from sibling transports that are connected
+        n = startMsgsBatch();
+        for (auto sp : sibs) if (sp != this && sp->isConnected()) sp->passMsgs(this, skipVal);
+        endMsgsBatch(n);
     }
 
     /*
@@ -377,10 +410,14 @@ struct ptps
         auto tp = sc.computeTP();       
         if (m_pb.certs().contains(tp)) return true;   // have already seen this signing chain
 
+        size_t n = 0;
+        auto batch = certBatching();
+        if (!batch) n = startCertBatch();   // not already batching (i.e., not called from passValidChains)
         cs.chain_for_each(tp, [this](const auto &c) {    // for each cert on this signing chain
             auto ctp = c.computeTP();
             if (! m_pb.certs().contains(ctp))   m_pb.addRelayed(ctp, c);    // add as a cert that was relayed to this DeftT
         });
+        if (!batch) endCertBatch(n);
 
         if (m_pb.certs().contains(tp)) {     //check if the signing cert validated
             return true;
@@ -389,7 +426,7 @@ struct ptps
     }
 
     /*
-     * Pass all all received validated signing chains that were not relayed to me
+     * Pass all all received validated signing chains that were not relayed to me on to sibling deftt r
      * (i.e., the signing chains of members on my face's subnet)
      * nor are relay identities to r
      * Intended for use when a DeftT connects
@@ -408,8 +445,10 @@ struct ptps
     /*
      * Pass all the active Publications in my keys/msgs collection that I received from the network to r
      * Intended for use when a DeftT connects
+     * Transport r will batch the publications it receives from me (could batch all other transports at relay
+     * connect cb)
      */
-    void passGroupKeys(const auto & r) {
+    void passGroupKeys(const auto & r) {      
         m_pb.keysColl()->forFromNet([r](const auto& p) { r->publishGKey(Publication(p)); });
     }
 

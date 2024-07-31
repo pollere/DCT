@@ -57,7 +57,8 @@ struct SigMgr {
     static constexpr bool needsKey(SigType typ) noexcept { return (needsKey_ & (1 << typ)) != 0; };
 
     // types that encrypt content
-    static constexpr uint64_t encryptsContent_{(1 << stAEAD) | (1 << stPPAEAD) | (1 << stPPSIGN) | (1 << stAEADSGN)};
+    static constexpr uint64_t encryptsContent_{(1 << stAEAD) | (1 << stAEGIS) | (1 << stPPAEAD) |
+                                               (1 << stPPSIGN) | (1 << stAEADSGN)};
     static constexpr bool encryptsContent(SigType typ) noexcept  { return (encryptsContent_ & (1 << typ)) != 0; };
 
     // types that with restricted subscriber group

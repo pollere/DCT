@@ -556,19 +556,23 @@ struct DistGKey {
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
         if (m_mbrList.size() == 80*m_maxKR) return;
 
-        auto tp = p.thumbprint();   // thumbprint of the signer of the member request
+        auto tp = p.thumbprint();   // thumbprint of the signer of the member request (signing cert)
         if (m_msgsdist && isRelay(tp)) return;  // identities with RLY don't get pub keys
 
+        if (!m_mbrList.contains(tp)) {     // not already a member
+        }
+
         if (!m_mbrList.contains(tp)) {     // not already a member, add to list
+            // uncomment to remove members with new signing certs, otherwise, just removed when expires
+            // auto itp = m_certs[tp].thumbprint();  // check for earlier signing key from the same identity and erase
+            // std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
             auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
             // convert pk to form that can be used to encrypt and add to member list
             if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0) {
-                m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
+                print ("distGkey::addGroupMem: unable to encrypt gk for {}\n", m_certs[tp].name());
+                m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk - erase what the call put in
                 return;
-            }
-            // if there is an earlier signing key from the same identity, remove it
-            auto itp = m_certs[tp].thumbprint();
-            std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
+            }           
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key

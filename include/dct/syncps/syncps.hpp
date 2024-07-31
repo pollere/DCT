@@ -246,8 +246,11 @@ struct SyncPS {
     constexpr auto tts() const noexcept { return face_.tts(); }
     constexpr auto unicast() const noexcept { return face_.unicast(); }
 
-    void batchPubs() { batching_ = true; }
-    void batchDone() { batching_ = false; }
+    auto batchPubs() { batching_ = true; return pubs_.size(); }
+    void batchDone(size_t n) {
+        batching_ = false;
+        if (!delivering_ && !registering_ && n < pubs_.size())  sendCAdd(); // try to send a cAdd if items added during batch
+    }
 
     template<typename UnOp>
     constexpr void forFromNet(UnOp&& cb) const noexcept { pubs_.forEach(std::forward<UnOp>(cb), CE<crData>::net); }

@@ -295,7 +295,7 @@ struct DistSGKey {
                 m_keyMaker = true;
                 m_KMepoch = ++epoch;    // epoch is incremented when KM gets new signing pair
                 m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); }); // keymakers need the member requests
-                gkeyTimeout();  //create a group key and schedule group key creation with this  epoch and current signing cert
+                sgkeyTimeout();  //create a group key and schedule group key creation with this  epoch and current signing cert
              }
              return;
          }
@@ -607,16 +607,16 @@ struct DistSGKey {
 
         if (!m_mbrList.contains(tp))  //if not already a member, add to list
         {
+            // uncomment to remove members with new signing certs, otherwise, just removed when expires
+            // auto itp = m_certs[tp].thumbprint();  // check for earlier signing key from the same identity and erase
+            // auto sameId = std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
+           // if (sameId) print ("DistSGKey::addGroupMem: found and erased {} earlier signing cert(s) from this identity\n", sameId);
             auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
             // convert pk to form that can be used to encrypt and add to member list
             if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0) {
                 m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
                 return;
             }
-            // if there is an earlier signing key from the same identity, remove it
-            auto itp = m_certs[tp].thumbprint();
-            auto sameId = std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
-            if (sameId) print ("DistSGKey::addGroupMem: found and erased {} earlier signing cert(s) from this identity\n", sameId);
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key

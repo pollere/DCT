@@ -248,6 +248,8 @@ int main(int argc, char* argv[])
         try {
             s->connect([s](){
                 dct::print("relay: DeftT transport {}-{} is connected\n", s->label(), s->relayTo());
+                s->setup(transList, skipValidatePubs);  // pulls publications from all connected sibs
+                /*
                 // pull certs from sibling transports by signing chains
                 for (auto sp : transList) if (sp != s) sp->passValidChains(s);
                 // pull Publications in keys/msgs from sibling transports (if there is a keys/msgs collection)
@@ -255,6 +257,7 @@ int main(int argc, char* argv[])
                     for (auto sp : transList) if (sp != s) sp->passGroupKeys(s);
                 // pull Publications in msgs from sibling transports that are connected
                 for (auto sp : transList) if (sp != s && sp->isConnected()) sp->passMsgs(s, skipValidatePubs);
+                */
                 s->subscribe(msgsRecv); // first subscribe will get everything that is in the Collection
                 } );
         } catch (const std::exception& e) {

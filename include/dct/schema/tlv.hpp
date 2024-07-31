@@ -70,6 +70,7 @@ enum class tlv : uint16_t {
                 stPPAEAD = 11,
                 stPPSIGN = 12,
                 stAEADSGN = 13,
+                stAEGIS = 14,
 
             KeyLocator = 28,
             KeyDigest = 29,
