@@ -467,10 +467,15 @@ struct TransportTcp : Transport {
         sock_.async_write_some(asio::buffer(pkt, len),
                             [len, this, cb = std::move(cb)](const boost::system::error_code& ec, std::size_t sent) {
                                 if (ec.failed()) {
-                                    if (ec.value() != EPIPE && ec.value() != ECONNRESET)
-                                        throw std::runtime_error(dct::format("send failed: {}", ec.message()));
-                                    restart(); // try to reconnect
-                                    return;
+                                    switch (ec.value()) {
+                                        default:
+                                            throw std::runtime_error(dct::format("send failed: {}", ec.message()));
+
+                                        case EPIPE: case ECONNRESET: case ECANCELED: case ETIMEDOUT:
+                                            restart(); // try to reconnect
+                                            return;
+                                    }
+                                    /*NotReached*/
                                 }
                                 if (sent < len) print("tcp send botch: sent {} of {}\n", sent, len);
                             });

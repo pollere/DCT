@@ -219,8 +219,6 @@ struct DCTmodel {
         oneTime(rCert(sc).validAfter() - now + certOverlap/2, [addKP,sp] { addKP(sp); } );
 
         // this would be a good time to check my cert store for expired certs
-        for (auto it = cs_.begin(); it != cs_.end(); ++it)
-            if (rCert(it->second).validUntil() <= now)  pv_.erase(it->first);
         cs_.removeExpired();
     }
 
@@ -282,7 +280,9 @@ struct DCTmodel {
         // cert distributor needs a callback when cert added to certstore.
         cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
         // cert distributor needs a callback to remove pubValidator for expiring signing certs
-        cs_.certRemoveCb_ = [this](const dctCert& cert) { if (isSigningCert(cert)) { pv_.erase(cert.computeThumbPrint()); return true;} return false; };
+        cs_.certRemoveCb_ = [this](const thumbPrint& tp) {
+                if (pv_.contains(tp)) std::erase_if(pv_, [&tp](const auto& i){ return i.first == tp; });
+            };
 
         for (const auto& [tp, cert] : cs_) m_ckd.initialPub(cert);
 
@@ -290,7 +290,6 @@ struct DCTmodel {
         // a callback to return a public key given a cert thumbprint.
         const auto& tp = cs_.Chains()[0]; // thumbprint of signing cert
         msgSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
-  //      certSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);    //do I need this?
         pduSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
         msgSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
         pduSigMgr().setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });

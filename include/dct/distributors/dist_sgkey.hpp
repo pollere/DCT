@@ -105,6 +105,9 @@ struct DistSGKey {
     keyVal m_sgPK{};    // current subscribergroup public key: made and kept by keymaker
     uint64_t m_curKeyCT{};      // current sg key pair creation time in microsecs
     std::map<thumbPrint,xmpk> m_mbrList{};
+    std::unordered_map<thumbPrint,thumbPrint> m_mbrIds{};
+    std::unordered_map<thumbPrint,std::chrono::system_clock::time_point> m_mrSent;
+
     std::chrono::milliseconds m_reKeyInt{3600s};
     std::chrono::milliseconds m_keyRand{10s};
     std::chrono::milliseconds m_keyLifetime{3600s+10s};
@@ -117,6 +120,19 @@ struct DistSGKey {
     bool m_msgsdist{false};        // true indicates this is a group key distributor for msgs (not pdu)
     bool m_mrPending{false};    //member request pending
     pTimer m_mrRefresh{std::make_shared<Timer>(getDefaultIoContext())}; // to refresh timed out member request
+
+    bool isAssertKL(const rData& p) {
+        static constexpr auto equal = [](const auto& a, const auto& b) -> bool {
+            return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0; };
+        auto n = p.name();
+        n.nextAt(m_krPrefix.size());    // skip to epoch
+        const auto& tp = p.thumbprint();
+        auto tpl = n.nextBlk().toSpan();
+        auto tpId = std::span(tp).first(tpl.size());    // get corresponding portion of signer's tp
+        auto tph = n.nextBlk().toSpan();                // shouldn't actually have to check that tpl=tph
+        if (equal(tpId, tpl) && equal(tpl, tph)) return true;
+        return false;
+    }
 
     DistSGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& sgkeyCb, const certStore& cs,
              std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
@@ -140,21 +156,14 @@ struct DistSGKey {
         m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
         m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),elec=crPrefix(m_prefix/"km"/"elec"),mreq=crPrefix(m_mrPrefix)](const auto& p) ->std::chrono::milliseconds {
               if (mreq.isPrefix(p.name())) return m_mrLifetime;
-              if (cand.isPrefix(p.name())) return 1000ms;
+              if (cand.isPrefix(p.name()) || elec.isPrefix(p.name())) return 3000ms;
               // if the Publication's signer is the keymaker, its assertion kr and km/elec should persist until there's a new epoch
               // expire normal kr lists with same lifetime as membership requests
               const auto& tp = p.thumbprint();    // get thumbprint of this Pub's signer
               auto n = p.name();
-              if (elec.isPrefix(n)) { // a keymaker prefix
-                  auto epoch = n.nthBlk(elec.nBlks()).toNumber();
-                  // (potential) keymaker's elec should persist keylifetime
-                  if (tp >= m_kmtp && epoch >= m_KMepoch)  return m_keyLifetime;
-                  return 0ms;     // not the keymaker
-              }
-
               if (! crPrefix(m_krPrefix).isPrefix(p.name())) return 1ms; // shouldn't happen - expect a kr
               auto epoch = n.nextAt(m_krPrefix.size()).toNumber();
-              if (epoch < m_KMepoch) return 0ms;  // from earlier epoch
+              if (tp == m_kmtp && epoch < m_KMepoch) return 0ms;  // from earlier epoch
               // Check if this is an assertion kr list Pub which should persist
               static constexpr auto equal = [](const auto& a, const auto& b) -> bool {
                          return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0; };
@@ -249,7 +258,6 @@ struct DistSGKey {
         if (m_init) return;
 
         if (! m_keyMaker) {
-            m_kmtp.fill(0);
              publishMembershipReq();
              return;
         }                               
@@ -279,9 +287,9 @@ struct DistSGKey {
     {
         if (m_msgsdist && isRelay(m_tp)) return;   // relays don't get keys
 
-        const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
-        if (m_kmpri(tp) <= 0) {
-            print("ignoring keylist signed by unauthorized identity {}\n", m_certs[p].name());
+        const auto& tp = p.thumbprint();    // thumbprint of this SGKeyRec's signer
+        if (!m_certs.contains(tp) || m_kmpri(tp) <= 0) {
+            print("DistSGKey:receiveSGKeyRecords ignoring keylist {} signed by expired or unauthorized identity\n", p.name());
             return;
         }
 
@@ -322,7 +330,7 @@ struct DistSGKey {
                 publishMembershipReq();
                 return;
             }
-            if ((m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
+            if ((m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch) || !m_certs.contains(m_kmtp)) {
                 m_kmtp = tp;        //  set this sgklist sender as my keymaker
                 m_KMepoch = epoch;
                 if (! m_mrPending) { // if needed, publish a membership request and return
@@ -342,21 +350,21 @@ struct DistSGKey {
          */
         if (tp == m_kmtp) {  //signed by my keymaker's signing key
             if (epoch != m_KMepoch) m_KMepoch = epoch; // keymakers bump epoch when they update signing pairs, so shouldn't happen
-        } else if (m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
+        } else if (m_certs.contains(m_kmtp)  && m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
             // same keymaker identity, different signing key could be updated key or restart of same keymaker
             uint64_t pt = std::chrono::duration_cast<std::chrono::microseconds>(n.lastBlk().toTimestamp().time_since_epoch()).count();
-            if (epoch > m_KMepoch || m_curKeyCT < pt) {
+            if (epoch > m_KMepoch || (isAssertKL(p) && m_curKeyCT < pt)) {
                 // new epoch and and signing cert for my KM or my curKeyCT is older than this packet  or not set yet
                 m_KMepoch = epoch;   // update KM and epoch
                 m_curKeyCT = 0;
                 m_kmtp = tp;
                 // a new MR is sent (below) if none for me in this gklist
             } else return;  // this seems to be a sgklist from keymaker's past so ignore it
-        } else { // from different identity from my KM
+        } else { // from different identity from my KM  and/or my KM may be expired
             // if this keymaker has a larger tp than my previous keymaker
             // (can resolve conflict after elections though can happen in relayed domains in particular)
             // (re)set my km and curkey ct records so I get a new key and publish MR (below)
-            if ((m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
+            if (!m_certs.contains(m_kmtp) || (m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
                 m_KMepoch = epoch;   // changing KM
                 m_kmtp = tp;
                 m_curKeyCT = 0;
@@ -394,6 +402,7 @@ struct DistSGKey {
             // the first tlv should be type 36 and it should decode to a uint64_t
             newCT = content.nextBlk(36).toNumber();
             // a new key will have a creation time larger than m_curKeyCT
+            if (newCT == m_curKeyCT) receivedGK(); //duplicate so ensure not sending MRs
              if(newCT <= m_curKeyCT) return; // received key not newer than ours
 
             // the second tlv should be type 150 and should decode to a vector of uint8_t (for public SG key)
@@ -486,6 +495,7 @@ struct DistSGKey {
         }
         auto eDone = [this](auto elected, auto epoch) {
                         if (m_keyMaker) return;    // this can happen when restarted and  just take over previous role
+                         if (m_mrPending || m_curKeyCT > 0) return;  // got assertion gk and/or gk from existing KM
                         m_keyMaker = elected;
                         m_KMepoch = epoch;
                         if (! elected) return;
@@ -543,10 +553,12 @@ struct DistSGKey {
         // call back to parent with new key, parent calls the application publication sigmgr's addKey()
         m_newKeyCb(m_sgPK, m_sgSK, m_curKeyCT);
 
+        m_mrSent.clear();
         auto s = m_mbrList.size();
         auto p = s <= m_maxKR ? 1 : (s + m_maxKR - 1) / m_maxKR; // determine number of Publications needed
         auto pubTS = std::chrono::system_clock::now();
         auto it = pubPairs.begin();
+        auto pcnt = m_sync.batchPubs();
         for(auto i=0u; i<p; ++i) {
             auto r = i < (p-1) ? m_maxKR : s;
             tlvEncoder sgkp{};    //tlv encoded content
@@ -565,8 +577,10 @@ struct DistSGKey {
             publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, pubTS, sgkp.vec());
             s -= r;
         }
+        m_sync.batchDone(pcnt);
 
         if(m_init)  initDone();     // exit init state if the assert kr has been seen - may not be any subscriber members
+                                            //XXXX  update this to use callback in publishKeyRange as in dist_gkey
     }
 
     // Periodically refresh the group key. This routine should only be called *once*
@@ -614,12 +628,22 @@ struct DistSGKey {
             auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
             // convert pk to form that can be used to encrypt and add to member list
             if(crypto_sign_ed25519_pk_to_curve25519(m_mbrList[tp].data(), pk.data()) != 0) {
+                print ("distSGkey::addGroupMem: unable to encrypt sgk for {}\n", m_certs[tp].name());
                 m_mbrList.erase(tp);    //unable to convert member's pk to sealed box pk
                 return;
             }
+            // check for older member signing cert with same identity
+            if(m_mbrIds.contains(m_certs[tp].thumbprint())) removeGroupMem(m_mbrIds[m_certs[tp].thumbprint()]);
+            m_mbrIds[m_certs[tp].thumbprint()] = tp;
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key
+
+        // hold for 2 distribution delays before resending a response to an MR
+        if (m_mrSent.contains(tp)) {
+            if (m_mrSent[tp] >  std::chrono::system_clock::now()) return;
+            m_mrSent.erase(tp);
+        } else m_mrSent[tp] = std::chrono::system_clock::now() + 2*m_sync.distDelay_;
 
         //publish the subscriber group key for this new peer (republishing if already on list)
         encSGK egKey;
@@ -641,7 +665,10 @@ struct DistSGKey {
      * if reKey is set, change the group key now to exclude the removed member
      */
     void removeGroupMem(thumbPrint& tp, bool reKey = false) {
-        m_mbrList.erase(tp);
+        if (m_mbrList.contains(tp)) {
+            m_mbrIds.erase(tp);
+            m_mbrList.erase(tp);
+        }
         if(reKey) makeSGKey(); //issue new key without disturbing rekey schedule
     }
 };

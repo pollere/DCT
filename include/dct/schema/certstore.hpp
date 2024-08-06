@@ -41,7 +41,7 @@ using certChain = std::vector<thumbPrint>;
 using keyVal = std::vector<uint8_t>;
 using certAddCb = std::function<void(const dctCert&)>;
 using chainAddCb = std::function<void(const dctCert&)>;
-using certRemoveCb = std::function<bool(const dctCert&)>;
+using certRemoveCb = std::function<void(const thumbPrint&)>;
 
 struct certStore {
     std::unordered_map<thumbPrint,dctCert> certs_{}; // validated certs
@@ -49,7 +49,7 @@ struct certStore {
     certChain chains_{}; // array of signing chain heads (thumbprints of my signing certs)
     certAddCb addCb_{[](const dctCert&){}};          // called when a cert is added
     chainAddCb chainAddCb_{[](const dctCert&){}};    // called when any new signing chain is added
-    certRemoveCb certRemoveCb_{[](const dctCert&){return false;}};    // called when a cert is being removed
+    certRemoveCb certRemoveCb_{[](const thumbPrint&){}};    // called when a cert is being removed
     static constexpr thumbPrint ztp_{};              // self-signed cert's thumbprint
 
     void dumpcerts() const {
@@ -60,22 +60,26 @@ struct certStore {
 
     auto begin() const { return certs_.cbegin(); }
     auto end() const { return certs_.cend(); }
+
     auto removeExpired() {  // remove expired certs
-        auto now = std::chrono::system_clock::now();
-        for (auto kv : certs_)
-            if (rCert(kv.second).validUntil() <= now) {
-                auto tp = kv.first;
-                if (key_.contains(tp))  key_.erase(tp);
-                // callback to dct_model to test for signing cert and handle
-                if (certRemoveCb_(kv.second)) { // returns true for signing cert
-                    // check if one of this member's signing certs - only keep at most two
-                    if (chains_.size() == 2 && chains_[1] == tp) chains_.pop_back();
-                    else if (chains_[0] == tp && chains_.size()==1) chains_.clear();
-                    else if (chains_[0] == tp && chains_.size()==2) { chains_[0] = chains_[1]; chains_.pop_back(); }
-                    if (chains_.size() == 0)  print("certStore::removeExpired removed the only signing cert for {}\n", tp);
+        std::erase_if(certs_, [this,now = std::chrono::system_clock::now()](const auto& i) {
+                if (rCert(i.second).validUntil() > now) return false;
+                // print("removeExpired {} @{:%T}\n", i.second.name(), now);
+                const auto& tp = i.first;
+                // remove any msg validation state associated with this cert
+                certRemoveCb_(tp);
+                // if we have a signing key for this cert remove it
+                if (key_.contains(tp)) {
+                    // print(" removing key: have {} keys and {} chains,", key_.size(), chains_.size());
+                    std::erase_if(key_, [&tp](const auto& k) { return k.first == tp; });
+                    std::erase(chains_, tp);
+                    // print(" after remove have {} keys and {} chains\n", key_.size(), chains_.size());
+                    if (chains_.size() == 0) {
+                        print("removeExpired @{} removed my only signing cert {}\n", now, i.second.name());
+                    }
                 }
-                certs_.erase(tp);
-            }
+                return true;
+            });
     }
 
     // lookup a cert given its thumbprint
