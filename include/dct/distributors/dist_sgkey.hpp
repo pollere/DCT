@@ -543,6 +543,13 @@ struct DistSGKey {
         auto now = std::chrono::system_clock::now();
         std::erase_if(m_mbrList, [this,now](auto& kv) { return m_certs.contains(kv.first)? rCert(m_certs[kv.first]).validUntil() < now : true; });
 
+        // once every time the keymaker makes a new key
+        // publish empty list to continue to assert keymaker role ("assertion kr")
+        tlvEncoder sgkp{};    //tlv encoded content
+        sgkp.addNumber(36, m_curKeyCT);
+        sgkp.addArray(130, std::vector<egkr>{});
+        publishKeyRange(m_tp, m_tp, now, sgkp.vec(), m_init);   // use own tp in range
+
         //encrypt the new secret key for all the subscriber group members
         std::vector<egkr> pubPairs;
         for (auto& [k,v]: m_mbrList) {
@@ -556,7 +563,6 @@ struct DistSGKey {
         m_mrSent.clear();
         auto s = m_mbrList.size();
         auto p = s <= m_maxKR ? 1 : (s + m_maxKR - 1) / m_maxKR; // determine number of Publications needed
-        auto pubTS = std::chrono::system_clock::now();
         auto it = pubPairs.begin();
         auto pcnt = m_sync.batchPubs();
         for(auto i=0u; i<p; ++i) {
@@ -564,17 +570,9 @@ struct DistSGKey {
             tlvEncoder sgkp{};    //tlv encoded content
             sgkp.addNumber(36, m_curKeyCT);
             sgkp.addArray(150, m_sgPK);
-
-            if(i==0) {  // once every time the keymaker makes a new key publish empty secret key record
-                           //  with public cert to continue to assert keyMaker role (and to get key to pure publishers) ("assertion kr")
-                // sgkp.addArray(130, pubPairs);
-                sgkp.addArray(130, std::vector<egkr>{});
-                publishKeyRange(m_tp, m_tp, pubTS, sgkp.vec(), m_init);    // use own tp in range
-                if (s==0) break;
-            }
             it = sgkp.addArray(130, it, r);
             auto l = i*m_maxKR;
-            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, pubTS, sgkp.vec());
+            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, now, sgkp.vec());
             s -= r;
         }
         m_sync.batchDone(pcnt);

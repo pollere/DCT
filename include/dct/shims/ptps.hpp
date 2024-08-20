@@ -355,7 +355,7 @@ struct ptps
     }
       /*
      * p is a complete schema-compliant Publication on the *input* Face
-     * This is used to pass keys collection Publications
+     * This is used to pass keys/msgs collection Publications
      * This allows checking of the Publication against this (outgoing) Face's schema
      * Only called for DeftTs that are connected
      * Use of holdKeys keeps from relaying keys/msgs until their signing cert has been ackd/confirmed

@@ -105,6 +105,7 @@ struct DistGKey {
     std::chrono::milliseconds m_keyRand{10s};
     std::chrono::milliseconds m_keyLifetime{3600s+10s};
     std::chrono::milliseconds m_mrLifetime{4s}; // set to ~ few dispersion delays
+    std::uniform_int_distribution<unsigned short> randInt_{2u, 9u};
     kmElection* m_kme{};
     uint32_t m_KMepoch{};        // current election epoch
     bool m_keyMaker{false};      // true if this entity is a key maker
@@ -128,7 +129,7 @@ struct DistGKey {
     }
 
     DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& gkeyCb, const certStore& cs,
-             std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600), //XXX make methods
+             std::chrono::milliseconds reKeyInterval = std::chrono::seconds(360), //XXX make methods
              std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
              std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
              m_prefix{pPre}, m_gkPrefix{pPre/"gk"}, m_mrPrefix{pPre/"mr"},
@@ -171,6 +172,7 @@ struct DistGKey {
     }
 
     auto isRelay(const thumbPrint& tp) { return m_relayChk(tp).first; }    // identity 'tp' has RLY capability?
+    constexpr auto randInt() { return randInt_(randGen()); }
 
     // publish my membership request with updated key: name <m_mrPrefix><timestamp>
     // requests don't have epoch since the keymaker sets the epoch, member learns from key list
@@ -272,6 +274,19 @@ struct DistGKey {
         auto n = p.name();
         auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
 
+        decltype(m_curKeyCT) newCT{};   //decode the new key's creation time
+        std::span<const gkr> gkrVec{};  // decode the content of the gk list (empty for assertion gk)
+        try {
+            auto content = p.content();
+            // the first tlv should be type 36 and it should decode to a uint64_t
+            // a new key will have a creation time larger than m_curKeyCT
+            newCT = content.nextBlk(36).toNumber();
+            // the second tlv should be type 130, a vector of gkr pairs
+            gkrVec = content.nextBlk(130).toSpan<gkr>();
+        } catch (std::runtime_error& ex) {
+            return; //ignore this publication
+        }
+
         if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
             // keylist is from earlier signing key of my signing identity
             if (m_init) {
@@ -284,7 +299,6 @@ struct DistGKey {
             }
             return;
         }
-
         if (m_keyMaker) {
             // another member claims to be a keyMaker - largest thumbPrint and most recent epoch wins
             if ((m_tp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {              
@@ -298,23 +312,21 @@ struct DistGKey {
             return;
         }
 
-        // tests for non-keymakers in init state. If no MR has been sent, can't be a gk for me
-        if (m_init && m_kmtp != tp) {
-            // in init state and this is not my keymaker (may not have set one yet)
+        // tests for non-keymakers
+        if (m_init) {
+            if (!m_mrPending) publishMembershipReq();
+            if (isAssertGKL(p)) return; // can't be a gk for me
             if (m_KMepoch == 0) {
                 m_kmtp = tp;        //  first time to set a keymaker
                 m_KMepoch = epoch;
-                publishMembershipReq();
-                return;
             }
-            if ((m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch) || !m_certs.contains(m_kmtp)) {
-                m_kmtp = tp;        //  set this gklist sender as my keymaker
-                m_KMepoch = epoch;
-                if (! m_mrPending) { // if needed, publish a membership request and return
-                    publishMembershipReq();
-                    return;
-                }
-            }
+        } else if (isAssertGKL(p)) {
+            // publish an MR in response to an assert
+            // at the cost of a short delay to send a MR that is needed, reduce/eliminate MR explosion
+            if (tp != m_kmtp || m_curKeyCT < newCT)
+                m_sync.oneTime(m_sync.distDelay_+std::chrono::milliseconds(randInt()),
+                               [this, nt=newCT](){ if (m_curKeyCT < nt) publishMembershipReq();});
+            return;
         }
 
         /*
@@ -326,16 +338,17 @@ struct DistGKey {
          * if this msg was from an earlier Key Maker epoch, test for restarted keymaker, otherwise ignore it.
          */
         if (tp == m_kmtp) {  //signed by my keymaker's signing key
-            if (epoch != m_KMepoch) m_KMepoch = epoch; // keymakers bump epoch when they update signing pairs, so shouldn't happen
+            if (epoch > m_KMepoch) {
+                m_KMepoch = epoch;
+                m_curKeyCT = 0;         // will need a new gk for this epoch
+            }
         } else if (m_certs.contains(m_kmtp)  && m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
             // same keymaker identity, different signing key could be updated key or restart of same keymaker
-            uint64_t pt = std::chrono::duration_cast<std::chrono::microseconds>(n.lastBlk().toTimestamp().time_since_epoch()).count();
-            if (epoch > m_KMepoch || (isAssertGKL(p) && m_curKeyCT < pt)) {
-                // new epoch and and signing cert for my KM or my curKeyCT is older than this packet  or not set yet
+            if (m_curKeyCT < newCT) {
+                // new epoch and and signing cert for my KM or my curKeyCT is older than when this packet was sent  or not set yet
                 m_KMepoch = epoch;   // update KM and epoch
-                m_curKeyCT = 0;
+                m_curKeyCT = 0;         // will need a new gk this epoch and sc
                 m_kmtp = tp;
-                // a new MR is sent (below) if no key for me in this gklist
             } else return;  // this seems to be a gklist from keymaker's past so ignore it
         } else { // from different identity from my KM and/or my KM may be expired
             // if this keymaker has a larger tp than my previous keymaker
@@ -344,8 +357,7 @@ struct DistGKey {
             if (!m_certs.contains(m_kmtp) || (m_kmtp < tp && epoch == m_KMepoch) || (epoch > m_KMepoch)) {
                 m_KMepoch = epoch;   // changing KM
                 m_kmtp = tp;
-                m_curKeyCT = 0;
-                // a new MR is sent (below) if no key for me in this gklist
+                m_curKeyCT = 0; // a new MR is sent (below) if no key for me in this gklist
             } else return;   // from a KM that is displaced by my KM
        }
 
@@ -357,35 +369,29 @@ struct DistGKey {
             return r < 0;
         };
 
-        decltype(m_curKeyCT) newCT{};   //decode the new key's creation time
-
-        // check if I'm in this gk publication's range
-        auto tpl = n.nextBlk().toSpan();
-        auto tph = n.nextBlk().toSpan();
-        auto tpId = std::span(m_tp).first(tpl.size());
-        if(less(tpId, tpl) || less(tph, tpId)) {            
-            if (m_curKeyCT == 0 /*&& !m_mrPending*/) publishMembershipReq();    // make sure new KM has my MR
-            return; // no key for me in this pub
-         }
-
-        // decode the content of the GK list
-        std::span<const gkr> gkrVec{};
         try {
-            auto content = p.content();
-            // the first tlv should be type 36 and it should decode to a uint64_t
-            // a new key will have a creation time larger than m_curKeyCT
-            // (future: ensure it's from the same creator as last time?)
-            newCT = content.nextBlk(36).toNumber();
             if (newCT == m_curKeyCT) receivedGK();  // duplicate so make sure not sending MRs
             if(newCT <= m_curKeyCT) return; // group key not newer than ours
-            // the second tlv should be type 130 and should be a vector of gkr pairs
-            gkrVec = content.nextBlk(130).toSpan<gkr>();
+
+            // check if I'm in this gk publication's range
+            auto tpl = n.nextBlk().toSpan();    // continues from epoch, above
+            auto tph = n.nextBlk().toSpan();
+            auto tpId = std::span(m_tp).first(tpl.size());
+            if(less(tpId, tpl) || less(tph, tpId)) {
+                if (m_curKeyCT == 0 && !m_mrPending) publishMembershipReq();    // make sure new KM has my MR
+                else    // likely that my km has made a new key - delay in case one on the way
+                    m_sync.oneTime(m_sync.distDelay_+std::chrono::milliseconds(randInt()),
+                               [this, nt=newCT](){ if (m_curKeyCT < nt) publishMembershipReq();});
+                return; // no key for me in this gk list
+            }
         } catch (std::runtime_error& ex) {
             return; //ignore this publication
         }
+
+        // find my gk
         auto it = std::find_if(gkrVec.begin(), gkrVec.end(), [this](auto p){ return p.first == m_tp; });
         if (it == gkrVec.end()) {
-            // didn't find our encrypted key in pub - make sure new KM it has our request
+            // didn't find our encrypted key in pub (error in gklist name) - make sure new KM it has our request
             if (m_curKeyCT == 0 && !m_mrPending) publishMembershipReq();
             return;
         }
@@ -503,6 +509,19 @@ struct DistGKey {
         auto now = std::chrono::system_clock::now();
         std::erase_if(m_mbrList, [this,now](auto& kv) { return m_certs.contains(kv.first)? rCert(m_certs[kv.first]).validUntil() < now : true; });
 
+        auto pcnt = m_sync.batchPubs();
+        // once every time the keymaker makes a new key
+        // publish empty list to continue to assert keymaker role ("assertion gk")
+        tlvEncoder gkrEnc{};    //tlv encoded content
+        gkrEnc.addNumber(36, m_curKeyCT);
+        gkrEnc.addArray(130, std::vector<gkr>{});
+        publishKeyRange(m_tp, m_tp, now, gkrEnc.vec());   // use own tp in range
+
+        auto s = m_mbrList.size();  // publish new gkey to all members
+        if (s==0) {
+            m_sync.batchDone(pcnt);
+            return;   // no members
+         }
         //encrypt the new group key for all the group members in a sealed box
         // that can only opened by the secret key associated with converted public key in mbrList
         std::vector<gkr> pubPairs{};
@@ -511,27 +530,17 @@ struct DistGKey {
             crypto_box_seal(egKey.data(), m_curKey.data(), m_curKey.size(), v.data());
             pubPairs.emplace_back(k, egKey);
         }
-
         m_mrSent.clear();
-        auto s = m_mbrList.size();
         auto p = s <= m_maxKR ? 1 : (s + m_maxKR - 1) / m_maxKR; // determine number of Publications needed
-        auto pubTS = std::chrono::system_clock::now();
         auto it = pubPairs.begin();
-        auto pcnt = m_sync.batchPubs();
+
         for(auto i=0u; i<p; ++i) {
             auto r = s < m_maxKR ? s : m_maxKR;
             tlvEncoder gkrEnc{};    //tlv encoded content
             gkrEnc.addNumber(36, m_curKeyCT);
-            if(i==0) {  // once every time the keymaker makes a new key
-                // publish empty list to continue to assert keymaker role ("assertion gk")
-                // gkrEnc.addArray(130, pubPairs);
-                gkrEnc.addArray(130, std::vector<gkr>{});
-                publishKeyRange(m_tp, m_tp, pubTS, gkrEnc.vec());   // use own tp in range
-                if (s==0) break;
-            }
             it = gkrEnc.addArray(130, it, r);
             auto l = i*m_maxKR;
-            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, pubTS, gkrEnc.vec());
+            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, now, gkrEnc.vec());
             s -= r;
         }
         m_sync.batchDone(pcnt);
