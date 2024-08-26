@@ -126,7 +126,7 @@ struct DistSGKey {
             return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0; };
         auto n = p.name();
         n.nextAt(m_krPrefix.size());    // skip to epoch
-        const auto& tp = p.thumbprint();
+        const auto& tp = p.signer();
         auto tpl = n.nextBlk().toSpan();
         auto tpId = std::span(tp).first(tpl.size());    // get corresponding portion of signer's tp
         auto tph = n.nextBlk().toSpan();                // shouldn't actually have to check that tpl=tph
@@ -159,7 +159,7 @@ struct DistSGKey {
               if (cand.isPrefix(p.name()) || elec.isPrefix(p.name())) return 3000ms;
               // if the Publication's signer is the keymaker, its assertion kr and km/elec should persist until there's a new epoch
               // expire normal kr lists with same lifetime as membership requests
-              const auto& tp = p.thumbprint();    // get thumbprint of this Pub's signer
+              const auto& tp = p.signer();    // get thumbprint of this Pub's signer
               auto n = p.name();
               if (! crPrefix(m_krPrefix).isPrefix(p.name())) return 1ms; // shouldn't happen - expect a kr
               auto epoch = n.nextAt(m_krPrefix.size()).toNumber();
@@ -222,7 +222,7 @@ struct DistSGKey {
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
         // check this new key matches 0th signing chain
         m_tp = m_certs.Chains()[0];
-        if (m_tp != dctCert::computeThumbPrint(pubCert))
+        if (m_tp != pubCert.computeTP())
             throw runtime_error("dist_sgkey:updateSigningKey gets new key not at chains[0]");
 
         // sigmgrs need to get the new signing keys and public key lookup callbacks
@@ -287,7 +287,7 @@ struct DistSGKey {
     {
         if (m_msgsdist && isRelay(m_tp)) return;   // relays don't get keys
 
-        const auto& tp = p.thumbprint();    // thumbprint of this SGKeyRec's signer
+        const auto& tp = p.signer();    // thumbprint of this SGKeyRec's signer
         if (!m_certs.contains(tp) || m_kmpri(tp) <= 0) {
             print("DistSGKey:receiveSGKeyRecords ignoring keylist {} signed by expired or unauthorized identity\n", p.name());
             return;
@@ -296,7 +296,7 @@ struct DistSGKey {
         auto n = p.name();
         auto epoch = n.nextAt(m_krPrefix.size()).toNumber();
         // if keylist is from earlier signing key of my identity
-        if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
+        if (m_certs[tp].signer() == m_certs[m_tp].signer()) {
             // keylist is from earlier signing key of my signing identity
             if (m_init) {
                 // seem to be restarted keymaker, grab keymaker status and return
@@ -350,7 +350,7 @@ struct DistSGKey {
          */
         if (tp == m_kmtp) {  //signed by my keymaker's signing key
             if (epoch != m_KMepoch) m_KMepoch = epoch; // keymakers bump epoch when they update signing pairs, so shouldn't happen
-        } else if (m_certs.contains(m_kmtp)  && m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
+        } else if (m_certs.contains(m_kmtp)  && m_certs[tp].signer() == m_certs[m_kmtp].signer()) {
             // same keymaker identity, different signing key could be updated key or restart of same keymaker
             uint64_t pt = std::chrono::duration_cast<std::chrono::microseconds>(n.lastBlk().toTimestamp().time_since_epoch()).count();
             if (epoch > m_KMepoch || (isAssertKL(p) && m_curKeyCT < pt)) {
@@ -612,7 +612,7 @@ struct DistSGKey {
         // Future: return some indication of this
         if (m_mbrList.size() == 80*m_maxKR)   return;
 
-        auto tp = p.thumbprint();   // thumbprint of the signer of the member request
+        auto tp = p.signer();   // thumbprint of the signer of the member request
         if(! m_sgMem(tp)) return;  //this signing cert doesn't have SG capability
         // Test here for request  in /keys/msgs/mr  from a RLY identity
         if(m_msgsdist && isRelay(tp))  return;
@@ -620,8 +620,8 @@ struct DistSGKey {
         if (!m_mbrList.contains(tp))  //if not already a member, add to list
         {
             // uncomment to remove members with new signing certs, otherwise, just removed when expires
-            // auto itp = m_certs[tp].thumbprint();  // check for earlier signing key from the same identity and erase
-            // auto sameId = std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).thumbprint() == itp : false; });
+            // auto itp = m_certs[tp].signer();  // check for earlier signing key from the same identity and erase
+            // auto sameId = std::erase_if(m_mbrList, [this,tp,itp](auto& kv) { return kv.first != tp? rCert(m_certs[kv.first]).signer() == itp : false; });
            // if (sameId) print ("DistSGKey::addGroupMem: found and erased {} earlier signing cert(s) from this identity\n", sameId);
             auto pk = m_certs[tp].content().toVector();   //access the public key for this signer's thumbPrint
             // convert pk to form that can be used to encrypt and add to member list
@@ -631,8 +631,8 @@ struct DistSGKey {
                 return;
             }
             // check for older member signing cert with same identity
-            if(m_mbrIds.contains(m_certs[tp].thumbprint())) removeGroupMem(m_mbrIds[m_certs[tp].thumbprint()]);
-            m_mbrIds[m_certs[tp].thumbprint()] = tp;
+            if(m_mbrIds.contains(m_certs[tp].signer())) removeGroupMem(m_mbrIds[m_certs[tp].signer()]);
+            m_mbrIds[m_certs[tp].signer()] = tp;
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key

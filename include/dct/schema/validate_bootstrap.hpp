@@ -46,7 +46,7 @@ static inline const bSchema& loadSchema(const dctCert& scert) {
     static std::unordered_map<thumbPrint,const bSchema> schemas{};
 
     // if the schema has been loaded just return it
-    auto tp = scert.computeThumbPrint();
+    auto tp = scert.computeTP();
     if (auto s = schemas.find(tp); s != schemas.end()) return s->second;
 
     return schemas.try_emplace(tp, certToSchema(scert, tp)).first->second;
@@ -98,15 +98,15 @@ static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& 
     // check that all identity chain certs have the right sigType, each locator refers to the previous
     // and is validated by the previous.
     auto ch = idChainCb();
-    auto prevTP = root.computeThumbPrint();
+    auto prevTP = root.computeTP();
     for (size_t c = 0; c < ch.size(); c++) {
         const auto& cert = ch[c];
         if (cert.getSigType() != sigType) throw schema_error("identity chain certs don't all have same signing type");
-        if (cert.getKeyLoc() != prevTP) throw schema_error(format("cert {} signing chain invalid",cert.name()));
+        if (cert.signer() != prevTP) throw schema_error(format("cert {} signing chain invalid",cert.name()));
         if (! sm.validate(cert, cs[prevTP])) throw schema_error(format("cert {} doesn't validate", c));
         if (matchesAny(bs, cert.name()) < 0) throw schema_error(format("cert {} doesn't match a schema cert", cert.name()));
         cs.add(cert);
-        prevTP = cert.computeThumbPrint();
+        prevTP = cert.computeTP();
     }
 
     // all the bootstrap identity certs are valid, ask for a signing pair of <cert, secretKey> to complete the chain
@@ -115,7 +115,7 @@ static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& 
 
     // belt and suspenders? This code would be repeated when a new signing pair is created
     if (sc.getSigType() != sigType) throw schema_error("signing pair cert has incorrect signing type");
-    if (sc.getKeyLoc() != ch.back().computeThumbPrint())
+    if (sc.signer() != ch.back().computeTP())
         throw schema_error(format("signing pair cert  invalid"));
     if (! sm.validate(sc, ch.back())) throw schema_error(format("signing cert doesn't validate"));
     if (matchesAny(bs, sc.name()) < 0) throw schema_error(format("signing cert doesn't match a schema cert"));
@@ -177,7 +177,7 @@ static inline const auto& validateBootstrap(std::string_view bootstrap, certStor
         const auto& [cert, key] = cb[c];
         const auto& prev = cb[l].first;
         if (cert.getSigType() != sigType) throw schema_error("bundle certs don't all have same signing type");
-        if (cert.getKeyLoc() != prev.computeThumbPrint())
+        if (cert.signer() != prev.computeTP())
             throw schema_error(format("cert {} signing chain invalid",cert.name()));
         if (! sm.validate(cert, prev)) throw schema_error(format("cert {} doesn't validate", c));
         if (matchesAny(bs, cert.name()) < 0) throw schema_error(format("cert {} doesn't match a schema cert", cert.name()));

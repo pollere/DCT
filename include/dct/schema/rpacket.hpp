@@ -295,7 +295,7 @@ struct rData : tlvParser {
 
         auto sigType() const { return sigInfo().findBlk(tlv::SignatureType).toByte(); }
 
-        auto& thumbprint() const {
+        auto& signer() const {
             static constinit std::array<uint8_t,4> kloc{ 28, thumbPrint_s+2, 29, thumbPrint_s };
             auto si = sigInfo().findBlk(tlv::KeyLocator);
             if (memcmp(si.data(), kloc.data(), kloc.size()) != 0)

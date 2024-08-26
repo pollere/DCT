@@ -148,11 +148,16 @@ struct SyncPS {
         static constexpr uint8_t act = 1;  // 0 = expired, 1 = active
         static constexpr uint8_t loc = 2;  // 0 = from net, 2 = local
         static constexpr uint8_t net = 0;  // 0 = from net, 2 = local
+        static constexpr uint8_t nos = 4;  // 4 = no signing cert
         static constexpr uint8_t sts = act|loc;  // mask for all status bits
+        auto inIblt() const noexcept { return (s_ & (nos|act)) != 0; }
         auto active() const noexcept { return (s_ & act) != 0; }
         auto fromNet() const noexcept { return (s_ & (act|loc)) == act; }
         auto local() const noexcept { return (s_ & (act|loc)) == (act|loc); }
+        auto noSigner() const noexcept { return (s_ & (nos|act)) == nos; }
         auto& deactivate() { s_ &=~ act; return *this; }
+        auto& activate() { s_ |= act; return *this; }
+        auto& signer() { s_ &=~ nos; return *this; }
     };
 
     template<typename Item, typename Ent = CE<Item>, typename Base = std::unordered_map<PubHash,Ent>>
@@ -171,6 +176,10 @@ struct SyncPS {
             for (const auto& [h, e] : *(Base*)this) if ((e.s_ & Ent::sts) == (cond|Ent::act)) cb(e.i_);
         }
 
+        constexpr void forEachNoS(auto&& cb) const noexcept {
+            for (auto& [h, e] : *(Base*)this) if ((e.s_ & Ent::nos) != 0) cb(e);
+        }
+
         PubHash add(PubHash h, Item&& i, decltype(Ent::s_) s) {
             if (const auto& [it,added] = Base::try_emplace(h, std::forward<Item>(i), s); !added) return 0;
             iblt_.insert(h);
@@ -181,6 +190,7 @@ struct SyncPS {
         auto add(Item&& i, decltype(Ent::s_) s) { return add(hashPub(i), std::forward<Item>(i), s); }
         auto addLocal(Item&& i) { return add(std::forward<Item>(i), Ent::loc|Ent::act); }
         auto addNet(Item&& i) { return add(std::forward<Item>(i), Ent::act); }
+        auto addNoSigner(Item&& i) { return add(std::forward<Item>(i), Ent::nos|Ent::net); }
 
         template<typename C=Item> requires hasView<C>
         auto addNet(decltype(C().asView())&& c) { return add(Item{c}, Ent::act); }
@@ -193,37 +203,65 @@ struct SyncPS {
         }
         auto erase(PubHash h) {
             if (auto p = Base::find(h); p != Base::end()) {
-                if (p->second.active()) iblt_.erase(h);
+                if (p->second.inIblt()) iblt_.erase(h);
                 Base::erase(p);
             }
         }
     };
 
-    Collection<crData> pubs_{};             // current publications
-    Collection<DelivCb> pubCbs_{};          // pubs requesting delivery callbacks
+    /*
+     * special collections that just contain hashes of pubs with some special property
+     * (like they're being ignored). This iblt is added to the outgoing cstate iblt to
+     * suppress (re)sending of the pub. These hashes have no additional attributes.
+     */
+    struct HashCollection : std::unordered_set<PubHash> {
+        using Base =  std::unordered_set<PubHash>;
+        IBLT<PubHash> iblt_{};
+
+        constexpr auto& iblt() noexcept { return iblt_; }
+
+        constexpr auto contains(PubHash h) const noexcept { return Base::contains(h); }
+
+        PubHash add(PubHash h) {
+            if (const auto& [it,added] = Base::emplace(h); !added) return 0;
+            iblt_.insert(h);
+            return h;
+        }
+        auto erase(PubHash h) {
+            if (Base::contains(h)) {
+                iblt_.erase(h);
+                Base::erase(h);
+            }
+        }
+    };
+
+    Collection<crData> pubs_{};     // current publications
+    Collection<DelivCb> pubCbs_{};  // pubs requesting delivery callbacks
+    HashCollection ignore_{};       // currently ignored pubs
     lpmLT<crPrefix,SubCb> subscriptions_{}; // subscription callbacks
     std::map<uint32_t,PubHashVec> pendOthers_{};    // for effective meshing, need to send non-local origin pubs
-    std::unordered_map<dct::thumbPrint,std::vector<PubHash>> cachePubs_{};
 
     DirectFace& face_;
-    const crName collName_;         // 'name' of the collection
-    SigMgr& pktSigmgr_;               // cAdd packet signing and validation
-    SigMgr& pubSigmgr_;             // Publication validation
-    size_t maxPubSize_;                // max space in bytes available in Content of a cAdd
-    size_t maxInfoSize_;               // max space in bytes for Publication Name plus Content
+    const crName collName_;     // 'name' of the collection
+    SigMgr& pktSigmgr_;         // cAdd packet signing and validation
+    SigMgr& pubSigmgr_;         // Publication validation
+    size_t maxPubSize_;         // max space in bytes available in Content of a cAdd
+    size_t maxInfoSize_;        // max space in bytes for Publication Name plus Content
     std::chrono::milliseconds cStateLifetime_{stateLifetime};
     std::chrono::milliseconds pubLifetime_{maxPubLifetime};
     std::chrono::milliseconds pubExpirationGB_{maxPubLifetime};
     std::chrono::milliseconds distDelay_{pduProc};  // time for a PDU to be distributed to all members on this subnet
+    std::chrono::milliseconds signerHold_{distDelay_};
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
     std::uniform_int_distribution<unsigned short> randInt_{7u, 12u}; //  cState delay  randomization
-    Nonce  nonce_{};                // nonce of current cState
-    uint32_t publications_{};       // # locally originated publications
-    bool delivering_{false};        // currently processing a cAdd
-    bool registering_{true};        // RST not set up yet
-    bool netCState_{false};        // no cState from net seen in this collection yet
-    bool batching_{false};          // can be used to hold off cState for a batch of new Publications
-    bool autoStart_{true};          // call 'start()' when done registering
+    Nonce  nonce_{};            // nonce of current cState
+    uint32_t publications_{};   // # locally originated publications
+    uint32_t noSignerPubs_{};   // # publications whose signer isn't in my certstore (yet)
+    bool delivering_{false};    // currently processing a cAdd
+    bool registering_{true};    // RST not set up yet
+    bool netCState_{false};     // no cState from net seen in this collection yet
+    bool batching_{false};      // can be used to hold off cState for a batch of new Publications
+    bool autoStart_{true};      // call 'start()' when done registering
     GetLifetimeCb getLifetime_{ [this](auto){ return pubLifetime_; } };
     IsExpiredCb isExpired_{
         // default CB assumes last component of name is a timestamp and says pub is expired
@@ -276,6 +314,7 @@ struct SyncPS {
         if (maxPubSize_ <= 0 || maxInfoSize_ <= 0)
             throw runtime_error("syncps: no space for Pub /Info");
         distDelay_ += std::chrono::milliseconds(tts());
+        signerHold_ = distDelay_;   //default
         if (distDelay_ > 300ms) {
             cStateLifetime_ = 30 * distDelay_ > 6000s ? 6000ms : 30*distDelay_;  // distributors can change
             pubLifetime_ = maxPubLifetime > 10*cStateLifetime_ ? maxPubLifetime : 10*cStateLifetime_;
@@ -287,12 +326,9 @@ struct SyncPS {
 
 
     /**
-     * @brief add a new local or network publication to the 'active' pubs set
+     * complete lifetime timer setup for pub newly added to collection or just activated.
      */
-    auto addToActive(crData&& p, bool localPub) {
-        //print("{:%M:%S} addToActive {} {}: {}\n", std::chrono::system_clock::now(), p.name(), p.size(), localPub);
-        auto lt = getLifetime_(p);
-        auto hash = localPub? pubs_.addLocal(std::move(p)) : pubs_.addNet(std::move(p));
+    auto finishActivate(PubHash hash, std::chrono::milliseconds lt) {
         if (hash == 0 || lt == decltype(lt)::zero()) return hash;
 
         // We remove an expired publication from our active set at twice its pub
@@ -305,11 +341,73 @@ struct SyncPS {
         // as we delete it.
 
         oneTime(lt + maxClockSkew, [this, hash]{ pubs_.deactivate(hash); });
-        oneTime(lt + pubExpirationGB_, [this, hash]{
-                //if (auto p = pubs_.find(hash); p != pubs_.end()) {
-                    //print("syncps expiring {} at {:%T}\n", p->second.i_.name(), std::chrono::system_clock::now()); }
-                pubs_.erase(hash); });
+        oneTime(lt + pubExpirationGB_, [this, hash]{ pubs_.erase(hash); });
         return hash;
+    }
+
+    /**
+     * @brief add a new local or network publication to the 'active' pubs set
+     */
+    auto addToActive(crData&& p, bool localPub) {
+        //print("{:%M:%S} addToActive {} {}: {}\n", std::chrono::system_clock::now(), p.name(), p.size(), localPub);
+        auto lt = getLifetime_(p);
+        auto hash = localPub? pubs_.addLocal(std::move(p)) : pubs_.addNet(std::move(p));
+        return finishActivate(hash, lt);
+    }
+
+    /*
+     * @brief activate a no-signer entry whose signing cert has arrived.
+     */
+    auto activateEntry(const auto& e) {
+        const auto& p = e.i_;
+        //print("{:%M:%S} activateEntry {} {}: {}\n", std::chrono::system_clock::now(), p.name(), p.size(), localPub);
+        if (e.fromNet())
+            if (auto s = subscriptions_.findLM(p.name()); subscriptions_.found(s)) deliver(p, s->second);
+
+        return finishActivate(hashPub(p), getLifetime_(p));
+    }
+
+    /**
+     * @brief add a new network publication to the collection, but marked as both inactive
+     * and noSigner. For otherwise okay Publications whose signer is not (yet) in local
+     * certstore. Publication is marked "inactive" so won't be sent in a cAdd or returned in
+     * a subscribe cb.
+     * This is only kept for a short time (~distDelay)
+     */
+    bool addToNoSigner(crData&& p) {
+        auto hash = pubs_.addNoSigner(std::move(p));
+        //print("{:%M:%S} addToNoSigner {} {} ^{:x}\n", std::chrono::system_clock::now(), p.name(), p.size(), hash);
+        if (hash == 0 || noSignerPubs_ > 50) return false;
+        noSignerPubs_++;
+        // Remove a publication that had no signing cert when it arrived if its signer
+        // does not show up after brief delay. Check to make sure it hasn't become active.
+        oneTime(signerHold_ + maxClockSkew, [this, hash]{
+            if (pubs_.contains(hash) && !(pubs_.at(hash).active())) {
+                //print("{:%M:%S} addToNoSigner now ignoring ^{:x}\n", std::chrono::system_clock::now(), hash);
+                --noSignerPubs_;
+                pubs_.erase(hash);
+                ignorePub(hash);
+            }
+        });
+        return true;
+    }
+
+    /*
+     *  called after the associated cert store adds a new signing cert to see if this permits any
+     *  of the held publications to be validated and moved to active
+     */
+    void newSigner(const thumbPrint& tp) {
+        if (noSignerPubs_ == 0) return;
+        //print("{:%M:%S} newSigner called with {} entries\n", std::chrono::system_clock::now(), noSignerPubs_);
+        pubs_.forEachNoS([this,tp](auto& e) {
+            const auto& p = e.i_;   // reference to pub
+            if (tp == p.signer() && pubSigmgr_.validate(p)) {
+                //print("syncps::newSigner is activating {}\n", p.name());
+                e.signer().activate();
+                --noSignerPubs_;
+                activateEntry(e);
+            }
+        });
     }
 
     /**
@@ -332,7 +430,8 @@ struct SyncPS {
         // doDeliveryCb(h, true);
         // new pub is always sent if 1) not delivering 2) not registering and 3) a cState is in collection
         // If no cStates, send a cState including this pub
-        if (!delivering_ && !registering_ && !batching_)   {   // don't send publications until completely registered for responses
+        if (!delivering_ && !registering_ && !batching_) {
+            // don't send publications until completely registered for responses
             if (netCState_ == false || sendCAdd() == false) sendCState();
         }
         return h;
@@ -447,7 +546,8 @@ struct SyncPS {
 
         scheduledCStateId_->cancel();
         nonce_ = rand32();
-        face_.express(crState(collName_/pubs_.iblt().rlEncode(), cStateLifetime_, nonce_),
+        auto rleiblt = (ignore_.size() > 0? (pubs_.iblt() + ignore_.iblt()) : pubs_.iblt()).rlEncode();
+        face_.express(crState(collName_/rleiblt, cStateLifetime_, nonce_),
                         [this](auto /*csid*/) { sendCState(); } // cState timeout for local cStates
                     );
     }
@@ -582,7 +682,7 @@ struct SyncPS {
                 if (p->second.local()) {
                     if (p->second.hold_ > now) continue;     // sent this pub too recently to send again
                     pv.emplace_back(p->second.i_);
-                } else {
+                } else if (p->second.fromNet()) {
                     phOth.emplace_back(hash);    // others get checked at their (delayed) send time
                 }
             }
@@ -596,7 +696,7 @@ struct SyncPS {
                 sendCStateSoon();   // only waits the small random delay - may want to increase
             }
             // Next section of code is for sending non-local origin pubs for effective meshing
-            //  only set up to send others pubs if the cState is from a member who has all my local origin pubs
+            //  only send others' pubs if the cState is from a member who has all my local origin pubs
             //  (may be overly conservative but avoids reacting to transitory cStates)
             // This may result in sending another's Pubs that it is suppressing after first send
             if (phOth.empty() || have.size() - phOth.size() > 0) return false;
@@ -620,8 +720,10 @@ struct SyncPS {
         if (need.size()) {  // check if this cState had Publications I need
             face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
             sendCStateSoon();
-        } else
-            sendCStateSoon(2*distDelay_); // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
+        } else {
+            // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
+            sendCStateSoon(2*distDelay_);
+        }
         return true;
     }
 
@@ -719,23 +821,37 @@ struct SyncPS {
         for (auto c : cAdd.content()) {
             if (! c.isType(tlv::Data)) continue;
             rData d(c);
-            if (! d.valid()) continue;
+            if (! d.valid()) {
+                // XXX the current cAdd .valid() method only checks the form of the outer 'Data'
+                // but not that the content section TLVs are all of type Data, are valid,  and
+                // their sizes are correct. Until this is fixed we are 'shotgun parsing' and, if
+                // the TLV format is adversarial, we may not be able to safely hash & ignore the pub.
+                // For now we skip this pub and try to continue but getting a real cAdd valid()
+                // method needs to happen ASAP. Once it does, this 'if' will go away since a cAdd
+                // will never be passed up to here if any of its Data's are not valid.
+                //print("doesn't pass basic structure test {}\n", d.name());
+                continue;
+            }
+            auto h = hashPub(d);
+            if (ignore_.contains(h)) continue;  // currently ignoring this pub
+
             //  puts hold on pubs others send that I already have in case it is on the pending list
-            if (pubs_.contains(d)) { // && not local origin in case overhear a member resending my pubs?
-                if (ht.time_since_epoch().count()) pubs_.at(hashPub(d)).hold_ = ht;
+            if (pubs_.contains(h)) { // && not local origin in case overhear a member resending my pubs?
+                if (ht.time_since_epoch().count()) pubs_.at(h).hold_ = ht;
                 continue;
             }
 
             if (d.size() > maxPubSize_ || isExpired_(d)) {
-                // print("pub {}: {}\n", isExpired_(d)? "expired":"exceeds maxPubSize", d.name());
+                 //print("pub {}: {}\n", isExpired_(d)? "expired":"exceeds maxPubSize", d.name());
                 // unwanted pubs have to go in our iblt or we'll keep getting them
                 ignorePub(d);
                 continue;
             }
             if (! pubSigmgr_.validate(d)) {
-                //if ()
-                    ignorePub(d); // already have cert so not waiting
-                // cachePub(d);
+                if (pubSigmgr_.haveSigner(d))
+                    ignorePub(d); // already have this Pub's signing cert
+                else if ( !addToNoSigner(crData(d)))
+                    ignorePub(d);   // failed to add as inactive without signer
                 continue;
             }
 
@@ -747,15 +863,13 @@ struct SyncPS {
                 continue;
             }
             ++ap;
-            // don't really need the test, since just placed it in actives
-           //  if (auto p = pubs_.find(ph); p != pubs_.end())  p->second.hold_ = ht; - shipCAdd sets hold, this is odd here
             if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) deliver(d, s->second);
             // else print("syncps::onCAdd: no subscription for {}\n", d.name());
         }
         delivering_ = false;
         if (ap == 0) {  // nothing I need in this cAdd, no change to local cState
             // consider skipping this for unicast
-            sendCStateSoon(distDelay_); //canceled sending cState on entry, should actually do this sooner if there are "needs"
+            sendCStateSoon(distDelay_); //canceled sending cState on entry, maybe make this sooner if there are "needs"
             return;
         }
 
@@ -774,8 +888,8 @@ struct SyncPS {
             else    sendCAdd(name);
             return;
         }
-
-        sendCStateSoon(distDelay_); // changed local cState, send a confirming cState at a randomized delay - gets reset if more cAdds arrive
+        // changed local cState, send a confirming cState at a randomized delay - gets reset if more cAdds arrive
+        sendCStateSoon(distDelay_);
     }
 
     /**
@@ -783,32 +897,20 @@ struct SyncPS {
      */
 
     /**
-     * @brief ignore a publication by temporarily adding it to the our iblt
-     * XXX fix to add hash to pubs_ so dups can be recognized
+     * @brief ignore a publication by temporarily adding it to the our 'ignored' collection
      */
-    void ignorePub(const rPub& pub) {
-        auto hash = hashPub(pub);
-        pubs_.iblt().insert(hash);
-        oneTime(pubLifetime_ + maxClockSkew, [this, hash] { pubs_.iblt().erase(hash); });
+    void ignorePub(const PubHash h) {
+        if (ignore_.contains(h)) return;
+        ignore_.add(h);
+        oneTime(1s, [this, h]{
+                    ignore_.erase(h);
+                    //print("{:%M:%S} ignorePub done ignoring ^{:x}\n", std::chrono::system_clock::now(), h);
+                });
     }
-    void cachePub(const rPub& pub) {
-        auto hash = hashPub(pub);
-        pubs_.iblt().insert(hash);
-        auto tp = pub.thumbprint();
-        cachePubs_[tp].push_back(hash);
-        // with the addition of cachePubs, would like to find this pub and remove it, need hash-to-signer tp
-        oneTime(pubLifetime_ + maxClockSkew, [this, hash/*, tp*/] {
-            pubs_.iblt().erase(hash);
-         //    for (auto h : cachePubs_[tp]) {  if (h == hash) /*remove this entry and if tp list empty, remove it*/; }
-            });
-    }
-
-    void checkCachedPubs (auto& tp) {
-        if (cachePubs_.contains(tp)) {
-            for (auto h : cachePubs_[tp]) {  pubs_.iblt().erase(h); }
-            cachePubs_.erase(tp);
-            sendCState();
-        }
+    void ignorePub(const rPub& p) {
+        auto h = hashPub(p);
+        //print("{:%M:%S} ignorePub {} ^{:x}\n", std::chrono::system_clock::now(), p.name(), h);
+        ignorePub(h);
     }
 
     /**
@@ -877,6 +979,7 @@ struct SyncPS {
         pubExpirationGB_ = time > maxClockSkew? time : maxClockSkew;
         return *this;
     }
+    auto& signerHoldtime(std::chrono::milliseconds time) { signerHold_ = time; return *this; }
 };
 
 }  // namespace dct

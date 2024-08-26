@@ -84,7 +84,7 @@ static inline void readBootstrap(std::string_view bootstrap) {
     // first item must be a trust anchor - to be validated by the DeftT
     if (! root.size())
         root = cb[0].first;
-    else if ((cb[0].first).computeThumbPrint() != root.computeThumbPrint()) {
+    else if ((cb[0].first).computeTP() != root.computeTP()) {
         dct::print("readBootstrap for shim {} has different root of trust\n", schema.size());
         exit(0);
     }

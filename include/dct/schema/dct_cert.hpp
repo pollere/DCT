@@ -120,19 +120,7 @@ struct dctCert : crCert {
     static constexpr bool selfSigned(const thumbPrint& t) {
         return std::all_of(t.begin(), t.end(), [](uint8_t b){ return b == 0; });
     }
-
-    static inline thumbPrint computeThumbPrint(rData cert) {
-        thumbPrint tp;
-        crypto_hash_sha256(tp.data(), cert.data(), cert.size());
-        return tp;
-    }
-    static inline const thumbPrint& getKeyLoc(rData data) { return data.thumbprint(); }
-
-    const thumbPrint& getKeyLoc() const { return getKeyLoc(*this); }
-
-    auto selfSigned() const { return selfSigned(getKeyLoc()); }
-
-    thumbPrint computeThumbPrint() const { return computeThumbPrint(*this); }
+    auto selfSigned() const { return selfSigned(this->signer()); }
 
     // return the 'signature type' (tlv 27) byte of 'data'
     static inline auto getSigType(rData data) { return data.sigType(); }

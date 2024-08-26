@@ -47,6 +47,7 @@ struct SigMgrNULL final : SigMgr {
      */
     bool validate(rData ) override final { return true; }
     bool validate(rData , const rData&) override final { return true; }
+    bool haveSigner(rData) override final { return true; }
 };
 
 } // namespace dct

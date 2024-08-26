@@ -90,7 +90,7 @@ struct certStore {
 
     // lookup the signing cert of 'data'
     const auto& operator[](rData data) const {
-        const auto& tp = dctCert::getKeyLoc(data);
+        const auto& tp = data.signer();
         if (dctCert::selfSigned(tp)) {
             throw schema_error(format("looking up self-signed {}", data.name())); //XXX
             //return data;
@@ -100,7 +100,7 @@ struct certStore {
 
     // lookup the (public) signing key of 'data'
     auto signingKey(rData data) const {
-        const auto& tp = dctCert::getKeyLoc(data);
+        const auto& tp = data.signer();
         if (! dctCert::selfSigned(tp)) data = get(tp);
         return data.content().rest();
     }
@@ -127,14 +127,14 @@ struct certStore {
             print("cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
-        return finishAdd(certs_.try_emplace(c.computeThumbPrint(), c));
+        return finishAdd(certs_.try_emplace(c.computeTP(), c));
     }
     auto add(dctCert&& c) {
         if (! c.valid()) {
             print("cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
-        return finishAdd(certs_.try_emplace(c.computeThumbPrint(), std::move(c)));
+        return finishAdd(certs_.try_emplace(c.computeTP(), std::move(c)));
     }
 
     auto add(const dctCert& c, const keyVal& k) {
@@ -142,7 +142,7 @@ struct certStore {
             print("cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
-        auto it = finishAdd(certs_.try_emplace(c.computeThumbPrint(), c));
+        auto it = finishAdd(certs_.try_emplace(c.computeTP(), c));
         if (k.size() && it.second) {
             const auto& [tp, cert] = *it.first;
             key_.try_emplace(tp, k);
@@ -157,7 +157,7 @@ struct certStore {
             print("cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
-        auto it = certs_.try_emplace(c.computeThumbPrint(), c);
+        auto it = certs_.try_emplace(c.computeTP(), c);
         if (k.size() && it.second) {
             const auto& [tp, cert] = *it.first;
             key_.try_emplace(tp, k);
@@ -174,7 +174,7 @@ struct certStore {
         constexpr void operator++() const { }
         const auto& operator*() {
             const auto& c = cs_[*tp_];
-            tp_ = &c.getKeyLoc();
+            tp_ = &c.signer();
             return c;
         }
         constexpr auto& begin() const { return *this; }
@@ -192,7 +192,7 @@ struct certStore {
     certVec chainNames(const dctCert& cert) const {
         certVec cv{};
         cv.emplace_back(tlvVec{cert.name()});
-        for (const auto& c: chainIter(cert.getKeyLoc(),*this)) cv.emplace_back(tlvVec{c.name()});
+        for (const auto& c: chainIter(cert.signer(),*this)) cv.emplace_back(tlvVec{c.name()});
         return cv;
     }
 
@@ -203,7 +203,7 @@ struct certStore {
         while (*t != ztp_) {
             const auto& c = get(*t);
             op(c);
-            t = &c.thumbprint();
+            t = &c.signer();
         }
     }
 
@@ -213,18 +213,18 @@ struct certStore {
     const auto& trustAnchorTP(size_t idx) const {
         if (chains_.empty()) throw schema_error(format("trustAnchorTP: signing chain {} doesn't exist", idx));
         const auto* ltp = &ztp_;
-        for (const auto* tp = &chains_[idx]; !dctCert::selfSigned(*tp); tp = &get(*tp).getKeyLoc()) { ltp = tp; }
+        for (const auto* tp = &chains_[idx]; !dctCert::selfSigned(*tp); tp = &get(*tp).signer()) { ltp = tp; }
         return *ltp;
     }
 
     // for my signing chain in bootstrap
     void addChain(const dctCert& cert) {
-        chains_.emplace_back(cert.computeThumbPrint());
+        chains_.emplace_back(cert.computeTP());
         chainAddCb_(cert);
     }
     // for adding my new chain resulting from periodic signing pair updates - only holds my signing chains not others'
     void insertChain(const dctCert& cert) {
-        chains_.insert(chains_.begin(), cert.computeThumbPrint());
+        chains_.insert(chains_.begin(), cert.computeTP());
         // only keep my immediately prior signing chain
         while (chains_.size() > 2 )  chains_.pop_back();
         chainAddCb_(cert);

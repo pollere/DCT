@@ -55,13 +55,13 @@ int main(int argc, const char* argv[]) {
         std::unordered_map<thumbPrint,int> tpmap{};
         int c{0};
         for (const auto& [cert, key] : rdCertBundle(buf)) {
-            auto ttp = cert.computeThumbPrint();
+            auto ttp = cert.computeTP();
             if (tpmap.contains(ttp)) print("** duplicate thumbprints: cert {} and {}.\n", tpmap[ttp], c);
             tpmap[ttp] = c++;
         }
         c = 0;
         for (const auto& [cert, key] : rdCertBundle(buf)) {
-            const auto& stp = cert.getKeyLoc();
+            const auto& stp = cert.signer();
             if (dctCert::selfSigned(stp)) {
                 print("{} root", c);
             } else if (! tpmap.contains(stp)) {
@@ -70,7 +70,7 @@ int main(int argc, const char* argv[]) {
                 print("{} <= {}", c, tpmap[stp]);
             }
             if (verbose) {
-                auto ttp = cert.computeThumbPrint();
+                auto ttp = cert.computeTP();
                 print(" {:02x} ", fmt::join(std::span(ttp).first(4),""));
             }
             print(": {}", rData(cert).name());

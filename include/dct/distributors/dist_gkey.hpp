@@ -120,7 +120,7 @@ struct DistGKey {
             return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0; };
         auto n = p.name();
         n.nextAt(m_gkPrefix.size());    // skip to epoch
-        const auto& tp = p.thumbprint();
+        const auto& tp = p.signer();
         auto tpl = n.nextBlk().toSpan();
         auto tpId = std::span(tp).first(tpl.size());    // get corresponding portion of signer's tp
         auto tph = n.nextBlk().toSpan();                // shouldn't actually have to check that tpl=tph
@@ -148,7 +148,7 @@ struct DistGKey {
             auto n = p.name();
             if (mreq.isPrefix(n)) return m_mrLifetime;
             if (cand.isPrefix(n) || elec.isPrefix(n)) return 3000ms;
-            const auto& tp = p.thumbprint();    // get thumbprint of this Pub's signer
+            const auto& tp = p.signer();    // get thumbprint of this Pub's signer
             if (! crPrefix(m_gkPrefix).isPrefix(n)) return 0ms; // shouldn't happen - expect a gk list
             auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
              if (tp == m_kmtp && epoch < m_KMepoch) return 0ms;  // from earlier epoch of my current km
@@ -214,7 +214,7 @@ struct DistGKey {
      */
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
         m_tp = m_certs.Chains()[0];     // set to the thumbPrint of the new first signing chain
-        if (m_tp != dctCert::computeThumbPrint(pubCert))
+        if (m_tp != pubCert.computeTP())
             throw runtime_error("dist_gkey:updateSigningKey gets new key not at chains[0]");
 
         // sigmgr needs to get the new signing keys and public key lookup callbacks
@@ -266,7 +266,7 @@ struct DistGKey {
     void receiveGKeyList(const rPub& p) {
         if (m_msgsdist && isRelay(m_tp))  return;   // relays don't get pub keys for msgs collection
 
-        const auto& tp = p.thumbprint();    // thumbprint of this GKeyList's signer
+        const auto& tp = p.signer();    // thumbprint of this GKeyList's signer
         if (!m_certs.contains(tp) || m_kmpri(tp) <= 0) {
             print("DistGKey:receiveGKeyList ignoring keylist {} signed by expired or unauthorized identity\n", p.name());
             return;
@@ -287,7 +287,7 @@ struct DistGKey {
             return; //ignore this publication
         }
 
-        if (m_certs[tp].thumbprint() == m_certs[m_tp].thumbprint()) {
+        if (m_certs[tp].signer() == m_certs[m_tp].signer()) {
             // keylist is from earlier signing key of my signing identity
             if (m_init) {
                 // seem to be restarted keymaker, grab keymaker status and return
@@ -342,7 +342,7 @@ struct DistGKey {
                 m_KMepoch = epoch;
                 m_curKeyCT = 0;         // will need a new gk for this epoch
             }
-        } else if (m_certs.contains(m_kmtp)  && m_certs[tp].thumbprint() == m_certs[m_kmtp].thumbprint()) {
+        } else if (m_certs.contains(m_kmtp)  && m_certs[tp].signer() == m_certs[m_kmtp].signer()) {
             // same keymaker identity, different signing key could be updated key or restart of same keymaker
             if (m_curKeyCT < newCT) {
                 // new epoch and and signing cert for my KM or my curKeyCT is older than when this packet was sent  or not set yet
@@ -578,7 +578,7 @@ struct DistGKey {
         // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
         if (m_mbrList.size() == 80*m_maxKR) return;
 
-        auto tp = p.thumbprint();   // thumbprint of the signer of the member request (signing cert)
+        auto tp = p.signer();   // thumbprint of the signer of the member request (signing cert)
         if (m_msgsdist && isRelay(tp)) return;  // identities with RLY don't get pub keys
 
         if (!m_mbrList.contains(tp)) {     // not already a member, add to list (signer already checked on receipt)
@@ -590,8 +590,8 @@ struct DistGKey {
                 return;
             }
             // check for older member signing cert with same identity
-            if(m_mbrIds.contains(m_certs[tp].thumbprint())) removeGroupMem(m_mbrIds[m_certs[tp].thumbprint()]);
-            m_mbrIds[m_certs[tp].thumbprint()] = tp;
+            if(m_mbrIds.contains(m_certs[tp].signer())) removeGroupMem(m_mbrIds[m_certs[tp].signer()]);
+            m_mbrIds[m_certs[tp].signer()] = tp;
         }
 
         if(!m_curKeyCT)    return;  // haven't made first group key

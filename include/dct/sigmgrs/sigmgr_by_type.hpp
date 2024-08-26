@@ -71,6 +71,7 @@ struct SigMgrAny : Variants {
     SigMgr& ref() const noexcept { return (SigMgr&)*this; }
 
     // invoke methods of whichever sigmgr is set in the variant
+    bool haveSigner(rData d) { return ref().haveSigner(d); }
     bool sign(crData& d) { return ref().sign(d); }
     bool sign(crData& d, const SigInfo& s) { return ref().sign(d, s); }
     bool sign(crData& d, const SigInfo& s, const keyVal& k) { return ref().sign(d, s, k); }

@@ -182,7 +182,7 @@ struct SigMgrAEADSGN final : SigMgr {
              }
              i = (i + 1) % keyListSize();
         } while (i != m_decryptIndex);
-        // print("aeadsgn decrypt failed for Publication:  {}\n", d.name());
+         //print("aeadsgn decrypt failed for Publication:  {}\n", d.name());
         return false;
        } catch (std::exception& e) { print("aeadsgn decrypt failed\n"); throw runtime_error (e.what()); }
     }
@@ -217,6 +217,19 @@ struct SigMgrAEADSGN final : SigMgr {
     bool validateDecrypt(rData d) override final {       
         if(! validate(d))    return false;
         return decrypt(d);
+    }
+
+    /*
+     * returns true if the publication's signer is in the certstore
+     */
+    bool haveSigner(rData d) override final {
+        keyRef ppk;
+        try {
+            ppk = m_keyCb(d);
+        } catch(...) {
+            return false;   // no public cert for key locator in the rData
+        }
+        return true;
     }
 
     inline size_t keyListSize() const { return m_keyList.size(); }

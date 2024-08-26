@@ -146,7 +146,7 @@ struct SigMgrSchema final : SigMgr {
         }
         // structurally validate 'data'
         try {
-            const auto& pubval = pv_.at(dctCert::getKeyLoc(data)); // can throw when checking pubs from cAdds where don't yet have certs
+            const auto& pubval = pv_.at(data.signer()); // can throw when checking pubs from cAdds where don't yet have certs
             auto valid = pubval.matchTmplt(bs_, data.name());
             if (!valid) print("SigMgrSchema::validate: invalid structure {}\n", data.name());
             return valid;
@@ -155,6 +155,8 @@ struct SigMgrSchema final : SigMgr {
     }
 
     bool decrypt(rData data) override final { return pubsm_.get().decrypt(data); }
+
+    bool haveSigner(rData d) override final { return pubsm_.get().haveSigner(d); }
 
     void setSigMgr(SigMgr& sm) { pubsm_ = sm; }
 };

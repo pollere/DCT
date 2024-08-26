@@ -138,6 +138,20 @@ struct SigMgrEdDSA final : SigMgr {
         try { return validate(d, m_keyCb(d)); } catch (...) {}
         return false;
     }
+
+    /*
+     * returns true if the publication's signer is in the certstore
+     */
+    bool haveSigner(rData d) override final {
+        keyRef ppk;
+        try {
+            ppk = m_keyCb(d);
+        } catch(...) {
+            return false;   // no public cert for key locator in the rData
+        }
+        return true;
+    }
+
 };
 
 } // namespace dct

@@ -83,6 +83,7 @@ struct SigMgr {
     }
     bool sign(crData& d) { return sign(d, m_sigInfo, m_signingKey); };
     bool sign(crData& d, const SigInfo& si) { return sign(d, si, m_signingKey); }
+    virtual bool haveSigner(rData) { return false; }
     virtual bool sign(crData&, const SigInfo&, const keyVal&) { abort(); };
     virtual bool validate(rData ) { return false; };
     virtual bool validate(rData, const rData&) { return false; };

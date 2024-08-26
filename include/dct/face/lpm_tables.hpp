@@ -164,6 +164,7 @@ struct PST : std::unordered_map<csID_t, PSTentry> {
      * names contain an iblt of O(128) bytes) so we want to minimize copying. 
      */
     auto add(PSTentry&& e) { return try_emplace(mhashView(e.s_.name()), std::move(e)); }
+    auto add(csID_t hash, PSTentry&& e) { return try_emplace(hash, std::move(e)); }
 
     /**
      * add cState to PST.
@@ -179,22 +180,24 @@ struct PST : std::unordered_map<csID_t, PSTentry> {
 
     // add locally generated cState to PST
     auto add(const rState& s, StateTO&& sto) {
-        if (auto it = find(mhashView(s.name())); found(it)) {
+        auto hash = mhashView(s.name());
+        if (auto it = find(hash); found(it)) {
             auto& pe = it->second;
             pe.sto_ = std::move(sto);
             return std::pair<iterator,bool>{it, false};
         }
-        return add(PSTentry{s, std::move(sto)});
+        return add(hash, PSTentry{s, std::move(sto)});
     }
 
     // add network generated cState to PST
     auto add(const rState& s) {
+        auto hash = mhashView(s.name());
         if (auto it = find(mhashView(s.name())); found(it)) {
             it->second.fromNet_ = true;
             it->second.onNet_++;
             return std::pair<iterator,bool>{it, false};
         }
-        return add(PSTentry{s});
+        return add(hash, PSTentry{s});
     }
 };
 

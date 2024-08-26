@@ -121,7 +121,7 @@ struct kmElection {
     void handleKMcand(const rData& p) {
         if (priority_ <= 0) return; // already know election is lost
         try { 
-            const auto& tp = p.thumbprint();
+            const auto& tp = p.signer();
             int pri = kmpri_(tp);
             auto n = p.name();
             if (pri <= 0 || wrongEpoch(n.nextAt(preSz_).toNumber())) return;
@@ -144,9 +144,9 @@ struct kmElection {
         // for the previous election (the app probably has a new signing key
         // so this is checked by looking at the thumbprint of the identity
         // key in the signing key) make it the new keymaker.
-        const auto& tp = p.thumbprint();
+        const auto& tp = p.signer();
         if (kmpri_(tp) <= 0) return;
-        if (epoch_ == 0 && certs_[tp].thumbprint() == certs_[ourTP_].thumbprint()) {
+        if (epoch_ == 0 && certs_[tp].signer() == certs_[ourTP_].signer()) {
             epoch_ = epoch;
             if (priority_ < 0) priority_ = -priority_;
             electionDone();

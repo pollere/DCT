@@ -97,7 +97,7 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  */
 static void msgsRecv(ptps* s, const Publication& p) {
      // auto now = std::chrono::system_clock::now();
-     // dct::print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
+    //  dct::print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
             if (sp != s && sp->isConnected()) {
@@ -249,15 +249,6 @@ int main(int argc, char* argv[])
             s->connect([s](){
                 dct::print("relay: DeftT transport {}-{} is connected\n", s->label(), s->relayTo());
                 s->setup(transList, skipValidatePubs);  // pulls publications from all connected sibs
-                /*
-                // pull certs from sibling transports by signing chains
-                for (auto sp : transList) if (sp != s) sp->passValidChains(s);
-                // pull Publications in keys/msgs from sibling transports (if there is a keys/msgs collection)
-                if (s->haveKeys())
-                    for (auto sp : transList) if (sp != s) sp->passGroupKeys(s);
-                // pull Publications in msgs from sibling transports that are connected
-                for (auto sp : transList) if (sp != s && sp->isConnected()) sp->passMsgs(s, skipValidatePubs);
-                */
                 s->subscribe(msgsRecv); // first subscribe will get everything that is in the Collection
                 } );
         } catch (const std::exception& e) {

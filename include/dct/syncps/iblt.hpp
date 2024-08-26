@@ -100,9 +100,27 @@ struct IBLT {
 
     using HashTable = std::array<HashTableEntry,nEntries>;
     HashTable hashTable_{};
+    int nitems_{};
+
+    constexpr auto size() const { return nitems_; }
 
     static constexpr int INSERT = 1;
     static constexpr int ERASE = -1;
+
+    void update1(int plusOrMinus, HashVal key, size_t idx) {
+        HashTableEntry& entry = hashTable_.at(idx);
+        entry.count += plusOrMinus;
+        if (entry.count >= maxCnt) throw std::runtime_error("too many items in iblt hash bucket");;
+        entry.keySum ^= key;
+        entry.keyCheck ^= mh3(uint64_t(key) | (N_HASHCHECK << 32));
+    }
+    void update(int plusOrMinus, HashVal key) {
+        nitems_ += plusOrMinus;
+        const auto [hash0, hash1, hash2] = hash(key);
+        update1(plusOrMinus, key, hash0);
+        update1(plusOrMinus, key, hash1);
+        update1(plusOrMinus, key, hash2);
+    }
 
     /**
      * @brief run-length encode this iblt into a byte vector.
@@ -157,12 +175,14 @@ struct IBLT {
                 continue;
             }
             // extract entry
+            nitems_ += b;
             hashTable_[i].count = b;
             hashTable_[i].keySum   = r[1] | (r[2] << 8) | (r[3] << 16) | (r[4] << 24);
             hashTable_[i].keyCheck = r[5] | (r[6] << 8) | (r[7] << 16) | (r[8] << 24);
             if (++i > nEntries) throw std::runtime_error("compressed IBLT too large");;
             r += 9;
         }
+        nitems_ /= N_HASH;
     }
 
     /**
@@ -197,7 +217,7 @@ struct IBLT {
      *  - one or more of the key's 3 hash entries is 'pure' but doesn't contain 'key'
      */
     bool chkPeer(size_t key, size_t idx) const noexcept {
-        auto hte = getHashTable().at(idx);
+        auto hte = hashTable_.at(idx);
         return hte.isEmpty() || (hte.isPure() && hte.keySum != key);
     }
 
@@ -250,6 +270,8 @@ struct IBLT {
     }
 
     IBLT operator-(const IBLT& other) const {
+        if (other.size() == 0) return *this;
+
         IBLT result(*this);
         for (size_t i = 0; i < nEntries; i++) {
             HashTableEntry& e1 = result.hashTable_.at(i);
@@ -261,20 +283,18 @@ struct IBLT {
         return result;
     }
 
-    const HashTable& getHashTable() const noexcept { return hashTable_; }
+    IBLT operator+(const IBLT& other) const {
+        if (other.size() == 0) return *this;
 
-    void update1(int plusOrMinus, HashVal key, size_t idx) {
-        HashTableEntry& entry = hashTable_.at(idx);
-        entry.count += plusOrMinus;
-        if (entry.count >= maxCnt) throw std::runtime_error("too many items in iblt hash bucket");;
-        entry.keySum ^= key;
-        entry.keyCheck ^= mh3(uint64_t(key) | (N_HASHCHECK << 32));
-    }
-    void update(int plusOrMinus, HashVal key) {
-        const auto [hash0, hash1, hash2] = hash(key);
-        update1(plusOrMinus, key, hash0);
-        update1(plusOrMinus, key, hash1);
-        update1(plusOrMinus, key, hash2);
+        IBLT result(*this);
+        for (size_t i = 0; i < nEntries; i++) {
+            HashTableEntry& e1 = result.hashTable_.at(i);
+            const HashTableEntry& e2 = other.hashTable_.at(i);
+            e1.count += e2.count;
+            e1.keySum ^= e2.keySum;
+            e1.keyCheck ^= e2.keyCheck;
+        }
+        return result;
     }
 };
 
@@ -302,10 +322,10 @@ static inline std::string prtPeer(const IBLT<T>& iblt, size_t idx, size_t rep) {
 
     std::ostringstream rslt{};
     rslt << " @" << std::hex << rep;
-    auto hte = iblt.getHashTable().at(rep);
+    auto hte = iblt.hashTable_.at(rep);
     if (hte.isEmpty()) {
         rslt << "!";
-    } else if (iblt.getHashTable().at(idx).keySum != hte.keySum) {
+    } else if (iblt.hashTable_.at(idx).keySum != hte.keySum) {
         rslt << (hte.isPure()? "?" : "*");
     }
     return rslt.str();
@@ -313,7 +333,7 @@ static inline std::string prtPeer(const IBLT<T>& iblt, size_t idx, size_t rep) {
 
 template<typename T>
 static inline std::string prtPeers(const IBLT<T>& iblt, size_t idx) {
-    auto hte = iblt.getHashTable().at(idx);
+    auto hte = iblt.hashTable_.at(idx);
     // can only get the peers of 'pure' entries
     if (! hte.isPure()) return "";
     const auto [hash0, hash1, hash2] = iblt.hash(hte.keySum);
@@ -324,7 +344,7 @@ template<typename T>
 static inline std::ostream& operator<<(std::ostream& out, const IBLT<T>& iblt) {
     out << "idx count keySum keyCheck\n";
     auto idx = 0;
-    for (const auto& hte : iblt.getHashTable()) {
+    for (const auto& hte : iblt.hashTable_) {
         out << std::hex << std::setw(2) << idx << hte << prtPeers(iblt, idx) << "\n";
         idx++;
     }

@@ -224,7 +224,7 @@ struct SigMgrPPSIGN final : SigMgr {
         if(!sKeyListSize())   return false;     //can't decrypt without a subscriber group secret key - silent discard
 
         //get the decryption key associated with the publisher
-        const auto& tp = d.thumbprint();
+        const auto& tp = d.signer();
         keyRef ppk;
         try {
             ppk = m_keyCb(d);           // get public cert of d's signer
@@ -307,6 +307,20 @@ struct SigMgrPPSIGN final : SigMgr {
         }
         m_decKeys[tp].assign(dk, dk + crypto_kx_SESSIONKEYBYTES);
     }
+
+    /*
+     * returns true if the publication's signer is in the certstore
+     */
+    bool haveSigner(rData d) override final {
+        keyRef ppk;
+        try {
+            ppk = m_keyCb(d);
+        } catch(...) {
+            return false;   // no public cert for key locator in the rData
+        }
+        return true;
+    }
+
 };
 
 } // namespace dct

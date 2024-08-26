@@ -123,7 +123,7 @@ struct DCTmodel {
     // cert store. Since certs can arrive in any order, a small number of certs
     // are held pending their signing cert's arrival.
     void addCert(rData d) {
-        const auto tp = dctCert::computeThumbPrint(d);
+        const auto tp = d.computeTP();
         if (cs_.contains(tp)) return;
 
         // check if cert is consistent with the schema:
@@ -141,7 +141,7 @@ struct DCTmodel {
             auto cname = tlvVec(cert.name());
             if (matchesAny(bs_, cname) < 0) return; // name doesn't match schema
 
-            const auto& stp = cert.thumbprint();    // cert's signer's (identity) thumbprint
+            const auto& stp = cert.signer();    // cert's signer's (identity) thumbprint
             if (dctCert::selfSigned(stp)) return; // can't add new root cert
             if (cname.size() >= 7 && cname[-6].toSv() == "schema") return; // can't add new schema
 
@@ -167,7 +167,14 @@ struct DCTmodel {
                 if (validateChain(bs_, cs_, cert) < 0) return; // chain structure invalid
                 cs_.add(cert);
                 setupPubValidator(tp);
-                return; // done since nothing can be pending on a signing cert
+                // let all attached collections know there is a new signer in case have pending Publications
+                // start with PDU key collection, then Pub key collection, then msgs collection
+                if (m_gkd)   m_gkd->m_sync.newSigner(tp);
+                else if (m_sgkd) m_sgkd->m_sync.newSigner(tp);
+                if (m_pgkd)   m_pgkd->m_sync.newSigner(tp);
+                else if (m_psgkd) m_psgkd->m_sync.newSigner(tp);
+                m_sync.newSigner(tp);
+                return; // done since signing cert validation completes the chain
             }
             cs_.add(cert);
             checkPendingCerts(cert, tp);

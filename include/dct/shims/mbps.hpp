@@ -345,6 +345,8 @@ struct mbps
             }
         } catch (const std::exception& e) {
             std::cerr << "mbps::publish: " << e.what() << std::endl;
+            for (auto e : mp) print ("{}/", e.second);
+            print ("\n");
             endMsgsBatch();
             return 0;
         }
