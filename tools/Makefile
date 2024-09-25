@@ -77,15 +77,19 @@ tst_certstore: tst_certstore.cpp
 	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
-tst_encoder: tst_encoder.cpp 
-	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
-	#rm -rf $@.dSYM
-
 tst_crname: tst_crname.cpp 
 	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_crpack: tst_crpack.cpp 
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
+tst_encoder: tst_encoder.cpp 
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
+tst_iblt: tst_iblt.cpp 
 	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 

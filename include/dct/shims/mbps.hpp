@@ -71,11 +71,13 @@ using msgParms = std::vector<parItem>;
 using msgHndlr = std::function<void(mbps&, const mbpsMsg&, std::vector<uint8_t>&)>;
 using connectCb = std::function<void()>;
 using confHndlr = std::function<void(const bool, const uint32_t)>;
+using paceHndlr = std::function<void(mbps&, const bool, const uint32_t)>;
 
 using error = std::runtime_error;
 using MsgID = uint32_t;
 using SegCnt = uint16_t;
 using MsgInfo = std::unordered_map<MsgID,std::bitset<64>>;
+using MsgTm = std::unordered_map<MsgID,dct::timeVal>;
 using MsgSegs = std::vector<uint8_t>;
 using MsgCache = std::unordered_map<MsgID,MsgSegs>;
 
@@ -87,10 +89,13 @@ struct mbps
     std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids
     size_t maxContent_;      // max number of bytes of application message per Publication
     std::unordered_map<MsgID, confHndlr> m_msgConfCb;
+    paceHndlr m_msgPaceCb;  //assuming pace one message at time
     MsgInfo m_pending{};    // unconfirmed published messages
     MsgInfo m_received{};   //received publications of a message
+    MsgTm m_msgTm{};     //message originating time
     MsgCache m_reassemble{}; //reassembly of received message segments
     Timer* m_timer;
+    bool m_pacing{false};   //set when pacing out a multi-segment message
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr)
         : m_pb{rootCb, schemaCb, idChainCb, signIdCb, addr}, m_pubpre{m_pb.pubPrefix()}
@@ -137,6 +142,7 @@ struct mbps
     {
         m_connectCb = std::move(scb);
         m_uniqId = dct::format("{}", rName(m_pb.pubVal("#chainInfo")));
+        // m_pb.pubLifetime(5000ms);    // for setting lifetimes to other than default
 
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {
@@ -191,17 +197,19 @@ struct mbps
         if (p.name().size() > MAX_NAME)
             print ("mbps::receivePub: pub name size {} ({}) exceeds preset max {}\n", p.name().size(), sizeof(p.name()), MAX_NAME);
 
+        MsgID mId = p.number("msgID");
         auto content = p.content().rest();
         if (k == 0) { //single publication in this message
             if(auto sz = content.size()) msg.assign(content.data(), content.data() + sz);
+            m_msgTm[mId] = p.time("mts");   // timestamp is message origination time
         } else {
-            MsgID mId = p.number("msgID");
             n = 255 & k;    //bottom byte
             k >>= 8;
             if (k > n || k == 0 || n > MAX_SEGS) {
                 print("receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
                 return;
             }
+            if (k == 1) m_msgTm[mId] = p.time("mts");   // first timestamp is message origination time
             //reassemble message            
             const auto& m = content;
             auto& dst = m_reassemble[mId];
@@ -215,9 +223,19 @@ struct mbps
             msg = m_reassemble[mId];
             m_received.erase(mId);  //delete msg state
             m_reassemble.erase(mId);
-        }                
+        }
+
         // Complete message received, prepare arguments for msgHndlr callback
         mh(*this, mbpsMsg(p), msg);
+    }
+
+    // sort of hack so applications can get originating message time
+    dct::timeVal msgTime(const mbpsMsg& p) {
+        auto m = p.number("msgID");
+        if (!m_msgTm.contains(m)) return std::chrono::system_clock::now();
+        auto t = m_msgTm[m];
+        m_msgTm.erase(m);
+        return t;
     }
 
     /*
@@ -300,12 +318,12 @@ struct mbps
         /*
          * Set up and publish Publication(s)
          * can check here for required arguments
-         * msgID is an uint32_t hash of the message, incorporating ID and timestamp to make unique
+         * msgID is an uint32_t hash of the message, incorporating ID and first Pub's timestamp to make unique
          */
         const bool hasCH = (bool)ch;
         auto size = msg.size();
         auto mts = std::chrono::system_clock::now();
-        mp.emplace_back("mts", mts);
+
 
         uint64_t tms = duration_cast<std::chrono::microseconds>(mts.time_since_epoch()).count();
         std::vector<uint8_t> emsg;
@@ -318,6 +336,7 @@ struct mbps
         uint32_t mId = h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24;
         mp.emplace_back("msgID", mId);
         if (ch) m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
+        auto& tsf = mp.emplace_back("mts", mts);
 
         // determine number of message segments: sCnt forces n < 256,
         // iblt is sized for 80 but 64 fits in an int bitset
@@ -332,28 +351,109 @@ struct mbps
                 doPublish(m_pb.pub({}, mp), hasCH);
                 return mId;
             }
-
-            if (n > 1)  // batch publications of same message
-                startMsgsBatch();
             // publish as many segments as needed
             for (auto off = 0u; off < size; off += maxContent_) {
                 auto len = std::min(size - off, maxContent_);
+                tsf.second = std::chrono::system_clock::now();
                 doPublish(m_pb.pub(msg.subspan(off, len), mp), hasCH);
                 sCnt += 256;    //segment names differ only in sCnt
-                mp.pop_back();   //sCnt is last argument on the list
-                mp.emplace_back("sCnt", sCnt);
+               /* mp.pop_back();   //sCnt is last argument on the list
+                mp.emplace_back("sCnt", sCnt); */
+                mp.back().second = sCnt;
             }
         } catch (const std::exception& e) {
             std::cerr << "mbps::publish: " << e.what() << std::endl;
             for (auto e : mp) print ("{}/", e.second);
             print ("\n");
-            endMsgsBatch();
             return 0;
         }
-        endMsgsBatch();
         return mId;
     }
 
+    /*
+     * In-progress work to pace publications of a multi-segment message.
+     * This is not likely to stay as is and is lightly tested, so use at your own risk.
+     */
+
+    bool pacing() { return m_pacing; }
+
+    void doSegment(size_t k, uint32_t sC, uint32_t mid, std::chrono::milliseconds paceTm, msgParms mp, std::vector< uint8_t>&& msg, const bool hasCH )
+    {
+        auto off = (k-1)*maxContent_;
+        auto size = msg.size();
+        auto len = std::min(size - off, maxContent_);
+        // try...catch for errors in building the pub
+        try {
+            mp[mp.size()-2].second = std::chrono::system_clock::now();  //timestamp is next to last entry
+            doPublish(m_pb.pub(std::span(msg).subspan(off, len), mp), hasCH);
+        } catch (const std::exception& e) {
+            std::cerr << "mbps::doSegment: " << e.what() << std::endl;
+            for (auto e : mp) print ("{}/", e.second);
+            print ("\n");
+            return;
+        }
+
+        if(off + maxContent_ < size) {
+            // more content to send
+            sC += 256;
+            mp.pop_back();  //sCnt is last argument on the list
+            mp.emplace_back("sCnt", sC);
+            oneTime(paceTm, [this,k,sC,mid,paceTm,mp,msg=std::move(msg),hasCH]()mutable{ doSegment(k+1, sC, mid, paceTm, mp, std::move(msg), hasCH); });
+        } else {
+            m_pacing = false;
+            m_msgPaceCb(*this, true, mid);
+        }
+    }
+
+    MsgID publishPaced(std::chrono::milliseconds paceTm, const paceHndlr&& paceCb, msgParms&& mp, std::span<const uint8_t> msg = {}, const confHndlr&& ch = nullptr)
+    {
+        if (m_pacing) return 0;   // can't publish another message while still pacing one
+        m_msgPaceCb = std::move(paceCb);
+        /*
+         * Set up and publish Publication(s)
+         * can check here for required arguments
+         * msgID is an uint32_t hash of the message, incorporating ID and first Pub's timestamp to make unique
+         */
+        const bool hasCH = (bool)ch;
+        auto size = msg.size();
+        auto mts = std::chrono::system_clock::now();
+
+        uint64_t tms = duration_cast<std::chrono::microseconds>(mts.time_since_epoch()).count();
+        std::vector<uint8_t> emsg;
+        for(size_t i=0; i<sizeof(tms); i++)
+            emsg.push_back( tms >> i*8 );
+        emsg.insert(emsg.end(), m_uniqId.begin(), m_uniqId.end());
+        emsg.insert(emsg.end(), msg.begin(),msg.end());
+        std::array<uint8_t, 4> h;        //so fits in uint32_t
+        crypto_generichash(h.data(), h.size(), emsg.data(), emsg.size(), NULL, 0);
+        uint32_t mId = h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24;
+        mp.emplace_back("msgID", mId);
+        if (ch) m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
+        mp.emplace_back("mts", mts);
+
+        // determine number of message segments: sCnt forces n < 256,
+        // iblt is sized for 80 but 64 fits in an int bitset
+        size_t n = (size + (maxContent_ - 1)) / maxContent_;
+        if(n > MAX_SEGS) throw error("publishMsg: message too large");
+        auto sCnt = n > 1? n + 256 : 0;
+        mp.emplace_back("sCnt", sCnt);
+
+        // try...catch for errors in building the pub
+        try {
+            if (size == 0) { //empty message body
+                doPublish(m_pb.pub({}, mp), hasCH);
+                return mId;
+            }
+            if (n>1) m_pacing = true;
+            doSegment(1, sCnt, mId, paceTm, mp, std::vector<uint8_t>(msg.begin(),msg.end()), hasCH);
+        } catch (const std::exception& e) {
+            std::cerr << "mbps::publish: " << e.what() << std::endl;
+            for (auto e : mp) print ("{}/", e.second);
+            print ("\n");
+            return 0;
+        }
+        return mId;
+    }
     // Can be used by application to schedule a cancelable timer. Note that
     // this is expensive compared to a oneTime timer and should be used
     // only for timers that need to be canceled before they fire.

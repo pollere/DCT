@@ -248,8 +248,8 @@ struct SyncPS {
     size_t maxPubSize_;         // max space in bytes available in Content of a cAdd
     size_t maxInfoSize_;        // max space in bytes for Publication Name plus Content
     std::chrono::milliseconds cStateLifetime_{stateLifetime};
-    std::chrono::milliseconds pubLifetime_{maxPubLifetime};
-    std::chrono::milliseconds pubExpirationGB_{maxPubLifetime};
+    std::chrono::milliseconds pubLifetime_{};
+    std::chrono::milliseconds pubExpirationGB_{};
     std::chrono::milliseconds distDelay_{pduProc};  // time for a PDU to be distributed to all members on this subnet
     std::chrono::milliseconds signerHold_{distDelay_};
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
@@ -272,7 +272,7 @@ struct SyncPS {
             // can't use modern c++ on a mac
             //std::ranges::sort(pOurs, {}, [](const auto& p) { return p.name().last().toTimestamp(); });
             std::sort(pv.begin(), pv.end(), [](const auto& p1, const auto& p2){
-                    return p1.name().last().toTimestamp() > p2.name().last().toTimestamp(); });
+                    return p1.name().last().toTimestamp() < p2.name().last().toTimestamp(); });
             return true;
         }
     };
@@ -287,7 +287,7 @@ struct SyncPS {
     auto batchPubs() { batching_ = true; return pubs_.size(); }
     void batchDone(size_t n) {
         batching_ = false;
-        if (!delivering_ && !registering_ && n < pubs_.size())  sendCAdd(); // try to send a cAdd if items added during batch
+        if (!delivering_ && !registering_ && n < pubs_.size()) sendCAdd(); // try to send a cAdd if items added during batch
     }
 
     template<typename UnOp>
@@ -318,7 +318,9 @@ struct SyncPS {
         if (distDelay_ > 300ms) {
             cStateLifetime_ = 30 * distDelay_ > 6000s ? 6000ms : 30*distDelay_;  // distributors can change
             pubLifetime_ = maxPubLifetime > 10*cStateLifetime_ ? maxPubLifetime : 10*cStateLifetime_;
-        }
+        } else
+            pubLifetime_ = maxPubLifetime;
+        pubExpirationGB_ = pubLifetime_;
         // print ("syncps for {} computes pubSize: {}, infoSize: {}, distDly: {}\n", collName_, maxPubSize_, maxInfoSize_, distDelay_.count());
     }
 
@@ -423,7 +425,7 @@ struct SyncPS {
     PubHash publish(crData&& pub) {
         if (pub.size() > maxPubSize_) return 0;
         auto h = addToActive(std::move(pub), true);
-        //print("{:%M:%S} publish {:x} d {} r {}\n", std::chrono::system_clock::now(), h, delivering_, registering_);
+        //print("{:%M:%S} publish {} {:x} d {} r {}\n", std::chrono::system_clock::now(), pub.name(), h, delivering_, registering_);
         if (h == 0) return h;   // already in actives
         ++publications_;
         // if a delivery callback is waiting on this pub, call it
@@ -728,7 +730,7 @@ struct SyncPS {
     }
 
     /*
-     * orderPubs puts newest first
+     * orderPubs puts oldest first
      */
     bool sendCAdd(const rName name) {
         // scheduledCStateId_->cancel();     // if a scheduleCStateId_ is set, cancel it
@@ -737,7 +739,7 @@ struct SyncPS {
         const auto& [have, need] = (pubs_.iblt() - iblt).peel();
         if (have.size() == 0) return false;    // no new pubs
 
-        PubVec pv{};    // vector of locally created publications I have, newest first
+        PubVec pv{};    // vector of locally created publications I have, oldest first
         auto now = std::chrono::system_clock::now();
         for (const auto hash : have) {
             if (const auto& p = pubs_.find(hash); p != pubs_.end()) {
@@ -745,7 +747,7 @@ struct SyncPS {
                 if (p->second.local()) pv.emplace_back(p->second.i_);
             }
         }
-        if (! orderPub_(pv))    return false;   //order priority returns all pubs to send in pv - puts new pubs first
+        if (! orderPub_(pv))    return false;   //order priority returns all pubs to send in pv - puts older pubs first
 
         if (! shipCAdd(name, pv))   return false;   // if can't send anything delay in case of holds, etc
 
@@ -976,7 +978,7 @@ struct SyncPS {
     auto& pubLifetime(std::chrono::milliseconds time) { pubLifetime_ = time; return *this; }
 
     auto& pubExpirationGB(std::chrono::milliseconds time) {
-        pubExpirationGB_ = time > maxClockSkew? time : maxClockSkew;
+        pubExpirationGB_ = time > maxClockSkew? maxClockSkew : time;
         return *this;
     }
     auto& signerHoldtime(std::chrono::milliseconds time) { signerHold_ = time; return *this; }

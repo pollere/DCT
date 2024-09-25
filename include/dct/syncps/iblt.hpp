@@ -9,16 +9,12 @@
  * This file is part of PSync.
  * See AUTHORS.md for complete list of PSync authors and contributors.
  *
- * PSync is free software: you can redistribute it and/or modify it under the
- terms
- * of the GNU General Public License as published by the Free Software
- Foundation,
+ * PSync is free software: you can redistribute it and/or modify it under the terms
+ * of the GNU General Public License as published by the Free Software Foundation,
  * either version 3 of the License, or (at your option) any later version.
  *
- * PSync is distributed in the hope that it will be useful, but WITHOUT ANY
- WARRANTY;
- * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
- PARTICULAR
+ * PSync is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+ * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
  * PURPOSE.  See the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License along with
@@ -40,8 +36,7 @@
  * furnished to do so, subject to the following conditions:
 
  * The above copyright notice and this permission notice shall be included in
- all
- * copies or substantial portions of the Software.
+ * all copies or substantial portions of the Software.
 
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -76,16 +71,15 @@ struct IBLT {
      */
     static constexpr size_t N_HASH{3};
     static constexpr size_t N_HASHCHECK{0x53a1df9a}; // random bit string with half the bits set
-    static constexpr size_t stsize = 41; // sub-table size (should be prime)
-    static constexpr size_t nEntries = stsize * N_HASH; // must be < maxCnt
-    static constexpr uint8_t maxCnt = 0x80; // max run length & run start marker
+    static constexpr size_t stsize = 47; // sub-table size (should be prime)
+    static constexpr size_t nEntries = stsize * N_HASH;
     static constexpr murmurHash3 mh3{};
     // limits on the iblt size due to packet MTU constraints
-    static_assert(nEntries < maxCnt, "nEntries >=  maCnt");
     static_assert(nEntries * 9 < 1300, "encoded iblt bigger than maxPubSize");
 
     template<typename V>
     static inline HashVal hashobj(const V& v) noexcept { return mh3(N_HASHCHECK, v.data(), v.size()); }
+    static inline HashVal hashobj(const uint8_t* d, size_t s) noexcept { return mh3(N_HASHCHECK, d, s); }
 
     struct HashTableEntry {
         int32_t count;
@@ -107,14 +101,15 @@ struct IBLT {
     static constexpr int INSERT = 1;
     static constexpr int ERASE = -1;
 
-    void update1(int plusOrMinus, HashVal key, size_t idx) {
+    constexpr void update1(int plusOrMinus, HashVal key, size_t idx) {
         HashTableEntry& entry = hashTable_.at(idx);
+        if (entry.count >= std::numeric_limits<decltype(entry.count)>::max())
+            throw std::runtime_error("too many items in iblt hash bucket");
         entry.count += plusOrMinus;
-        if (entry.count >= maxCnt) throw std::runtime_error("too many items in iblt hash bucket");;
         entry.keySum ^= key;
         entry.keyCheck ^= mh3(uint64_t(key) | (N_HASHCHECK << 32));
     }
-    void update(int plusOrMinus, HashVal key) {
+    constexpr void update(int plusOrMinus, HashVal key) {
         nitems_ += plusOrMinus;
         const auto [hash0, hash1, hash2] = hash(key);
         update1(plusOrMinus, key, hash0);
@@ -123,24 +118,75 @@ struct IBLT {
     }
 
     /**
-     * @brief run-length encode this iblt into a byte vector.
+     * @brief run-length encoding definitions and helper functions
      *
-     * 'count' is encoded as a byte (assumes max count in any bucket is < 128) then
-     * keySum and keyCheck in little-endian order. Runs of zero entries are encoded
-     * as a 'count' with the high bit set and the run length in the LSBs.
+     * All hash table entries start with a count of items xor'd into the entry followed
+     * by the xor'd entry and a parity check value. In general, upper layers try to keep
+     * iblts empty or lightly loaded so that transient applications don't have to spend
+     * a lot of time receiving the current contents of the collection. This means that
+     * counts are often zero or small so compression focuses on counts. There are two
+     * different compression schemes: 'runs' of consecutive zero entries are replaced
+     * with a single byte coding the length of the run and small counts are coded in
+     * a single byte rather than four. The last 16 values of an 8-bit range (0xf0-0xff
+     * or 240-255) are used by the two schemes to distinguish coded data from counts.
+     *
+     *  - Runs of 1-14 zero entries are encoded using a flag byte with the top 4 bits set
+     *    (0xf0-0xfd or 240-253) and the run length - 1 in the lower 4 bits..
+     *
+     *  - For each entry with a non-zero count, the count is variable length encoded in
+     *    1-5 bytes followd by 8 bytes of keySum and keyCheck in little-endian order.
+     *    Counts less than the first flag value (0xf0 or 240) are coded as a single
+     *    byte. Counts in the range 240 - 65535 are coded with a 0xfe (254) marker
+     *    followed by the two bytes of the count in little-endian order. Counts >=
+     *    65536 are coded with a 0xff marker followed by the four bytes of the count
+     *    in little-endian order.
+     */ 
+    static constexpr uint8_t rleFlag{0xf0};
+    static constexpr uint8_t rleFlag4B{rleFlag|0xf};
+    static constexpr uint8_t rleFlag2B{rleFlag4B-1};
+    static constexpr uint8_t rleFlagRun{rleFlag};
+    static constexpr uint8_t rleRunOffset{rleFlagRun-1};
+    static constexpr uint8_t rleMaxRuns{rleFlag2B-rleFlag};
+    static constexpr bool needsFlag(auto v) { return v >= rleFlag; }
+    static constexpr bool isFlag(uint8_t b) { return (b & rleFlag) == rleFlag; }
+    static constexpr uint8_t cnt2run(auto c) { return c + rleRunOffset; }
+    static constexpr uint8_t run2cnt(uint8_t b) { return b - rleRunOffset; }
+
+    /**
+     * @brief run-length encode this iblt into a byte vector.
+     * 
+     * Note: this routine can only be used on an iblt containing a set (all counts >= 0) and
+     * not the set difference produced while 'peeling'.
      */
-    auto rlEncode() const noexcept {
+    auto rlEncode() const {
         std::vector<uint8_t> rle{};
-        uint8_t cnt{};
+        uint32_t cnt{};
         for (const auto& e : hashTable_) {
-            if (e.isEmpty()) {
-                if (++cnt >= maxCnt) { rle.emplace_back(cnt | maxCnt); cnt = 0; }
+            if (e.count <= 0) {
+                if (e.count < 0) throw std::runtime_error("negative count in iblt hash bucket");
+                if (!e.isEmpty()) throw std::runtime_error("non-zero bits in empty iblt hash bucket");
+
+                if (++cnt >= rleMaxRuns) { rle.emplace_back(cnt2run(cnt)); cnt = 0; }
                 continue;
             }
-            if (cnt != 0) { rle.emplace_back(cnt | maxCnt); cnt = 0; }
+            if (cnt != 0) { rle.emplace_back(cnt2run(cnt)); cnt = 0; }
 
-            rle.emplace_back(e.count);
-
+            // counts that overlap flag values or are bigger than 1 byte must be multi-byte encoded
+            if (e.count >= rleFlag) {
+                if (e.count >= 65536) {
+                    rle.emplace_back(rleFlag4B);
+                    rle.emplace_back(e.count);
+                    rle.emplace_back(e.count >> 8);
+                    rle.emplace_back(e.count >> 16);
+                    rle.emplace_back(e.count >> 24);
+                } else {
+                    rle.emplace_back(rleFlag2B);
+                    rle.emplace_back(e.count);
+                    rle.emplace_back(e.count >> 8);
+                }
+            } else {
+                rle.emplace_back(e.count);
+            }
             rle.emplace_back(e.keySum);
             rle.emplace_back(e.keySum >> 8);
             rle.emplace_back(e.keySum >> 16);
@@ -153,34 +199,54 @@ struct IBLT {
         }
         // trailing empty entry count is omitted except for
         // empty iblt (to avoid empty name component).
-        if (rle.empty() && cnt != 0) rle.emplace_back(cnt | maxCnt);
+        if (rle.empty() && cnt != 0) rle.emplace_back(cnt2run(cnt));
         return rle;
     }
 
     /**
-     * @brief Populate the hash table using RLE compressed IBLT
+     * @brief Populate the (empty) hash table using an RLE compressed IBLT
      *
-     * @param ibltName the Component representation of IBLT
+     * This routine MUST be called on an empty iblt.
+     *
      * @throws Error if size of values is not compatible with this IBF
      */
     void rlDecode(const std::span<const uint8_t> rle) {
         size_t i{};
         for (auto r = rle.begin(); r < rle.end(); ) {
-            auto b = *r;
-            if (b >= maxCnt) {
-                if (b > maxCnt) b &= maxCnt-1;
-                i += b; // advance over zero entries
-                if (i >= nEntries) throw std::runtime_error("compressed IBLT too large");;
-                ++r;
-                continue;
+            uint32_t b = *r++;
+            switch (b) {
+                // b represents 1-14 zero entries
+                case rleRunOffset+1: case rleRunOffset+2: case rleRunOffset+3: case rleRunOffset+4:
+                case rleRunOffset+5: case rleRunOffset+6: case rleRunOffset+7: case rleRunOffset+8:
+                case rleRunOffset+9: case rleRunOffset+10: case rleRunOffset+11: case rleRunOffset+12:
+                case rleRunOffset+13: case rleRunOffset+14:
+                    i += run2cnt(b); // advance over zero entries
+                    continue;
+
+                // b is a 32 bit little-endian count
+                case rleFlag4B:
+                    b = r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24);
+                    r += 4;
+                    break;
+                // b is a 16 bit little-endian count
+                case rleFlag2B:
+                    b = r[0] | (r[1] << 8);
+                    r += 2;
+                    break;
+                // b is an 8 bit count
+                default:
+                    break;
             }
             // extract entry
             nitems_ += b;
+            //print(" ht[{}] = {} of {}\n", i, b, nitems_);
+            if (i >= nEntries) print("compressed IBLT too large {} {}\n", i, nEntries);
+            if (i >= nEntries) throw std::runtime_error("compressed IBLT too large");
             hashTable_[i].count = b;
-            hashTable_[i].keySum   = r[1] | (r[2] << 8) | (r[3] << 16) | (r[4] << 24);
-            hashTable_[i].keyCheck = r[5] | (r[6] << 8) | (r[7] << 16) | (r[8] << 24);
-            if (++i > nEntries) throw std::runtime_error("compressed IBLT too large");;
-            r += 9;
+            hashTable_[i].keySum   = r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24);
+            hashTable_[i].keyCheck = r[4] | (r[5] << 8) | (r[6] << 16) | (r[7] << 24);
+            ++i;
+            r += 8;
         }
         nitems_ /= N_HASH;
     }
@@ -301,7 +367,8 @@ struct IBLT {
 template<typename T>
 static inline bool operator==(const IBLT<T>& iblt1, const IBLT<T>& iblt2)
 {
-    return memcmp(iblt1.hashTable_.data(), iblt2.hashTable_.data(), iblt1.hashTable_.size()) == 0;
+    return iblt1.hashTable_.size() == iblt2.hashTable_.size() &&
+           memcmp(iblt1.hashTable_.data(), iblt2.hashTable_.data(), iblt1.hashTable_.size()) == 0;
 }
 
 template<typename T>

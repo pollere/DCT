@@ -333,6 +333,7 @@ struct DCTmodel {
     auto orderPub(OrderPubCb&& cb) { return m_sync.orderPubCb(std::move(cb));}
     auto& pubLifetime(std::chrono::milliseconds t) {
         m_sync.pubLifetime(t);
+        m_sync.pubExpirationGB(t);
         return *this;    
     }
 
