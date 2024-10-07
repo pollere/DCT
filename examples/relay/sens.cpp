@@ -94,7 +94,7 @@ void cmdRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - mt.time("mts")).count() / 1000.;
+    auto dt = ticks(now - mt.time("_ts")).count() / 1000.;
 
     dct::print("{:%M:%S} {} rcvd ({:.3} mS transit): {} {}: {} | {}\n",
             ticks(now.time_since_epoch()), fullId, dt, mt["target"],

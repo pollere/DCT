@@ -62,6 +62,8 @@ static std::chrono::microseconds pubWait = std::chrono::seconds(1);
 static int Cnt = 0;
 static int nMsgs = 10;
 
+using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+
 /*
  * locRprtr reports location periodically
  */
@@ -76,8 +78,9 @@ static void locRprtr(mbps &cm) {
     cm.publish(std::move(mp), toSend);
     if (Cnt >= nMsgs && nMsgs) {
         cm.oneTime(2*pubWait, [](){
-                    dct::print("{}:{}:{} published {} location messages and exits\n", role, myId, myPID, Cnt);
-                    exit(0);
+        dct::print("{}:{}:{} published {} location messages\n", role, myId, myPID, Cnt);
+                    //dct::print("{}:{}:{} published {} location messages and exits\n", role, myId, myPID, Cnt);
+                    //exit(0);
                 });
         return;
     }
@@ -131,7 +134,11 @@ int main(int argc, char* argv[])
     // Connect and pass in the handler
     try {
         /* main task for this entity */
-        cm.connect([&cm]{ cm.oneTime(pubWait, [&cm](){ locRprtr(cm); }); });
+        cm.connect([&cm] {
+            auto now = std::chrono::system_clock::now();
+            dct::print("{:%M:%S} {} is connected\n", ticks(now.time_since_epoch()), fullId);
+            cm.oneTime(std::chrono::milliseconds(rand() & 0x1ff), [&cm](){ locRprtr(cm); });
+        });
     } catch (const std::exception& e) {
         std::cerr << "main encountered exception while trying to connect: " << e.what() << std::endl;
         exit(1);

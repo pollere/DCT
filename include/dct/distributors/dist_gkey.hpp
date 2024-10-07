@@ -421,9 +421,11 @@ struct DistGKey {
      * capability influences the probability of this entity being elected
      * with larger values giving higher priority.
      * subscribes will process any publications waiting in collection
+     *
+     * Calls its syncps's start() before returning to start participating in collection
      */
     void setup(connectedCb&& ccb) {
-        m_connCb = std::move(ccb);     
+        m_connCb = std::move(ccb);
         if ( m_sync.collName_.last().toSv() == "msgs") m_msgsdist = true;
         m_sync.start();     // all distributors "before" me have initialized
 

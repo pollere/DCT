@@ -12,15 +12,16 @@ _domain:    "iot"
 
 // MBPS Publication definition
 // target, topic, topicArgs are set using application parameters
-// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// msgID, sCnt, _ts get set in mbps.hpp (the MBPS "shim") for a particular message
 // In addition, all trust schemas for mbps-based applications must include a #chainInfo
 // which lists all the signing chain tags so schemaLib can access them
 // A particular application process can make its subscription more
 // specific by using a subscription list with specific subcollection (designated
 // by targets) and related callback functions.
 
-#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/_ts & {
     _origin:   sysId()
+    _ts:    timestamp()
 }
 
 lockReport: #iotPub & { target: "lock", topic: "event"|"status"

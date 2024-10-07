@@ -13,11 +13,11 @@ _domain:    "ppLoc"
 
 // MBPS Publication definition
 // target and rptr are set using application parameters
-// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// msgID, sCnt, _ts get set in mbps.hpp (the MBPS "shim") for a particular message
 // In addition, all trust schemas for mbps-based applications must include a #chainInfo
 // which lists all the signing chain tags so schemaLib can access them
 
-#Pub: _domain/target/rptr/msgID/sCnt/mts
+#Pub: _domain/target/rptr/msgID/sCnt/_ts & { _ts: timestamp() }
 
 locRprt: #Pub & { target: "loc" } <= locSign
 

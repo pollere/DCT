@@ -83,7 +83,7 @@ static void statusRecv(mbps &, const mbpsMsg& msg, std::vector<uint8_t>)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - msg.time("mts")).count() / 1000.;
+    auto dt = ticks(now - cm.msgTime(msg)).count() / 1000.;
     const auto& f = msg["func"];
     const auto& a = msg["args"];
     const auto& l = msg["loc"];

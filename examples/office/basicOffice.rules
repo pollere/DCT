@@ -7,14 +7,14 @@
 _domain:    "office"
 
 // Publication definition.
-// Use of mbps shim means publications have mId, sCnt, mts (set by mbps) and
+// Use of mbps shim means publications have mId, sCnt, ts (set by mbps) and
 // at least one leading component to identify the domain. Between those
 // components, at least one more component followed by others as needed
 // This basic version doesn't put any fine-grained restrictions on who can
 // say what to whom (as in office.trust) but just enforces that publications
-// must be signed by valide roleCerts.
+// must be signed by valid roleCerts.
 
-#pub: _domain/func/topic/loc/args/msgID/sCnt/mts <= signCert
+#pub: _domain/func/topic/loc/args/msgID/sCnt/_ts & { _ts: timestamp() } <= signCert
 
 signCert: _domain/_role/_roleId/"sgn"/_keyinfo <= roleCert
 roleCert: _domain/_role/_roleId/_keyinfo <= roomCert

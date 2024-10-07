@@ -141,27 +141,31 @@ static void msgPubr(mbps &cm) {
     while (toSend.size() < 2*cm.maxContent())  toSend.emplace_back(5);
     //dct::print ("toSend has size {} and maxContent is {}\n", toSend.size(), cm.maxContent());
 
-    msgParms mp;
-
-    if(role == "operator") {
-        lastSend = std::chrono::system_clock::now().time_since_epoch();
+    // The following block tests that publishPaced doesn't misbehave when things in msgParms 
+    // go out of scope while the 'doSegment' worker is still pacing out chunks of the msg.
+    {
+        msgParms mp;
+        std::string t("target");
         std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
-        mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",location},{"topicArgs", a}};
-    } else {
-        mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", myState}};
-    }
-    if constexpr (deliveryConfirmation) {
-        cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
-                    if (! quiet) {
-                        auto now = std::chrono::system_clock::now();
-                        auto dt = ticks(now - ts).count() / 1000.;
-                        dct::print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
-                                tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
-                    } });
-    } else {
-//         auto now = std::chrono::system_clock::now();
-//        dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
-        cm.publishPaced(paceAt, msgPaceDone, std::move(mp), toSend);  //no callback to skip message confirmation
+        if(role == "operator") {
+            lastSend = std::chrono::system_clock::now().time_since_epoch();
+            mp = msgParms{{t, capability},{"topic", "command"s},{"trgtLoc",location},{"topicArgs", a}};
+        } else {
+            mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", myState}};
+        }
+        if constexpr (deliveryConfirmation) {
+            cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
+                        if (! quiet) {
+                            auto now = std::chrono::system_clock::now();
+                            auto dt = ticks(now - ts).count() / 1000.;
+                            dct::print("{:%M:%S} {}:{}-{} #{} published and {} after {:.3} mS\n",
+                                    tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
+                        } });
+        } else {
+    //         auto now = std::chrono::system_clock::now();
+    //        dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
+            cm.publishPaced(paceAt, msgPaceDone, std::move(mp), toSend);  //no callback to skip message confirmation
+        }
     }
 
     if (Cnt >= nMsgs && nMsgs) {
@@ -191,7 +195,7 @@ static void msgPubr(mbps &cm) {
 void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
     auto mtm = cm.msgTime(mt);   // can only call once, subsequent calls return current time
-    // auto mtm = mt.time("mts"); just gets timestamp of last pub received
+    // auto ptm = mt.time("_ts"); just gets timestamp of last pub received
     auto now = tp2d(std::chrono::system_clock::now());
     auto dt = (now - tp2d(mtm)).count() / 1000.;
     nRcv++;

@@ -422,6 +422,13 @@ struct pubBldr {
         pdefault_ = std::move(par);
         return *this;
     }
+    auto& defaults(const std::vector<parItem>& pvec) {
+        Params par{};
+        par.resize(tag_.size());
+        for (const auto& [tag, val] : pvec) doOneParam(par, tm_[tag], val);
+        pdefault_ = std::move(par);
+        return *this;
+    }
 
     const auto& defaults() const noexcept { return pdefault_; }
 
@@ -450,7 +457,6 @@ struct pubBldr {
     //
     // Each tag must refer to one of the pub's parameters and values for all
     // the pub's parameters must be supplied.  Errors are thrown otherwise.
-
     crName name(const std::vector<parItem>& pvec) {
         Params par{};
         par.resize(tag_.size());

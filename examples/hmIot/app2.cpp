@@ -104,13 +104,14 @@ static void msgPubr(mbps &cm) {
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
 
+    std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
     if(role == "operator") {
-        lastSend = std::chrono::system_clock::now().time_since_epoch();
-        std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
+        lastSend = std::chrono::system_clock::now().time_since_epoch();      
         mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",location},{"topicArgs", a}};
     } else {
         mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", myState}};
     }
+
     if constexpr (deliveryConfirmation) {
         cm.publish(std::move(mp), toSend, [ts=std::chrono::system_clock::now()](bool delivered, uint32_t) {
                     if (! quiet) {
@@ -151,8 +152,10 @@ static void msgPubr(mbps &cm) {
 
 void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
+    auto mtm = cm.msgTime(mt);   // can only call once, subsequent calls return current time
+    // auto mtm = mt.time("_ts"); just gets timestamp of last pub received
     auto now = tp2d(std::chrono::system_clock::now());
-    auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
+    auto dt = (now - tp2d(mtm)).count() / 1000.;
     nRcv++;
 
     // actions can be conditional upon msgArgs and msgPayload
@@ -251,8 +254,10 @@ int main(int argc, char* argv[])
             auto now = std::chrono::system_clock::now();
             dct::print("{:%M:%S} {}:{}:{} is connected\n", ticks(now.time_since_epoch()), role, myId, myPID);
             if (role == "operator") {
-                cm.subscribe(msgRecv);  // single callback for all messages
-                msgPubr(cm);
+                //cm.subscribe(msgRecv);  // single callback for all messages
+                cm.subscribe(capability + "/event/", msgRecv);  // if multiple capabilities, do for each
+                // schedule for small delay (3ms) so happens after registration. Not necessary but avoids use of multi-cStates
+                cm.oneTime(std::chrono::milliseconds(3), [&cm](){ msgPubr(cm); });
             } else {    // devices just subscribe to command topic
                 cm.subscribe(capability + "/command/" + myId, msgRecv); // msgs to this instance
                 cm.subscribe(capability + "/command/all", msgRecv);     // msgs to all instances

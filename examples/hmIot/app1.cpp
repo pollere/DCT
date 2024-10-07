@@ -126,8 +126,10 @@ static void msgPubr(mbps &cm) {
 
 void msgRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
+    auto mtm = cm.msgTime(mt);   // can only call once, subsequent calls return current time
+    // auto ptm = mt.time("_ts"); just gets timestamp of last pub received
     auto now = tp2d(std::chrono::system_clock::now());
-    auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
+    auto dt = (now - tp2d(mtm)).count() / 1000.;
 
     dct::print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit): {} {}: {} {} | {}\n",
             now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],

@@ -104,11 +104,11 @@ static void msgPubr(mbps &cm) {
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
 
+    std::string l = (std::rand() & 2)? "gate" : "frontdoor"; // randomly toggle targeted location
+    //std::string l = "frontdoor";
+    std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
     if(role == "operator") {
         lastSend = std::chrono::system_clock::now().time_since_epoch();
-        std::string l = (std::rand() & 2)? "gate" : "frontdoor"; // randomly toggle targeted location
-        //std::string l = "frontdoor";
-        std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
         mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",l},{"topicArgs", a}};
     } else {
         mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", myState}};
@@ -160,8 +160,10 @@ static void msgPubr(mbps &cm) {
 
 void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
 {
+    auto mtm = cm.msgTime(mt);   // can only call once, subsequent calls return current time
+    // auto ptm = mt.time("_ts"); just gets timestamp of last pub received
     auto now = tp2d(std::chrono::system_clock::now());
-    auto dt = (now - tp2d(mt.time("mts"))).count() / 1000.;
+    auto dt = (now - tp2d(mtm)).count() / 1000.;
     nRcv++;
 
     // actions can be conditional upon msgArgs and msgPayload

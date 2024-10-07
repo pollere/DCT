@@ -180,7 +180,7 @@ class DirectFace {
             const auto& pe = ps->second;
             // suppress if broadcast to domain at least twice (and not "close to" expiry?)
             if (pe.onNet_ > 1)  suppress = true;
-            if (pe.sto_)  newCS = false;  // s is the same as last expressed cState
+            if (pe.sto_) newCS = false;  // s is the same as last unexpired expressed cState
         }
         if (newCS) {
             // s is not the same as last expressed cState
@@ -205,6 +205,7 @@ class DirectFace {
     /**
      * Handle a cState incoming from the network:
      *  - if it's a dup of a recent cState, ignore it.
+     *  - (not a dup if has a different nonce, e.g., comes from a different source)
      *  - if there's no RST match, ignore it
      *  - add it to dup cState table.
      *  - add it to PST then upcall RST listener (has to be done in
@@ -233,19 +234,26 @@ class DirectFace {
      *
      * This is normally used to avoid waiting for the cState re-expression
      * callback when the app has new data to send.
+     *
+     * Should not return a local cState if never received a net cState.
+     * Any use of local state risks sending cAdds with no listeners. Sending
+     * publications results in them going on the hold list so there could be a
+     * delay in responding to an actual "need" cState
      */
     auto bestCState(const rPrefix p) const noexcept {
         if (pst_.begin() == pst_.end()) return rName{};
-        const PSTentry* loc{};
         const PSTentry* net{};
         for (const auto& [ih, pe] : pst_) {
             if (!pe.timer_ || !p.isPrefix(pe.s_.name())) continue;
             auto e = pe.timer_->expiry();
-            if (pe.fromNet_ && (!net || e > net->timer_->expiry())) net = &pe;
-            if (pe.sto_ && (!loc || e > loc->timer_->expiry())) loc = &pe;
+            if (!pe.used_ && pe.fromNet_ && (!net || e > net->timer_->expiry())) net = &pe;
         }
-        if (!net && !loc) return rName{};
-        return (net? net:loc)->s_.name();
+        if (!net) return rName{};
+        return (net)->s_.name();
+    }
+
+    auto usedCState(const rName& n) {
+        if (auto ps = pst_.find(n); pst_.found(ps)) ps->second.used_++;
     }
 
     /**
@@ -277,7 +285,7 @@ class DirectFace {
     auto hash2Name(uint32_t h) {
         auto ps = pst_.find(h);
         if (!pst_.found(ps)) {
-            print("hash2Name: no PST entry for {}\n", h);
+            //print("hash2Name: no PST entry for {}\n", h);
             return rName{};
         }
         return ps->second.s_.name();

@@ -17,7 +17,7 @@ _domain:    "office"
 // at least one leading component to identify the domain. Between those
 // components, at least one more component followed by others as needed
 
-#pub: _domain/func/topic/loc/args/msgID/sCnt/mts
+#pub: _domain/func/topic/loc/args/msgID/sCnt/_ts & { _ts: timestamp() }
 
 ctrlr: #pub & (
     { func: "light" | "screen", args: "on" | "off" } |

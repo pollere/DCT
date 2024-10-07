@@ -251,9 +251,10 @@ struct SyncPS {
     std::chrono::milliseconds pubLifetime_{};
     std::chrono::milliseconds pubExpirationGB_{};
     std::chrono::milliseconds distDelay_{pduProc};  // time for a PDU to be distributed to all members on this subnet
+    std::chrono::system_clock::time_point lastNeed_{};       // if non-zero, hold time for "needs" cStates
     std::chrono::milliseconds signerHold_{distDelay_};
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
-    std::uniform_int_distribution<unsigned short> randInt_{7u, 12u}; //  cState delay  randomization
+    std::uniform_int_distribution<unsigned short> randInt_{1u, 4u}; //  cState delay  randomization
     Nonce  nonce_{};            // nonce of current cState
     uint32_t publications_{};   // # locally originated publications
     uint32_t noSignerPubs_{};   // # publications whose signer isn't in my certstore (yet)
@@ -287,7 +288,9 @@ struct SyncPS {
     auto batchPubs() { batching_ = true; return pubs_.size(); }
     void batchDone(size_t n) {
         batching_ = false;
-        if (!delivering_ && !registering_ && n < pubs_.size()) sendCAdd(); // try to send a cAdd if items added during batch
+        // try to send a cAdd if items added during batch
+        if (!delivering_ && !registering_ && n < pubs_.size())
+            if (sendCAdd() == false) sendCState();  // if can't send cAdd, send a cState
     }
 
     template<typename UnOp>
@@ -561,7 +564,8 @@ struct SyncPS {
      */
     void sendCStateSoon(std::chrono::milliseconds dly = 0ms) {
         scheduledCStateId_->cancel();
-        scheduledCStateId_ = schedule(dly + std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
+        if (unicast()) sendCState();    // no delay
+        else scheduledCStateId_ = schedule(dly + std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
     }
 
     auto name2iblt(const rName& name) const noexcept {
@@ -628,7 +632,7 @@ struct SyncPS {
         cAdd.content(sv);
         if (! pktSigmgr_.sign(cAdd)) return false;
         face_.send(std::move(cAdd));
-        //print("{:%M:%S} sent {}\n", std::chrono::system_clock::now(), cAdd.name());;
+        //print("{:%M:%S} syncps::shipCAdd sent {}\n", std::chrono::system_clock::now(), cAdd.name());
         return true;
     }
 
@@ -647,7 +651,7 @@ struct SyncPS {
             pendOthers_.erase(it);
             if (!updatePV(hv)) {
                 face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-                sendCStateSoon(distDelay_);
+                sendCStateSoon();
             }
             return;
         }
@@ -660,6 +664,25 @@ struct SyncPS {
         if (sv.empty() || !orderPub_(sv)) return;
         shipCAdd(name, sv);
         pendOthers_.erase(it);  // erases everything pending on csId so a new csId starts the hold clock again
+    }
+
+    // send a cState when received cState shows needed Pubs
+    void sendNeed(std::chrono::system_clock::time_point now) {
+        if (lastNeed_ > now) return;    // the next "need" cState has been scheduled, do nothing
+        if (now > lastNeed_+distDelay_) {
+            lastNeed_ = now;  // set time sent cState in response to needs
+            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
+            if (unicast()) { sendCState(); return; }
+            sendCStateSoon();
+            return;
+        }
+        // nothing scheduled but sent a need cState more recently than distDelay in past
+        lastNeed_  += distDelay_;
+        face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
+        if (unicast()) sendCState();    // probably some sort of pacing is needed
+        const auto tms = std::chrono::duration_cast<std::chrono::milliseconds>(lastNeed_ - now);
+        sendCStateSoon(tms);
+        return;
     }
 
     bool handleCState(const rName& name) {
@@ -692,54 +715,41 @@ struct SyncPS {
 
         // if NO eligible local origin pubs to send, take care of needs and others and return
         if (pv.empty() || !orderPub_(pv)) {
-            if (need.size() > 0) {
-                face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-                if (unicast()) { sendCState(); return false;}
-                sendCStateSoon();   // only waits the small random delay - may want to increase
-            }
             // Next section of code is for sending non-local origin pubs for effective meshing
             //  only send others' pubs if the cState is from a member who has all my local origin pubs
             //  (may be overly conservative but avoids reacting to transitory cStates)
             // This may result in sending another's Pubs that it is suppressing after first send
-            if (phOth.empty() || have.size() - phOth.size() > 0) return false;
-            // set up a delayed send of others Pubs that are missing from this cState
-            uint32_t csId = mhashView(name);
-            if (!unicast() && pendOthers_.find(csId) == pendOthers_.end()) {
-                pendOthers_.emplace(csId, phOth);
-                oneTime(distDelay_ + std::chrono::milliseconds(randInt()), [this,csId]{ sendOthers(csId); });
+            // unicast can't have "others" so phOth will always be empty
+            if (phOth.empty() || have.size() - phOth.size() > 0) {
+                if (need.size() == 0) return false;
+            } else {
+                // set up a delayed send of others Pubs that are missing from this cState
+                uint32_t csId = mhashView(name);
+                if (pendOthers_.find(csId) == pendOthers_.end()) {
+                    pendOthers_.emplace(csId, phOth);
+                    oneTime(distDelay_ + std::chrono::milliseconds(randInt()), [this,csId]{ sendOthers(csId); });
+                }
             }
+            if (need.size()) sendNeed(now);
             return false;
          }
 
-         // tries to ship all the local origin pubs that will fit in a cAdd packet
-        if (! shipCAdd(name, pv) && need.size()) {
-            // did not send Pubs but have needs from cState
-            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-            if (unicast()) { sendCState(); return false; }
-            sendCStateSoon();     // only waits the small random delay - may want to increase
-            return false;
-        }
-        if (need.size()) {  // check if this cState had Publications I need
-            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
-            sendCStateSoon();
-        } else {
-            // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
-            sendCStateSoon(2*distDelay_);
-        }
-        return true;
+        bool shipped = shipCAdd(name, pv); // try to ship all the local origin pubs that will fit in a cAdd packet
+        if (!need.size()) sendCStateSoon(2*distDelay_);       // delay for recipients to send "ack" cStates or if shipCAdd failed
+        else sendNeed(now);
+        return shipped;
     }
 
     /*
      * orderPubs puts oldest first
      */
     bool sendCAdd(const rName name) {
-        // scheduledCStateId_->cancel();     // if a scheduleCStateId_ is set, cancel it
-
         auto iblt{name2iblt(name)}; // use the retrieved cState's iblt to find new pubs
         const auto& [have, need] = (pubs_.iblt() - iblt).peel();
         if (have.size() == 0) return false;    // no new pubs
 
         PubVec pv{};    // vector of locally created publications I have, oldest first
+
         auto now = std::chrono::system_clock::now();
         for (const auto hash : have) {
             if (const auto& p = pubs_.find(hash); p != pubs_.end()) {
@@ -764,7 +774,9 @@ struct SyncPS {
         // look for a cState from network - would like to get most recent one from network
         const auto name  = face_.bestCState(collName_);
         if (name.size() == 0) return false;            // wait for a cState
-        return sendCAdd(name);
+        if (!sendCAdd(name)) return false;
+        face_.usedCState(name); // mark the returned cState as used
+        return true;
     }
 
     /**
@@ -804,7 +816,7 @@ struct SyncPS {
         assert(!delivering_);
 
         if (registering_) return;   // don't process cAdds till fully registered
-        scheduledCStateId_->cancel();     // if a scheduleCStateId_ is set, cancel it
+       // scheduledCStateId_->cancel();     // if a scheduleCStateId_ is set, cancel it
 
         // if publications result from handling this cAdd we don't want to
         // respond to a peer's cState until we've handled all of them.
@@ -871,7 +883,7 @@ struct SyncPS {
         delivering_ = false;
         if (ap == 0) {  // nothing I need in this cAdd, no change to local cState
             // consider skipping this for unicast
-            sendCStateSoon(distDelay_); //canceled sending cState on entry, maybe make this sooner if there are "needs"
+            //sendCStateSoon(distDelay_); //canceled sending cState on entry, maybe make this sooner if there are "needs"
             return;
         }
 
@@ -885,13 +897,13 @@ struct SyncPS {
 
         // If the cAdd resulted in new outbound (locally originated) pubs, cAdd them for any pending peer CStates
         if (initpubs != publications_) {     // sending will schedule an updated cState
-            const auto name  = face_.bestCState(collName_);
-            if (name.size() == 0)   sendCAdd(cAdd.name());
-            else    sendCAdd(name);
-            return;
+            if (sendCAdd()) return; // a cAdd was sent using most recent cState
+            else if (sendCAdd(cAdd.name())) return; //send cAdd using cState info from received cAdd
         }
-        // changed local cState, send a confirming cState at a randomized delay - gets reset if more cAdds arrive
-        sendCStateSoon(distDelay_);
+        // changed local collection state but didn't send a cAdd
+        // send a confirming cState at a randomized delay - gets reset if more cAdds arrive
+        // If did a sendCAdd(), this will reset the longer delay sendCState()
+        sendCStateSoon();
     }
 
     /**

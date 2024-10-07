@@ -15,8 +15,9 @@ _domain:    "iot2"
 // specific by using a subscription list with specific subCollections (designated
 // by targets) and related callback functions.
 
-#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/mts & {
+#iotPub: _domain/target/topic/trgtLoc/topicArgs/_origin/msgID/sCnt/_ts & {
     _origin:   sysId()
+    _ts:       timestamp()
 }
 
 lockReport: #iotPub & { target: "lock", topic: "event"|"status"

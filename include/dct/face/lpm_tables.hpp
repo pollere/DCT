@@ -113,6 +113,7 @@ struct PSTentry {
     TOptr timer_{};         // cState lifetime timer
     size_t onNet_{0};
     bool fromNet_{false};   // cState was heard from net
+    size_t used_{0};
 
     PSTentry(const rState& s, StateTO&& sto) :
                 sdat_{std::make_unique<std::vector<uint8_t>>(s.m_blk.begin(), s.m_blk.end())}, s_{*sdat_},

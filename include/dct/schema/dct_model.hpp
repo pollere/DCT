@@ -369,6 +369,8 @@ struct DCTmodel {
     template<typename... Rest>
     auto defaults(Rest&&... rest) { return bld_.defaults(std::forward<Rest>(rest)...); }
 
+    auto defaults(const std::vector<parItem>& pvec) { return bld_.defaults(pvec); }
+
     // set start callback for shims that have a separate connect/start like mbps
     // Note: this can get much simpler when distributors derive from a common class
     void start(connectedCb&& cb) {
