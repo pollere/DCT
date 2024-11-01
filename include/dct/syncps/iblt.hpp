@@ -2,25 +2,6 @@
 #define SYNCPS_IBLT_HPP
 #pragma once
 /*
- * Pollere LLC added (6/14/2020) checks for validity to file
- *
- * Copyright (c) 2014-2018,  The University of Memphis
- *
- * This file is part of PSync.
- * See AUTHORS.md for complete list of PSync authors and contributors.
- *
- * PSync is free software: you can redistribute it and/or modify it under the terms
- * of the GNU General Public License as published by the Free Software Foundation,
- * either version 3 of the License, or (at your option) any later version.
- *
- * PSync is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- * without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- * PURPOSE.  See the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along with
- * PSync, e.g., in COPYING.md file.  If not, see <http://www.gnu.org/licenses/>.
- *
-
  * This file incorporates work covered by the following copyright and
  * permission notice:
 
@@ -45,6 +26,25 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
+ *
+ * Pollere LLC made additions and bug fixes, Copyright (C) 2019-2024 Pollere LLC
+ * These include:
+ * (06/14/2020) checks for validity to file
+ * (09/25/24) IBLT size made flexible up to 10,000 items and tests added
+ * Pollere authors at info@pollere.net and Pollere code portions licensed as follows.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU Lesser General Public License as
+ *  published by the Free Software Foundation; either version 2.1 of
+ *  the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public License
+ *  along with this program; if not, see <https://www.gnu.org/licenses/>.
 */
 
 #include <array>

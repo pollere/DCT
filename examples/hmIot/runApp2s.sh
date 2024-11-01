@@ -4,7 +4,7 @@
 # set "-n xxx" for a number of runs other than 10 (default)
 # or "-n 0" for run forever
 
-members=(gate bob frontdoor backdoor patio)
+members=(gate bob)
 # members=(gate bob frontdoor backdoor patio alice)
 
 #get rid of any leftovers

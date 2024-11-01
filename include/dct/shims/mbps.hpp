@@ -40,8 +40,6 @@
 namespace dct {
 
 // defaults
-static constexpr size_t MAX_NAME=80; //max Name size in bytes is determined by a particular schema
-                                                                // If not large enough or overly large, change here and recompile
 static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
 
 /* 
@@ -86,23 +84,24 @@ struct mbps
     connectCb m_connectCb;
     DCTmodel m_pb;
     crName m_pubpre{};        // full prefix for Publications
-    std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids
-    size_t maxContent_;      // max number of bytes of application message per Publication
+    std::string m_uniqId{};   //create this from #chainInfo to use in creating message Ids 
+    size_t pubSpace_;       // max number of bytes in Publication for mbps name + content
     std::unordered_map<MsgID, confHndlr> m_msgConfCb;
     paceHndlr m_msgPaceCb;  //assuming pace one message at time
     MsgInfo m_pending{};    // unconfirmed published messages
     MsgInfo m_received{};   //received publications of a message
     MsgTm m_msgTm{};     //message originating time
     MsgCache m_reassemble{}; //reassembly of received message segments
+    std::unordered_map<MsgID,size_t> m_maxContent;  // max number of bytes of application message per Publication for this message
     Timer* m_timer;
     bool m_pacing{false};   //set when pacing out a multi-segment message
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr)
         : m_pb{rootCb, schemaCb, idChainCb, signIdCb, addr}, m_pubpre{m_pb.pubPrefix()}
         {
-            // Pub maxContent is bytes left after space for Pub name and the TL bytes for both Name and Content
-            if ((maxContent_ = m_pb.maxInfoSize() - (MAX_NAME + 4)) <= 0)
-                throw runtime_error("mbps: no room for Pub Content");
+            // bytes left in Pub for mbps to use for both name and content (removes the required TL bytes)
+            if ((pubSpace_ = m_pb.maxInfoSize() - 4)  <= 0)
+                throw runtime_error("mbps: no room for Pub Name and Content fields");
         }
 
     mbps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb)
@@ -110,7 +109,7 @@ struct mbps
 
     void run() { m_pb.run(); }
     void stop() { m_pb.stop(); }
-    auto maxContent() { return maxContent_; }
+    auto maxContent() { return pubSpace_ - m_pubpre.size(); }   // an upper bound on max content bytes per pub - names are larger
     const auto& pubPrefix() const noexcept { return m_pubpre; }
 
     auto startMsgsBatch() { return m_pb.m_sync.batchPubs(); }
@@ -195,9 +194,6 @@ struct mbps
         //all the publication name ftags (in order) set by app or mbps
         SegCnt k = p.number("sCnt"), n = 1u;
         std::vector<uint8_t> msg{}; //for message body
-        if (p.name().size() > MAX_NAME)
-            print ("mbps::receivePub: pub name size {} ({}) exceeds preset max {}\n", p.name().size(), sizeof(p.name()), MAX_NAME);
-
         MsgID mId = p.number("msgID");
         auto content = p.content().rest();
         if (k == 0) { //single publication in this message
@@ -210,20 +206,27 @@ struct mbps
                 print("receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
                 return;
             }
+            if (m_maxContent.contains(mId)) {
+                if (pubSpace_ - p.name().size() != m_maxContent[mId]) {
+                    dct::print("mbps::receivePub: publication for message {} with name {}\n", mId, p.name());
+                    throw error("mbps::receivePub: can't reassemble message as has name size mismatch");
+                }
+            } else m_maxContent[mId] = pubSpace_ - p.name().size();
             if (k == 1) m_msgTm[mId] =  p.time("_ts");   // first timestamp is message origination time
             //reassemble message            
             const auto& m = content;
             auto& dst = m_reassemble[mId];
             if (k == n)
-                dst.resize((n-1)*maxContent_+m.size());
+                dst.resize((n-1)*m_maxContent[mId]+m.size());
             else if (dst.size() == 0)
-                dst.resize(n*maxContent_);
-            std::copy(m.begin(), m.end(), dst.begin()+(--k)*maxContent_);
+                dst.resize(n*pubSpace_);
+            std::copy(m.begin(), m.end(), dst.begin()+(--k)*m_maxContent[mId]);
             m_received[mId].set(k);
             if (m_received[mId].count() != n) return; // all segments haven't arrived
             msg = m_reassemble[mId];
             m_received.erase(mId);  //delete msg state
             m_reassemble.erase(mId);
+            m_maxContent.erase(mId);
         }
 
         // Complete message received, prepare arguments for msgHndlr callback
@@ -314,14 +317,12 @@ struct mbps
      */
 
     constexpr void doPublish(auto&& p, bool hasCH) {
-        if (p.name().size() > MAX_NAME) {
-            dct::print ("mbps::publish: pub name size {} exceeds  MAX_NAME value {} (update MAX_NAME)\n", p.name().size(), MAX_NAME);
-        }
         if (hasCH) {
             m_pb.publish(std::move(p), [this](auto p, bool s){ confirmPublication(mbpsPub(p),s); });
             return;
         }
-        m_pb.publish(std::move(p));
+        if(m_pb.publish(std::move(p)) == 0)
+            dct::print("doPublish: was unable to publish {}\n", p.name());
     }
 
     MsgID publish(msgParms&& mp, std::span<const uint8_t> msg = {}, const confHndlr&& ch = nullptr)
@@ -334,7 +335,6 @@ struct mbps
          */
         const bool hasCH = (bool)ch;
         auto size = msg.size();
-
         uint64_t tms = duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         std::vector<uint8_t> emsg;
        for(size_t i=0; i<sizeof(tms); i++)
@@ -347,23 +347,40 @@ struct mbps
         mp.emplace_back("msgID", mId);
         if (ch) m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
 
-        // determine number of message segments: sCnt forces n < 256,
-        // iblt is sized for 80 but 64 fits in an int bitset
-        size_t n = (size + (maxContent_ - 1)) / maxContent_;
-        if(n > MAX_SEGS) throw error("publishMsg: message too large");
-        auto sCnt = n > 1? n + 256 : 0;
-        mp.emplace_back("sCnt", sCnt);
+       // add sCnt value initialized for a single segment (Publication) message
+        size_t n = 0;
+        mp.emplace_back("sCnt", n); // just to get name size
 
-        // try...catch for errors in building the pub
-        try {
-            if (size == 0) { //empty message body
+        if (size == 0) {    //handle empty message body - no Pub content
+            try {   // try...catch for errors in building the pub
                 doPublish(m_pb.pub({}, mp), hasCH);
                 return mId;
+            } catch (const std::exception& e) {
+                std::cerr << "mbps::publish: " << e.what() << std::endl;
+                for (auto e : mp) print ("{}/", e.second);
+                print ("\n");
+                return 0;
             }
+        }
+
+        // determine name size in order to determine the space left for content
+        auto contentSp = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
+        if (contentSp < 10) {
+            dct::print("mbps::publish Publication name only leaves {} bytes for content\n", contentSp);
+            return 0;
+        }
+
+        // determine number of message segments to carry msg: sCnt forces n < 256,
+        n = (size + (contentSp - 1)) / contentSp;
+        if(n > MAX_SEGS) throw error("publishMsg: message too large");
+        auto sCnt = n > 1? n + 256 : 0;
+        mp.back().second = sCnt;    //sCnt is last argument on the list
+
+        try {   // try...catch for errors in building the pub
             if (n >1) startMsgsBatch(); // will hold all the segments until finished before goes to network
             // publish as many segments as needed
-            for (auto off = 0u; off < size; off += maxContent_) {
-                auto len = std::min(size - off, maxContent_);               
+            for (auto off = 0u; off < size; off += contentSp) {
+                auto len = std::min(size - off, contentSp);
                 doPublish(m_pb.pub(msg.subspan(off, len), mp), hasCH);
                 sCnt += 256;    //segment names differ only in sCnt
                 mp.back().second = sCnt;    //sCnt is last argument on the list
@@ -395,9 +412,9 @@ struct mbps
             std::vector< uint8_t>&& msg, const bool hasCH )
     {
         size_t k = sC >> 8; 
-        auto off = k>0? (k-1)*maxContent_ : 0;
+        auto off = k>0? (k-1)*m_maxContent[mid] : 0;
         auto size = msg.size();
-        auto len = std::min(size - off, maxContent_);
+        auto len = std::min(size - off, m_maxContent[mid]);
         // try...catch for errors in building the pub
         try {
             doPublish(m_pb.pub(std::span(msg).subspan(off, len), "sCnt", sC), hasCH);
@@ -406,10 +423,9 @@ struct mbps
             return;
         }
 
-        if(off + maxContent_ >= size) {
-            // no more content to send
-            m_pacing = false;
-            m_msgPaceCb(*this, true, mid);
+        if(off + m_maxContent[mid] >= size) {
+            // no more content to send - but wait pace time for this final segment
+            oneTime(paceTm, [this,mid] { m_pacing = false; m_msgPaceCb(*this, true, mid); });
             return;
         }
         sC += 256;
@@ -437,21 +453,29 @@ struct mbps
         crypto_generichash(h.data(), h.size(), emsg.data(), emsg.size(), NULL, 0);
         uint32_t mId = h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24;
         mp.emplace_back("msgID", mId);
+        if (m_maxContent.contains(mId)) throw error("mbps::publishPaced: duplicate message id");
 
         // mp now contains all the parameters that don't change per-segment so make them defaults
         m_pb.defaults(mp);
 
         if (ch) m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
 
-        // determine number of message segments: sCnt forces n < 256,
-        // iblt is sized for 80 but 64 fits in an int bitset
-        size_t n = (size + (maxContent_ - 1)) / maxContent_;
+        // determine max content for publications of this message
+        mp.emplace_back("sCnt", 0u); // just to get a name size for this message
+       m_maxContent[mId] = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
+        if (m_maxContent[mId] < 10) {
+            dct::print("mbps::publish Publication name only leaves {} bytes for content\n", m_maxContent[mId]);
+            return 0;
+        }
+
+        // determine number of message segments to carry msg: sCnt forces n < 256,
+        size_t n = (size + (m_maxContent[mId] - 1)) / m_maxContent[mId];
         if(n > MAX_SEGS) throw error("publishMsg: message too large");
         auto sCnt = n > 1? n + 256 : 0;
 
         // try...catch for errors in building the pub
         try {
-            if (n>1) m_pacing = true;
+            m_pacing = true;
             doSegment(sCnt, mId, paceTm, std::vector<uint8_t>(msg.begin(),msg.end()), hasCH);
         } catch (const std::exception& e) {
             std::cerr << "mbps::publish: " << e.what() << std::endl;

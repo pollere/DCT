@@ -79,7 +79,7 @@ static void cmdPubr(mbps &cm) {
  * statusRecv handles a command received in a subscription (use as callback).
  * Does not use the message body (should be empty)
  */
-static void statusRecv(mbps &, const mbpsMsg& msg, std::vector<uint8_t>)
+static void statusRecv(mbps& cm, const mbpsMsg& msg, std::vector<uint8_t>)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();

@@ -97,6 +97,8 @@ static std::string addr{};
 static std::string capability{"lock"};
 static std::string location{"all"}; // target's location (for operators)
 static std::string myState{"unlocked"};       // simulated state (for devices)
+uint8_t * Mesg;     // read in message
+std::streampos Len;
 
 using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
 static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
@@ -136,10 +138,14 @@ static void msgPubr(mbps &cm) {
     // make a message to publish
     std::string s = dct::format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
     std::vector<uint8_t> toSend(s.begin(), s.end());
-
-    //hack to create a message that exceeds maxContent
-    while (toSend.size() < 2*cm.maxContent())  toSend.emplace_back(5);
-    //dct::print ("toSend has size {} and maxContent is {}\n", toSend.size(), cm.maxContent());
+    if (Len > 0) {
+        toSend.insert(toSend.end(), Mesg, Mesg+Len);
+    } else {
+        //hack to create a message that exceeds maxContent
+        while (toSend.size() < 3*cm.maxContent())  toSend.emplace_back(5);
+    }
+    dct::print ("toSend has size {} and maxContent is {}\n", toSend.size(), cm.maxContent());
+   // dct::print("{}\n", std::string(toSend.begin(), toSend.end()));
 
     // The following block tests that publishPaced doesn't misbehave when things in msgParms 
     // go out of scope while the 'doSegment' worker is still pacing out chunks of the msg.
@@ -164,6 +170,7 @@ static void msgPubr(mbps &cm) {
         } else {
     //         auto now = std::chrono::system_clock::now();
     //        dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
+            //cm.publish(std::move(mp), toSend);
             cm.publishPaced(paceAt, msgPaceDone, std::move(mp), toSend);  //no callback to skip message confirmation
         }
     }
@@ -203,10 +210,12 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
     // actions can be conditional upon msgArgs and msgPayload
 
     if (role == "device") {
+        dct::print("msgRecv: device received message with payload size {}\n", msgPayload.size());
         // devices set their 'state' from the incoming 'arg' value then immediately reply
         if (! quiet) dct::print("{:%M:%S} {}:{}-{} rcvd ({:.3} mS transit): {} {}: {} {} | {}\n",
                 now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],
-                std::string(msgPayload.begin(), msgPayload.end()));
+                std::string(msgPayload.begin(), msgPayload.begin()+35));
+                //std::string(msgPayload.begin(), msgPayload.end()));
         myState = mt["topicArgs"] == "lock"? "locked":"unlocked";
         msgPubr(cm);
     } else if (!quiet) {
@@ -288,6 +297,25 @@ int main(int argc, char* argv[])
     // DeftT modules through the shim but this may not be needed in a deployed application
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
+
+    if (role == "operator") {
+    // open the input file and read the message into mesg
+    std::string fname("README.md");
+    std::ifstream inFile (fname, std::ios::in|std::ios::binary|std::ios::ate);
+    //streampos len;
+    if(inFile.is_open())
+    {
+        Len = inFile.tellg();
+        Mesg = new uint8_t [Len];
+        inFile.seekg (0, std::ios::beg);
+        inFile.read (reinterpret_cast<char*>(Mesg), Len);
+        inFile.close();
+        std::cout << "Read file " << fname << " of size " << Len << std::endl;
+    } else {
+        std::cout << "Unable to open file " << fname << std::endl;
+        exit(1);
+    }
+    }
 
     // Connect and pass in the handler
     try {

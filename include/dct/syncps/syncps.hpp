@@ -313,7 +313,7 @@ struct SyncPS {
         // maxPubSize_ is the mtu minus (top-level TL + size of the name including csID + MetaInfo size + Content TL + crypto overhead)
         maxPubSize_ = mtu() - (4 + (collName_.ssize() + 2+4) + 5 + 3 + pktSigmgr_.sigSpace());
         // max information size (Name Value components plus Content Value) available for shim/distributor
-        maxInfoSize_ = maxPubSize_ -(2 + 3 + pubSigmgr_.sigSpace());
+        maxInfoSize_ = maxPubSize_ -(2 + 3 + pubSigmgr_.sigSpace() +2);
         if (maxPubSize_ <= 0 || maxInfoSize_ <= 0)
             throw runtime_error("syncps: no space for Pub /Info");
         distDelay_ += std::chrono::milliseconds(tts());
