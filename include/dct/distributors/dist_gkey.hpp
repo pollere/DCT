@@ -234,7 +234,7 @@ struct DistGKey {
         if (m_init) return;
 
         if (! m_keyMaker) {
-            // print("DistGKey::updateSigningKey new SP for member {}\n", pubCert.name() );
+            dct::log(L_TRACE)("DistGKey::updateSigningKey new SP for member {}", pubCert.name() );
              publishMembershipReq();
              return;
         }
@@ -242,7 +242,7 @@ struct DistGKey {
         if (m_kmpri(m_tp) <= 0) std::runtime_error("DistGKey::updateSigningKey keymaker capability change indicates bad signing chain");
         m_kmtp = m_tp;
         ++m_KMepoch;
-        // print("DistGKey::updateSigningKey new SP for keymaker {} epoch = {}\n", pubCert.name(), m_KMepoch);
+        dct::log(L_TRACE)("DistGKey::updateSigningKey new SP for keymaker {}, epoch = {}", pubCert.name(), m_KMepoch);
         makeGKey(); // redo this so gklists are under the new signing cert
     }
 
@@ -268,7 +268,7 @@ struct DistGKey {
 
         const auto& tp = p.signer();    // thumbprint of this GKeyList's signer
         if (!m_certs.contains(tp) || m_kmpri(tp) <= 0) {
-            print("DistGKey:receiveGKeyList ignoring keylist {} signed by expired or unauthorized identity\n", p.name());
+            dct::log(L_WARN)("DistGKey:receiveGKeyList ignoring keylist {} signed by expired or unauthorized identity", p.name());
             return;
         }
         auto n = p.name();
@@ -293,7 +293,7 @@ struct DistGKey {
                 // seem to be restarted keymaker, grab keymaker status and return
                 m_keyMaker = true;
                 m_KMepoch = ++epoch;    // epoch is incremented when KM gets new signing pair
-                // print("DistGKey:receiveGKeyList: received key list from my Id in init set epoch to {}\n", m_KMepoch);
+                dct::log(L_TRACE)("DistGKey:receiveGKeyList: received key list from my Id in init set epoch to {}", m_KMepoch);
                 m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); }); // keymakers need the member requests
                 gkeyTimeout();  //create a group key and schedule group key creation with this  epoch and current signing cert
             }
@@ -459,7 +459,8 @@ struct DistGKey {
                 m_keyMaker = elected;
                 m_KMepoch = epoch;
                 if (! elected) return;
-                //print("{} wins election to make {} GKs\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
+                dct::log(L_INFO)("DistGKey::setup {} wins election to make {} GKs",
+                         m_certs[m_tp].name(), m_sync.collName_.last().toSv());
                 m_sync.subscribe(m_mrPrefix, [this](const auto& p){ addGroupMem(p); }); // keymakers need the member requests
                 gkeyTimeout();  //create a group key and reschedule group key creation                
         };
@@ -502,7 +503,7 @@ struct DistGKey {
     void makeGKey() {
         m_curKey.resize(aeadKeySz); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
         crypto_aead_xchacha20poly1305_ietf_keygen(m_curKey.data());
-        //print("{} makes a new {} GK\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
+        dct::log(L_DEBUG)("{} makes a new {} GK", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
         //set the key's creation time
         m_curKeyCT = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();

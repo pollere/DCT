@@ -141,16 +141,18 @@ struct SigMgrSchema final : SigMgr {
     bool validate(rData data) override final {
         // cryptographically validate 'data'
         if (! pubsm_.get().validate(data)) {
-            print("SigMgrSchema::validate: invalid sig {}\n", data.name());
+            dct::log(L_WARN)("SigMgrSchema::validate: invalid sig {}", data.name());
             return false;
         }
         // structurally validate 'data'
         try {
             const auto& pubval = pv_.at(data.signer()); // can throw when checking pubs from cAdds where don't yet have certs
             auto valid = pubval.matchTmplt(bs_, data.name());
-            if (!valid) print("SigMgrSchema::validate: invalid structure {}\n", data.name());
+            if (!valid) dct::log(L_WARN)("SigMgrSchema::validate: invalid structure {}", data.name());
             return valid;
-        } catch (std::exception& e) { /* print("SigMgrSchema::validate: structure validation err: {}\n", e.what());*/ }
+        } catch (std::exception& e) {
+            dct::log(L_WARN)("SigMgrSchema::validate: structure validation err: {}", e.what());
+        }
         return false;
     }
 

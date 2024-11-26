@@ -61,6 +61,7 @@
 #include <cstring>  // for memcpy
 #include <ranges>
 #include "sigmgr.hpp"
+#include <dct/log.hpp>
 
 namespace dct {
 
@@ -147,7 +148,7 @@ struct SigMgrAEAD final : SigMgr {
         // signature holds nonce followed by computed MAC for this Data
         auto sig = d.signature().rest();
         if (sig.size() != sigSize) {
-            // print("aead bad sig size {} expected {}\n", sig.size(), sigSize);
+            dct::log(L_DEBUG)("aead bad sig size {} expected {}", sig.size(), sigSize);
             return false;
         }
         auto content = d.content().rest();
@@ -166,7 +167,7 @@ struct SigMgrAEAD final : SigMgr {
              }
              i = (i + 1) % keyListSize();
         } while (i != m_decryptIndex);
-        //print("aead decrypt failed for PDU: {}\n", d.name());
+        dct::log(L_DEBUG)("aead decrypt failed for PDU: {}", d.name());
         return false;
     }
 

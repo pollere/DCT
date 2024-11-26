@@ -52,6 +52,7 @@
 #endif
 
 #include <dct/schema/crpacket.hpp>
+#include <dct/log.hpp>
 #include "default-if.hpp"
 #include "default-io-context.hpp"
 
@@ -108,12 +109,15 @@ struct Transport {
      */
     void send(auto&& v) {
         size_t len = v.size() * sizeof(v[0]);
-        if (len > max_pkt_size) throw runtime_error( "send: packet too big");
+        if (len > max_pkt_size) {
+            dct::log(L_ERROR)("Transport::send packet too big, len={}", len);
+            return;
+        }
         send_pkt((const uint8_t*)v.data(), len,
                 [buf = std::move(v)](const boost::system::error_code& ec, size_t) {
                     if (ec.failed() && ec.value() != ECONNREFUSED)
                         //throw runtime_error(dct::format("send failed: {}", ec.message()));
-                        print("send failed: {}", ec.message());
+                        dct::log(L_ERROR)("Transport::send failed: {}", ec.message());
                 });
     }
 };
@@ -144,8 +148,8 @@ struct TransportUdp : Transport {
         sock_.async_receive(asio::buffer(rcvbuf_),
                 [this](boost::system::error_code ec, std::size_t len) {
                     if (ec.failed() && ec.value() != ECONNREFUSED)
-                            throw runtime_error(dct::format("recv failed: {}", ec.message()));
-                    //if (ec.failed()) print("recv failed: {} len {}\n", ec.message(), len);
+                            throw runtime_error(dct::format("TransportUdp::recv failed: {}", ec.message()));
+                    if (ec.failed()) dct::log(L_ERROR)("TransportUdp::recv failed: {} len={}", ec.message(), len);
                     if (len > 0) rcb_(rcvbuf_.data(), len);
                     issueRead();
                 });
@@ -534,7 +538,7 @@ struct TransportTcpP final : TransportTcp {
     void doAccept() {
         acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
             if (ec.failed()) {
-                dct::print("tcp accept failed: {}", ec.message());
+                dct::log(L_FATAL)("TransportTcpP::accept failed: {}", ec.message());
                 throw std::runtime_error(dct::format("accept failed: {}", ec.message()));
             }
             startSession(socket);;

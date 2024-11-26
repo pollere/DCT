@@ -289,7 +289,7 @@ struct DistSGKey {
 
         const auto& tp = p.signer();    // thumbprint of this SGKeyRec's signer
         if (!m_certs.contains(tp) || m_kmpri(tp) <= 0) {
-            print("DistSGKey:receiveSGKeyRecords ignoring keylist {} signed by expired or unauthorized identity\n", p.name());
+            dct::log(L_WARN)("DistSGKey:receiveSGKeyRecords ignoring keylist {} signed by expired or unauthorized identity", p.name());
             return;
         }
 
