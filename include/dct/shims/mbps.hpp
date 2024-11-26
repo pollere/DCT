@@ -213,6 +213,15 @@ struct mbps
                 }
             } else m_maxContent[mId] = pubSpace_ - p.name().size();
             if (k == 1) m_msgTm[mId] =  p.time("_ts");   // first timestamp is message origination time
+
+            if (!m_reassemble.contains(mId)) {
+                this->oneTime(maxPubLifetime * n, [this, mId](){
+                    m_received.erase(mId);
+                    m_reassemble.erase(mId);
+                    m_maxContent.erase(mId);
+                });
+            }
+
             //reassemble message            
             const auto& m = content;
             auto& dst = m_reassemble[mId];
@@ -277,6 +286,10 @@ struct mbps
             // state in a bitmap that's created on-demand and erased on completion or timeout.
             n = k & 255;
             if (success) {
+                if (!m_pending.contains(mId)) {
+                    this->oneTime(maxPubLifetime * n, [this, mId](){ m_pending.erase(mId); });
+                }
+
                 m_pending[mId].set(k >> 8);
                 if (m_pending[mId].count() != n) return; // all pieces haven't arrived
             }
