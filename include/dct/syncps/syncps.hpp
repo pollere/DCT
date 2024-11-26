@@ -34,6 +34,7 @@
 #include <dct/face/direct.hpp>
 #include <dct/format.hpp>
 #include <dct/schema/dct_cert.hpp>
+#include <dct/log.hpp>
 #include "iblt.hpp"
 
 namespace dct {
@@ -324,7 +325,8 @@ struct SyncPS {
         } else
             pubLifetime_ = maxPubLifetime;
         pubExpirationGB_ = pubLifetime_;
-        // print ("syncps for {} computes pubSize: {}, infoSize: {}, distDly: {}\n", collName_, maxPubSize_, maxInfoSize_, distDelay_.count());
+        dct::log(L_DEBUG)("syncps for {} computes pubSize: {}, infoSize: {}, distDly: {}",
+                  collName_, maxPubSize_, maxInfoSize_, distDelay_);
     }
 
     SyncPS(rName collName, SigMgr& wsig, SigMgr& psig) : SyncPS(defaultFace(), collName, wsig, psig) {}
@@ -354,7 +356,7 @@ struct SyncPS {
      * @brief add a new local or network publication to the 'active' pubs set
      */
     auto addToActive(crData&& p, bool localPub) {
-        //print("{:%M:%S} addToActive {} {}: {}\n", std::chrono::system_clock::now(), p.name(), p.size(), localPub);
+        dct::log(L_TRACE)("syncps::addToActive {} {}: {}", p.name(), p.size(), localPub);
         auto lt = getLifetime_(p);
         auto hash = localPub? pubs_.addLocal(std::move(p)) : pubs_.addNet(std::move(p));
         return finishActivate(hash, lt);
@@ -365,7 +367,6 @@ struct SyncPS {
      */
     auto activateEntry(const auto& e) {
         const auto& p = e.i_;
-        //print("{:%M:%S} activateEntry {} {}: {}\n", std::chrono::system_clock::now(), p.name(), p.size(), localPub);
         if (e.fromNet())
             if (auto s = subscriptions_.findLM(p.name()); subscriptions_.found(s)) deliver(p, s->second);
 
@@ -381,14 +382,14 @@ struct SyncPS {
      */
     bool addToNoSigner(crData&& p) {
         auto hash = pubs_.addNoSigner(std::move(p));
-        //print("{:%M:%S} addToNoSigner {} {} ^{:x}\n", std::chrono::system_clock::now(), p.name(), p.size(), hash);
+        dct::log(L_TRACE)("syncps::addToNoSigner {} {} ^{:x}", p.name(), p.size(), hash);
         if (hash == 0 || noSignerPubs_ > 50) return false;
         noSignerPubs_++;
         // Remove a publication that had no signing cert when it arrived if its signer
         // does not show up after brief delay. Check to make sure it hasn't become active.
         oneTime(signerHold_ + maxClockSkew, [this, hash]{
             if (pubs_.contains(hash) && !(pubs_.at(hash).active())) {
-                //print("{:%M:%S} addToNoSigner now ignoring ^{:x}\n", std::chrono::system_clock::now(), hash);
+                dct::log(L_DEBUG)("syncps::addToNoSigner now ignoring ^{:x}", hash);
                 --noSignerPubs_;
                 pubs_.erase(hash);
                 ignorePub(hash);
@@ -403,11 +404,11 @@ struct SyncPS {
      */
     void newSigner(const thumbPrint& tp) {
         if (noSignerPubs_ == 0) return;
-        //print("{:%M:%S} newSigner called with {} entries\n", std::chrono::system_clock::now(), noSignerPubs_);
+        dct::log(L_TRACE)("syncps::newSigner called with {} entries", noSignerPubs_);
         pubs_.forEachNoS([this,tp](auto& e) {
             const auto& p = e.i_;   // reference to pub
             if (tp == p.signer() && pubSigmgr_.validate(p)) {
-                //print("syncps::newSigner is activating {}\n", p.name());
+                dct::log(L_TRACE)("syncps::newSigner is activating {}", p.name());
                 e.signer().activate();
                 --noSignerPubs_;
                 activateEntry(e);
@@ -428,7 +429,7 @@ struct SyncPS {
     PubHash publish(crData&& pub) {
         if (pub.size() > maxPubSize_) return 0;
         auto h = addToActive(std::move(pub), true);
-        //print("{:%M:%S} publish {} {:x} d {} r {}\n", std::chrono::system_clock::now(), pub.name(), h, delivering_, registering_);
+        dct::log(L_DEBUG)("syncps::publish {} {:x} d {} r {}", pub.name(), h, delivering_, registering_);
         if (h == 0) return h;   // already in actives
         ++publications_;
         // if a delivery callback is waiting on this pub, call it
@@ -461,9 +462,9 @@ struct SyncPS {
         auto h = hashPub(pub);
         if (pubs_.contains(h)) {
             if ((pubs_.at(h)).fromNet()) {
-            print("syncps::publish w cb instant cb for {}\n", pub.name());
+                dct::log(L_TRACE)("syncps::publish w cb instant cb for {}", pub.name());
                 cb((pubs_.find(h))->second.i_,true);
-                }
+            }
             return h;     // if already in collection and is local assume it has already set cb
         }
         h = publish(std::move(pub));
@@ -509,7 +510,7 @@ struct SyncPS {
      * from some external source.
      */
     auto& subscribe(crPrefix&& topic, SubCb&& cb) {
-        // print("syncps::subscribe called for {}\n", (rPrefix)topic);
+        dct::log(L_DEBUG)("syncps::subscribe called for {}", (rPrefix)topic);
         // add to subscription dispatch table. If subscription is new,
         // 'cb' will be called with each matching item in the active
         // publication list. Otherwise subscription will be
@@ -631,8 +632,8 @@ struct SyncPS {
         if (sv.empty()) return false;
         cAdd.content(sv);
         if (! pktSigmgr_.sign(cAdd)) return false;
+        dct::log(L_TRACE)("syncps::shipCAdd sent {}", cAdd.name());
         face_.send(std::move(cAdd));
-        //print("{:%M:%S} syncps::shipCAdd sent {}\n", std::chrono::system_clock::now(), cAdd.name());
         return true;
     }
 
@@ -843,29 +844,39 @@ struct SyncPS {
                 // For now we skip this pub and try to continue but getting a real cAdd valid()
                 // method needs to happen ASAP. Once it does, this 'if' will go away since a cAdd
                 // will never be passed up to here if any of its Data's are not valid.
-                //print("doesn't pass basic structure test {}\n", d.name());
+                dct::log(L_WARN)("syncps::onCAdd pub {}: doesn't pass basic structure test", d.name());
                 continue;
             }
             auto h = hashPub(d);
-            if (ignore_.contains(h)) continue;  // currently ignoring this pub
+            if (ignore_.contains(h)) {
+                dct::log(L_TRACE)("syncps::onCAdd pub {}: currently ignoring", d.name());
+                continue;
+            }
 
             //  puts hold on pubs others send that I already have in case it is on the pending list
             if (pubs_.contains(h)) { // && not local origin in case overhear a member resending my pubs?
                 if (ht.time_since_epoch().count()) pubs_.at(h).hold_ = ht;
+                dct::log(L_TRACE)("syncps::onCAdd pub {}: putting on hold", d.name());
                 continue;
             }
 
             if (d.size() > maxPubSize_ || isExpired_(d)) {
-                 //print("pub {}: {}\n", isExpired_(d)? "expired":"exceeds maxPubSize", d.name());
+                dct::log(L_DEBUG)("syncps::onCAdd pub {}: {}", isExpired_(d) ? "expired" : "exceeds maxPubSize", d.name());
                 // unwanted pubs have to go in our iblt or we'll keep getting them
                 ignorePub(d);
                 continue;
             }
+
             if (! pubSigmgr_.validate(d)) {
-                if (pubSigmgr_.haveSigner(d))
+                if (pubSigmgr_.haveSigner(d)) {
+                    dct::log(L_WARN)("syncps::onCAdd pub {}: failed validation (haveSigner)", d.name());
                     ignorePub(d); // already have this Pub's signing cert
-                else if ( !addToNoSigner(crData(d)))
+                } else if ( !addToNoSigner(crData(d))) {
+                    dct::log(L_DEBUG)("syncps::onCAdd pub {}: failed validation (!addToNoSigner)", d.name());
                     ignorePub(d);   // failed to add as inactive without signer
+                } else {
+                    dct::log(L_DEBUG)("syncps::onCAdd pub {}: failed validation (addToNoSigner)", d.name());
+                }
                 continue;
             }
 
@@ -873,12 +884,12 @@ struct SyncPS {
             // collection then deliver it to the longest match subscription.
             auto ph = addToActive(crData(d), false);
             if (ph == 0) {
-                // print("addToActive failed: {}\n", d.name());
+                dct::log(L_DEBUG)("syncps::addToActive failed: {}", d.name());
                 continue;
             }
             ++ap;
             if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) deliver(d, s->second);
-            // else print("syncps::onCAdd: no subscription for {}\n", d.name());
+            else dct::log(L_DEBUG)("syncps::onCAdd: no subscription for {}\n", d.name());
         }
         delivering_ = false;
         if (ap == 0) {  // nothing I need in this cAdd, no change to local cState
@@ -918,12 +929,12 @@ struct SyncPS {
         ignore_.add(h);
         oneTime(1s, [this, h]{
                     ignore_.erase(h);
-                    //print("{:%M:%S} ignorePub done ignoring ^{:x}\n", std::chrono::system_clock::now(), h);
+                    dct::log(L_DEBUG)("syncps::ignorePub done ignoring ^{:x}", h);
                 });
     }
     void ignorePub(const rPub& p) {
         auto h = hashPub(p);
-        //print("{:%M:%S} ignorePub {} ^{:x}\n", std::chrono::system_clock::now(), p.name(), h);
+        dct::log(L_DEBUG)("ignorePub {} ^{:x}", p.name(), h);
         ignorePub(h);
     }
 
@@ -948,9 +959,9 @@ struct SyncPS {
                            if (auto n = s.name(); n.nBlks() == ncomp) handleCState(n);
                        },
                        [this](auto rd) { // dCb: cAdd response to any active local cState in collName_
-                            // print("syncps RST set Cb received cAdd: {}\n", rd.name());
+                            dct::log(L_TRACE)("syncps RST set Cb received cAdd: {}", rd.name());
                             if (! pktSigmgr_.validateDecrypt(rd)) {
-                                // print("syncps invalid cAdd: {}\n", rd.name());
+                                dct::log(L_WARN)("syncps invalid cAdd: {}", rd.name());
                                 // Got an invalid cAdd so ignore the pubs it contains.
                                 return;
                             }

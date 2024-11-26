@@ -97,7 +97,7 @@ struct kmElection {
         if (priority_ > 0) {
             ++epoch_;
             publishKM("elec");
-            //print("kmElection:electionDone: election {} done\n", epoch_);
+            dct::log(L_TRACE)("kmElection::electionDone: election {} done", epoch_);
         }
         done_(priority_ > 0, epoch_);
     }
@@ -128,8 +128,8 @@ struct kmElection {
 
             if (std::cmp_greater(priority_, pri)) return; // candidate loses
             if (std::cmp_greater(pri, priority_) || tp > ourTP_) priority_ = -priority_; // we lose
-            //dct::print("cand {:02x} pri {}  us {:02x} {}\n", fmt::join(std::span(tp).first(4),""), pri,
-            //      fmt::join(std::span(ourTP_).first(4),""), priority_);
+            dct::log(L_TRACE)("kmElection::handleKMcand {:02x} pri {} us {:02x} {}\n",
+                     fmt::join(std::span(tp).first(4), ""), pri, fmt::join(std::span(ourTP_).first(4), ""), priority_);
         } catch (std::runtime_error& ex) { return; }
     }
 

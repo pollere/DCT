@@ -144,7 +144,7 @@ struct SigMgrAEGIS final : SigMgr {
         // signature holds nonce followed by computed MAC for this Data
         auto sig = d.signature().rest();
         if (sig.size() != sigSize) {
-            // print("aead bad sig size {} expected {}\n", sig.size(), sigSize);
+            dct::log(L_DEBUG)("aead bad sig size {} expected {}", sig.size(), sigSize);
             return false;
         }
         auto content = d.content().rest();
@@ -163,7 +163,7 @@ struct SigMgrAEGIS final : SigMgr {
              }
              i = (i + 1) % keyListSize();
         } while (i != m_decryptIndex);
-        print("aead decrypt failed on {}\n", d.name());
+        dct::log(L_DEBUG)("aead decrypt failed on {}", d.name());
         return false;
     }
 

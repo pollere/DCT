@@ -146,6 +146,7 @@ struct mbps
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {
                 if (!success) throw runtime_error("mbps failed to initialize connection");
+                dct::log(L_INFO)("mbps::connect initialize successful");
                 m_connectCb();
             });
     }
@@ -191,6 +192,7 @@ struct mbps
      {      
         const auto& p = mbpsPub(pub);
         try {
+        dct::log(L_DEBUG)("mbps::receivePub: received {}", p.name());
         //all the publication name ftags (in order) set by app or mbps
         SegCnt k = p.number("sCnt"), n = 1u;
         std::vector<uint8_t> msg{}; //for message body
@@ -203,12 +205,12 @@ struct mbps
             n = 255 & k;    //bottom byte
             k >>= 8;
             if (k > n || k == 0 || n > MAX_SEGS) {
-                print("receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
+                dct::log(L_WARN)("mbps::receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
                 return;
             }
             if (m_maxContent.contains(mId)) {
                 if (pubSpace_ - p.name().size() != m_maxContent[mId]) {
-                    dct::print("mbps::receivePub: publication for message {} with name {}\n", mId, p.name());
+                    dct::log(L_ERROR)("mbps::receivePub: publication for message {} with name {}", mId, p.name());
                     throw error("mbps::receivePub: can't reassemble message as has name size mismatch");
                 }
             } else m_maxContent[mId] = pubSpace_ - p.name().size();
@@ -233,8 +235,7 @@ struct mbps
         mh(*this, mbpsMsg(p), msg);
 
         } catch (const std::exception& e) {
-            std::cerr << "mbps::receivePub: " << e.what() << std::endl;
-            exit(1);
+            dct::log(L_FATAL)("mbps::receivePub: error {}", e.what());
         }
     }
 
@@ -322,7 +323,7 @@ struct mbps
             return;
         }
         if(m_pb.publish(std::move(p)) == 0)
-            dct::print("doPublish: was unable to publish {}\n", p.name());
+            dct::log(L_WARN)("doPublish: was unable to publish {}", p.name());
     }
 
     MsgID publish(msgParms&& mp, std::span<const uint8_t> msg = {}, const confHndlr&& ch = nullptr)
@@ -356,9 +357,7 @@ struct mbps
                 doPublish(m_pb.pub({}, mp), hasCH);
                 return mId;
             } catch (const std::exception& e) {
-                std::cerr << "mbps::publish: " << e.what() << std::endl;
-                for (auto e : mp) print ("{}/", e.second);
-                print ("\n");
+                dct::log(L_ERROR)("mbps::publish: {}", e.what());
                 return 0;
             }
         }
@@ -366,12 +365,13 @@ struct mbps
         // determine name size in order to determine the space left for content
         auto contentSp = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
         if (contentSp < 10) {
-            dct::print("mbps::publish Publication name only leaves {} bytes for content\n", contentSp);
+            dct::log(L_ERROR)("mbps::publish Publication name only leaves {} bytes for content", contentSp);
             return 0;
         }
 
         // determine number of message segments to carry msg: sCnt forces n < 256,
         n = (size + (contentSp - 1)) / contentSp;
+        dct::log(L_DEBUG)("mbps::publish sending message as {} segments", n);
         if(n > MAX_SEGS) throw error("publishMsg: message too large");
         auto sCnt = n > 1? n + 256 : 0;
         mp.back().second = sCnt;    //sCnt is last argument on the list
@@ -386,9 +386,7 @@ struct mbps
                 mp.back().second = sCnt;    //sCnt is last argument on the list
             }
         } catch (const std::exception& e) {
-            std::cerr << "mbps::publish: " << e.what() << std::endl;
-            for (auto e : mp) print ("{}/", e.second);
-            print ("\n");
+            dct::log(L_ERROR)("mbps::publish: {}", e.what());
             if (n>1) endMsgsBatch();
             return 0;
         }
@@ -464,7 +462,7 @@ struct mbps
         mp.emplace_back("sCnt", 0u); // just to get a name size for this message
        m_maxContent[mId] = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
         if (m_maxContent[mId] < 10) {
-            dct::print("mbps::publish Publication name only leaves {} bytes for content\n", m_maxContent[mId]);
+            dct::log(L_ERROR)("mbps::publish Publication name only leaves {} bytes for content", m_maxContent[mId]);
             return 0;
         }
 
@@ -478,9 +476,7 @@ struct mbps
             m_pacing = true;
             doSegment(sCnt, mId, paceTm, std::vector<uint8_t>(msg.begin(),msg.end()), hasCH);
         } catch (const std::exception& e) {
-            std::cerr << "mbps::publish: " << e.what() << std::endl;
-            for (auto e : mp) print ("{}/", e.second);
-            print ("\n");
+            dct::log(L_ERROR)("mbps::publish: {}", e.what());
             return 0;
         }
         return mId;

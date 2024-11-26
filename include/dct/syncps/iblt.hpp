@@ -55,6 +55,7 @@
 #include <vector>
 
 #include "murmurHash3.hpp"
+#include <dct/log.hpp>
 
 namespace dct {
 
@@ -240,8 +241,10 @@ struct IBLT {
             // extract entry
             nitems_ += b;
             //print(" ht[{}] = {} of {}\n", i, b, nitems_);
-            if (i >= nEntries) print("compressed IBLT too large {} {}\n", i, nEntries);
-            if (i >= nEntries) throw std::runtime_error("compressed IBLT too large");
+            if (i >= nEntries) {
+                dct::log(L_FATAL)("iblt::rlDecode compressed IBLT too large {} {}", i, nEntries);
+                throw std::runtime_error("compressed IBLT too large");
+            }
             hashTable_[i].count = b;
             hashTable_[i].keySum   = r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24);
             hashTable_[i].keyCheck = r[4] | (r[5] << 8) | (r[6] << 16) | (r[7] << 24);

@@ -83,12 +83,15 @@ struct DCTmodelPT final : DCTmodel  {
 
     // ensure a publication is *structurally* valid on the outgoing DeftT
     bool isValidPub(const Publication& pub) {
-       // if (!certs().contains(pub.signer()))
-            // print ("DCTmodelPT::isValidPub: this DeftT's cert store does not contain signer of {}\n", pub.name());
+        if (!certs().contains(pub.signer()))
+            dct::log(L_DEBUG)("DCTmodelPT::isValidPub: cert store does not contain signer of {}", pub.name());
+
         try {
             const auto& pubval = pv_.at(pub.signer());
             return pubval.matchTmplt(bs_, pub.name());  // structurally validate 'pub'
-        } catch (std::exception&) { print("DCTmodelPT:isValidPub: no pub validator found for signer\n"); }
+        } catch (std::exception&) {
+            dct::log(L_WARN)("DCTmodelPT::isValidPub: no pub validator found for signer");
+        }
         return false;
     }
     // checking if key/msgs Publication's signer is in cert store of this outgoing DeftT
@@ -106,10 +109,13 @@ struct DCTmodelPT final : DCTmodel  {
         const auto& tp = cs_.Chains()[0];  // thumbprint of newest signing cert
         // returns empty span if capability wasn't found or has bad argument content
        auto arg = (Cap::getval(c, pubPrefix(), cs_)(tp)).toSv();
-        if (arg.empty()) std::runtime_error("DCTmodelPT: no RLY capability or no address in RLY capability cert");
+        if (arg.empty()) {
+            dct::log(L_FATAL)("DCTmodelPT::capArgument: no RLY capability or no address in RLY capability cert");
+            std::runtime_error("DCTmodelPT::capArgument: no RLY capability or no address in RLY capability cert");
+        }
         //XXXX hack for working without transport.hpp changes
         if (!arg.starts_with("tcp:") && !arg.starts_with("udp:") && !arg.starts_with("ff02") && !arg.starts_with("ff01")) arg = "";
-        // print ("RLY capability argument is {}\n", arg);
+        dct::log(L_INFO)("DCTmodelPT::capArgument RLY capability argument is {}", arg);
         return arg;
     }
 
@@ -117,7 +123,7 @@ struct DCTmodelPT final : DCTmodel  {
 
     DCTmodelPT(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
                std::string_view addrLoc, addChnCb&& rcb = nullptr) :
-            DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, [this,a=addrLoc]{ return capArgument(a);}  ),
+            DCTmodelPT(rootCb, schemaCb, idChainCb, signIdCb, [this,a=addrLoc]{ return capArgument(a);}, std::move(rcb)) {}
             ptPubSm_{msm_.ref()}
     {
         m_tp = cs_.Chains()[0]; // thumbprint of signing cert
@@ -300,7 +306,8 @@ struct ptps
             publish(std::move(p));
             return true;
         } else {
-            // print("publishValid failed to validate {}\n", p.name());     // this pub isn't in the schema for this DeftT or signing cert hasn't arrived
+            // this pub isn't in the schema for this DeftT or signing cert hasn't arrived
+            dct::log(L_WARN)("DCTmodelPT::publishValid failed to validate {}", p.name());
             return false;
         }
     }

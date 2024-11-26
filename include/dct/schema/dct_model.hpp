@@ -40,6 +40,7 @@
 #include "dct/distributors/dist_cert.hpp"
 #include "dct/distributors/dist_gkey.hpp"
 #include "dct/distributors/dist_sgkey.hpp"
+#include "dct/log.hpp"
 
 using namespace std::literals;
 
@@ -112,7 +113,7 @@ struct DCTmodel {
         std::vector<dctCert> pv{};
         for (auto i = b; i != e; ++i) {
             if (certSigMgr().validate(i->second, cert)) pv.emplace_back(std::move(i->second));
-            else print("checkPendingCerts: {} didn't validate with {}\n", i->second.name(), cert.name());
+            else dct::log(L_WARN)("checkPendingCerts: {} didn't validate with {}", i->second.name(), cert.name());
         }
         pending_.erase(tp);
         for (auto p : pv) addCert(p);
@@ -203,11 +204,24 @@ struct DCTmodel {
             auto sc = sp.first;
             cs_.addNewSP(sc, sp.second);   //add this signing pair to cs_ but do not publish
             m_ckd.publishConfCert(sc, [this, sp](const rData& c, bool acked){    //publish with conf cb
-                if (!acked) return;   // unlikely unless became entirely disconnected and cert expired
+                if (!acked) { // unlikely unless became entirely disconnected and cert expired
+                    dct::log(L_WARN)("getNewSP:addKP nobody acked my cert {}", sp.first.name());
+                    return;
+                } else {
+                    dct::log(L_DEBUG)("getNewSP:addKP my cert was acked {}", sp.first.name());
+                }
+
                 auto sc = sp.first;
-                if (sc.computeTP() != c.computeTP())  std::runtime_error("dct_model:getNewSP:addKP confirmed cert does not match passed in cert");
+                if (sc.computeTP() != c.computeTP()) {
+                    dct::log(L_WARN)("getNewSP:addKP confirmed cert does not match passed in cert {}", sp.first.name());
+                }
+
                 // should be no issue with chain since it hasn't changed so may skip this
-                if (validateChain(bs_, cs_, sc) < 0) throw schema_error(format("getNewSP:addKP cert {} signing chain invalid", sc.name()));
+                if (validateChain(bs_, cs_, sc) < 0) {
+                    dct::log(L_FATAL)("getNewSP:addKP cert {} signing chain invalid", sc.name());
+                    return;
+                }
+
                 cs_.insertChain(sc);                // make it a signing chain head
                 // pass new signing pair to sigmgrs and distributors
                 msgSigMgr().updateSigningKey(sp.second, sc);

@@ -31,6 +31,7 @@
 #include <vector>
 #include "bschema.hpp"
 #include "dct_cert.hpp"
+#include <dct/log.hpp>
 
 namespace dct {
 
@@ -64,7 +65,7 @@ struct certStore {
     auto removeExpired() {  // remove expired certs
         std::erase_if(certs_, [this,now = std::chrono::system_clock::now()](const auto& i) {
                 if (rCert(i.second).validUntil() > now) return false;
-                // print("removeExpired {} @{:%T}\n", i.second.name(), now);
+                dct::log(L_DEBUG)("certStore::removeExpired {}", i.second.name());
                 const auto& tp = i.first;
                 // remove any msg validation state associated with this cert
                 certRemoveCb_(tp);
@@ -75,7 +76,7 @@ struct certStore {
                     std::erase(chains_, tp);
                     // print(" after remove have {} keys and {} chains\n", key_.size(), chains_.size());
                     if (chains_.size() == 0) {
-                        print("removeExpired @{} removed my only signing cert {}\n", now, i.second.name());
+                        dct::log(L_ERROR)("certStore::removeExpired removed my only signing cert {}", i.second.name());
                     }
                 }
                 return true;
@@ -124,14 +125,14 @@ struct certStore {
     // 'status' true if the element was added and false if it was already there.
     auto add(const dctCert& c) {
         if (! c.valid()) {
-            print("cert {} invalid\n", c.name());
+            dct::log(L_ERROR)("certStore::add (invalid) {}", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         return finishAdd(certs_.try_emplace(c.computeTP(), c));
     }
     auto add(dctCert&& c) {
         if (! c.valid()) {
-            print("cert {} invalid\n", c.name());
+            dct::log(L_ERROR)("certStore::add (invalid) {}", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         return finishAdd(certs_.try_emplace(c.computeTP(), std::move(c)));
@@ -139,7 +140,7 @@ struct certStore {
 
     auto add(const dctCert& c, const keyVal& k) {
         if (! c.valid()) {
-            print("cert {} invalid\n", c.name());
+            dct::log(L_ERROR)("certStore::add (invalid) {}", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         auto it = finishAdd(certs_.try_emplace(c.computeTP(), c));
@@ -154,7 +155,7 @@ struct certStore {
     // so by passes the addCb_ which is for certs of others arriving through my face
     auto addNewSP(const dctCert& c, const keyVal& k) {
         if (! c.valid()) {
-            print("cert {} invalid\n", c.name());
+            dct::log(L_ERROR)("certStore::addNewSP (invalid) {}", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         auto it = certs_.try_emplace(c.computeTP(), c);
