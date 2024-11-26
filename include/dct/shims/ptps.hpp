@@ -69,7 +69,6 @@ using bytpCb = std::function<void(thumbPrint)>;
 struct DCTmodelPT final : DCTmodel  {
     SigMgrPT ptPubSm_;     // sigmgr for validating but not decrypting pubs
     SyncPS* m_gkSync{};
-    DirectFace m_face;      // construct face here instead of shim
     std::unordered_map<thumbPrint,bool> m_rlyCerts {};
     bool m_pubDist;
     addChnCb m_rlyCertCb{};        //used to relay validated cert chain to shim
