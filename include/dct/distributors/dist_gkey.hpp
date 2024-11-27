@@ -167,6 +167,7 @@ struct DistGKey {
 
         // get our identity thumbprint, check if we're allowed to make keys,
         // then set up our public and private signing keys.
+        if (m_certs.Chains().size()==0)  throw runtime_error("dist_gkey::constructor finds empty identity chain\n");
         m_tp = m_certs.Chains()[0];
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
     }
@@ -213,6 +214,7 @@ struct DistGKey {
      *     keymaker needs to assert its role under new cert
      */
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
+        if (m_certs.Chains().size()==0)  throw runtime_error("dist_gkey::updateSigningKey finds empty identity chain\n");
         m_tp = m_certs.Chains()[0];     // set to the thumbPrint of the new first signing chain
         if (m_tp != pubCert.computeTP())
             throw runtime_error("dist_gkey:updateSigningKey gets new key not at chains[0]");

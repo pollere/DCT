@@ -99,8 +99,8 @@ struct DistCert
      */
     void publishCert(const rData c) {
         m_havePeer = true;
-        if (! m_initDone && m_initialPubs.empty()) initDone();
         m_sync.publish(c);
+        if (! m_initDone && m_initialPubs.empty()) initDone();
     }
 
     // adding for ptps - relayed certs only so don't set m_havePeer

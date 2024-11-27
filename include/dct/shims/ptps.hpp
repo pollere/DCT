@@ -222,10 +222,9 @@ struct ptps
     void connect(connectCb&& scb)
     {
         m_connectCb = std::move(scb);
-        //print ("ptps::connect called for transport {}\n",  label(), relayTo());
+        //print ("ptps::connect process started for transport {}\n",  label(), relayTo());
         // call start() with lambda to confirm success/failure
         m_pb.start([this](bool success) {
-                //print ("ptps::connect start cb success={} called for transport {}\n",  success, label(), relayTo());
                 if (!success)  throw runtime_error("ptps failed to initialize connection");
                 m_connected = true;
                 if (m_pb.m_pubDist) {
@@ -236,6 +235,7 @@ struct ptps
     }
 
     void setup(const auto& sibs, bool skipVal) {
+        //print ("ptps::setup process started for transport {}\n",  label(), relayTo());
         // pull certs from sibling transports by signing chains
         auto n = startCertBatch();
         for (auto sp : sibs) if (sp != this) sp->passValidChains(this);

@@ -449,7 +449,7 @@ struct SyncPS {
      * Takes a callback so pub arrival at other entity(s) can be confirmed or
      * failure reported so "at least once" semantics can be built into shim.
      *
-     * Mainly for relays, Publications may altready have been received via the
+     * Mainly for relays, Publications may already have been received via the
      * network from another member and in this case the confirmation cb
      * should be invoked since this Publication is not just locally known
      *
@@ -461,18 +461,18 @@ struct SyncPS {
         auto h = hashPub(pub);
         if (pubs_.contains(h)) {
             if ((pubs_.at(h)).fromNet()) {
-            print("syncps::publish w cb instant cb for {}\n", pub.name());
+                print("syncps::publish w cb instant cb for {}\n", pub.name());
                 cb((pubs_.find(h))->second.i_,true);
                 }
             return h;     // if already in collection and is local assume it has already set cb
         }
         h = publish(std::move(pub));
         if (h != 0) {
-            // add delivery callback and expire it after default publifetime
+            // add delivery callback and expire it after max of cState and pub lifetimes
             pubCbs_.addLocal(h, std::move(cb));
-            auto cd = pubLifetime_ < cStateLifetime_ ? cStateLifetime_ : pubLifetime_;
+            auto cd = getLifetime_(pub);
+            if (cd < cStateLifetime_) cd = cStateLifetime_;
             oneTime(cd, [this, h]{ doDeliveryCb(h, false); });
-            // oneTime(pubLifetime_, [this, h]{ doDeliveryCb(h, false); });
         }
         return h;
     }
@@ -544,7 +544,7 @@ struct SyncPS {
      *
      * Creates & sends cState of the form: /<sync-prefix>/<own-IBF>
      */
-    void sendCState() {
+    void sendCState() {  
         // if a cState is sent before the initial register is done the reply can't
         // reach us. don't send now since the register callback will do it.
         if (registering_) return;

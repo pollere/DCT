@@ -177,6 +177,7 @@ struct DistSGKey {
 
         // get our identity thumbprint, check if we're allowed to make keys, check if we
         // are in subscriber group, then set up our public and private signing keys.
+         if (m_certs.Chains().size()==0)  throw runtime_error("dist_sgkey::constructor finds empty identity chain\n");
         m_tp = m_certs.Chains()[0];
         if ( m_sync.collName_.last().toSv() == "msgs") m_msgsdist = true;
         updateSigningKey(m_certs.key(m_tp), m_certs[m_tp]);
@@ -221,6 +222,7 @@ struct DistSGKey {
      */
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
         // check this new key matches 0th signing chain
+        if (m_certs.Chains().size()==0)  throw runtime_error("dist_sgkey::updateSigningKey finds empty identity chain\n");
         m_tp = m_certs.Chains()[0];
         if (m_tp != pubCert.computeTP())
             throw runtime_error("dist_sgkey:updateSigningKey gets new key not at chains[0]");

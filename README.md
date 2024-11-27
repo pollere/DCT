@@ -49,7 +49,9 @@ The included versec compiler is required to compile new schemas but pre-compiled
 
 ### References and related work
 
-DeftT is described in an internet draft: https://datatracker.ietf.org/doc/draft-nichols-iotops-defined-trust-transport/ with overview talk at: https://youtu.be/YSmxis1puuE?t=2170 slides at: http://pollere.net/Pdfdocs/slides-114-iotops-defined-trust-transport-00.pdf
+DeftT is described in: https://pollere.net/Txtdocs/defTrust.html and in an internet draft: https://datatracker.ietf.org/doc/draft-nichols-iotops-defined-trust-transport/ with overview talk at: https://youtu.be/YSmxis1puuE?t=2170 slides at: http://pollere.net/Pdfdocs/slides-114-iotops-defined-trust-transport-00.pdf
+
+A member-only discussion list for Defined-trust Communications and this codebase, deftrust@lists.pollere.net, can be joined via http://lists.pollere.com/listinfo.cgi/deftrust-pollere.net (or email "help" to deftrust-request@lists.pollere.net).
 
 Some concepts here may be better understood by referencing earlier Pollere work: 
 

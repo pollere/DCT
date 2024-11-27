@@ -79,10 +79,6 @@ if [[ $(schema_info -t $Bschema "#msgsValidator") =~ AEADSGN|PPSIGN ]]; then
     DeviceSigner=$KMPCapCert
 fi;
 
-LocRelayCap=locRly.cap
-# make a local multicast relay capability cert (assumes same for both local subnets)
-make_cert -s $CertValidator -o $LocRelayCap $PubPrefix/CAP/RLY/$LLM $RootCert
-
 # make the device identity certs
 for nm in ${device[@]}; do
     make_cert -s $CertValidator -o $nm.cert $PubPrefix/device/$nm $DeviceSigner
@@ -123,6 +119,11 @@ done
 subdom=Loc
 for nm in ${relay[@]}; do
     echo $nm$subdom
+    # make a local multicast relay capability cert
+    LocRelayCap={$nm}locRly.cap
+    make_cert -s $CertValidator -o $LocRelayCap $PubPrefix/CAP/RLY/$LLM $RootCert
+    # change for next pass
+    LLM=ff02::5678
     make_cert -s $CertValidator -o $nm$subdom.cert $PubPrefix/relay/$nm$subdom $LocRelayCap
     make_bundle -v -o $nm$subdom.bundle $RootCert $SchemaCert $LocRelayCap +$nm$subdom.cert
 done
