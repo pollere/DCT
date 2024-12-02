@@ -456,8 +456,8 @@ struct TransportTcp : Transport {
                 if (totlen > len) {
                     // copy down any leftover tlv frag
                     if (len > 0) std::memmove(rbuf_.data(), rbuf_.data() + totlen - len, len);
-                    roff_ = len;
                 }
+                roff_ = len;
                 issueRead();
             });
     }
