@@ -103,6 +103,7 @@ static void msgPubr(mbps &cm) {
     std::string s = dct::format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
+    // if (role == "operator")       while (toSend.size() < 3*cm.maxContent())  toSend.emplace_back(5);
 
     std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
     if(role == "operator") {
@@ -150,10 +151,9 @@ static void msgPubr(mbps &cm) {
  * Could take action(s) based on message content
  */
 
-void msgRecv(mbps &cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
+void msgRecv(mbps &cm, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
-    auto mtm = cm.msgTime(mt);   // can only call once, subsequent calls return current time
-    // auto mtm = mt.time("_ts"); just gets timestamp of last pub received
+    auto mtm = mt.time("_ts"); // gets timestamp of message origination
     auto now = tp2d(std::chrono::system_clock::now());
     auto dt = (now - tp2d(mtm)).count() / 1000.;
     nRcv++;

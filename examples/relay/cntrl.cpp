@@ -68,7 +68,7 @@ static std::chrono::microseconds pubWait = std::chrono::seconds(30);
  * Prints the message content
  */
 
-void rprtRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
+void rprtRecv(mbps&, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();

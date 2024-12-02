@@ -40,7 +40,10 @@
 namespace dct {
 
 // defaults
-static constexpr size_t MAX_SEGS = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
+static constexpr size_t MaxSegs = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
+// adjust these to suit local use case
+static constexpr size_t MaxMsgCache = 5;    // maximum number of incomplete messages to cache before clean up
+static std::chrono::microseconds MaxMsgHold = std::chrono::seconds(1);  // max time to wait for publications of incomplete message
 
 /* 
  * MBPS (message-based publish/subscribe) provides a pub/sub shim
@@ -61,12 +64,11 @@ struct mbpsMsg : mbpsPub {
     using mbpsPub::mbpsPub;
     mbpsMsg(const mbpsPub& p) { *this = reinterpret_cast<const mbpsMsg&>(p); }
     mbpsMsg(mbpsPub&& p) { *this = std::move(reinterpret_cast<mbpsMsg&&>(p)); }
-//    bool dup{0};
 };
 //publication parameter tags and values are passed to mbps in a vector of parItem pairs
 // (defined in library as a string and a value that is a legal parmeter type)
 using msgParms = std::vector<parItem>;
-using msgHndlr = std::function<void(mbps&, const mbpsMsg&, std::vector<uint8_t>&)>;
+using msgHndlr = std::function<void(mbps&, const mbpsMsg&, const std::span<const uint8_t>&)>;
 using connectCb = std::function<void()>;
 using confHndlr = std::function<void(const bool, const uint32_t)>;
 using paceHndlr = std::function<void(mbps&, const bool, const uint32_t)>;
@@ -74,10 +76,16 @@ using paceHndlr = std::function<void(mbps&, const bool, const uint32_t)>;
 using error = std::runtime_error;
 using MsgID = uint32_t;
 using SegCnt = uint16_t;
-using MsgInfo = std::unordered_map<MsgID,std::bitset<64>>;
-using MsgTm = std::unordered_map<MsgID,dct::timeVal>;
+using MsgInfo = std::unordered_map<MsgID,std::bitset<64>>;  // track sent segments for confirm Pub
 using MsgSegs = std::vector<uint8_t>;
-using MsgCache = std::unordered_map<MsgID,MsgSegs>;
+
+struct msgState {
+    std::bitset<64> trackSegs{};  // tracks which segments of the message have been received
+    dct::timeVal tm{};          // used to check for elderly incomplete messages at clean up
+    MsgSegs mesg{};         // reassembly buffer for content from Pubs of this message
+    size_t contentSz{0};    // space for application message bytes in Publications of this message
+    mbpsPub pubInfo{};
+};
 
 struct mbps
 {   
@@ -89,10 +97,7 @@ struct mbps
     std::unordered_map<MsgID, confHndlr> m_msgConfCb;
     paceHndlr m_msgPaceCb;  //assuming pace one message at time
     MsgInfo m_pending{};    // unconfirmed published messages
-    MsgInfo m_received{};   //received publications of a message
-    MsgTm m_msgTm{};     //message originating time
-    MsgCache m_reassemble{}; //reassembly of received message segments
-    std::unordered_map<MsgID,size_t> m_maxContent;  // max number of bytes of application message per Publication for this message
+    std::unordered_map<MsgID, msgState> m_msgs{};
     Timer* m_timer;
     bool m_pacing{false};   //set when pacing out a multi-segment message
 
@@ -187,68 +192,55 @@ struct mbps
      * application, messages can be held by their origin and timestamp until ordering can
      * be determined or an additional sequence number can be introduced.
      */
-     void receivePub(const Publication& pub, const msgHndlr& mh)
-     {      
-        const auto& p = mbpsPub(pub);
+     void receivePub(const mbpsPub& p, const msgHndlr& mh)
+     {
         try {
-        //all the publication name ftags (in order) set by app or mbps
-        SegCnt k = p.number("sCnt"), n = 1u;
-        std::vector<uint8_t> msg{}; //for message body
-        MsgID mId = p.number("msgID");
-        auto content = p.content().rest();
-        if (k == 0) { //single publication in this message
-            if(auto sz = content.size()) msg.assign(content.data(), content.data() + sz);
-            m_msgTm[mId] =  p.time("_ts");   // timestamp is message origination time
-        } else {
-            n = 255 & k;    //bottom byte
-            k >>= 8;
-            if (k > n || k == 0 || n > MAX_SEGS) {
-                print("receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
-                return;
-            }
-            if (m_maxContent.contains(mId)) {
-                if (pubSpace_ - p.name().size() != m_maxContent[mId]) {
+            //all the publication name ftags (in order) set by app or mbps
+            SegCnt k = p.number("sCnt"), n = 1u;
+            if (k == 0) {   //single publication in this message
+                mh(*this, p, p.content().toSpan());   // timestamp is message origination time
+            } else {
+                MsgID mId = p.number("msgID");
+                n = 255 & k;    //bottom byte
+                k >>= 8;
+                if (k > n || k == 0 || n > MaxSegs) {
+                    print("receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
+                    return;
+                }
+                // create or retrieve a message state entry
+                auto& mS = m_msgs[mId];
+                mS.tm = std::chrono::system_clock::now();    // time field to use for clean up
+                if (mS.contentSz == 0) {
+                    mS.contentSz = pubSpace_ - p.name().size();    // max content size for pubs of message mId
+                } else if (pubSpace_ - p.name().size() != mS.contentSz) {
                     dct::print("mbps::receivePub: publication for message {} with name {}\n", mId, p.name());
                     throw error("mbps::receivePub: can't reassemble message as has name size mismatch");
                 }
-            } else m_maxContent[mId] = pubSpace_ - p.name().size();
-            if (k == 1) m_msgTm[mId] =  p.time("_ts");   // first timestamp is message origination time
-            //reassemble message            
-            const auto& m = content;
-            auto& dst = m_reassemble[mId];
-            if (k == n)
-                dst.resize((n-1)*m_maxContent[mId]+m.size());
-            else if (dst.size() == 0)
-                dst.resize(n*pubSpace_);
-            std::copy(m.begin(), m.end(), dst.begin()+(--k)*m_maxContent[mId]);
-            m_received[mId].set(k);
-            if (m_received[mId].count() != n) return; // all segments haven't arrived
-            msg = m_reassemble[mId];
-            m_received.erase(mId);  //delete msg state
-            m_reassemble.erase(mId);
-            m_maxContent.erase(mId);
-        }
 
-        // Complete message received, prepare arguments for msgHndlr callback
-        mh(*this, mbpsMsg(p), msg);
-
+                if (k == 1) mS.pubInfo = p; // make a copy of the first segment of the message so app can extract info
+                //reassemble message
+                const auto& c =  p.content().rest();
+                auto& dst = mS.mesg;
+                if (k == n)
+                    dst.resize((n-1)*mS.contentSz+c.size());
+                else if (dst.size() == 0)   // first segment of message, unallocated mesg buffer
+                    dst.resize(n*pubSpace_);
+                std::copy(c.begin(), c.end(), dst.begin()+(--k)*mS.contentSz);
+                (mS.trackSegs).set(k);
+                if (mS.trackSegs.count() == n) { // all segments have been receive, message is complete
+                    mh(*this, mS.pubInfo, mS.mesg); // msgHndlr callback
+                    m_msgs.erase(mId);  //delete msg state
+                }
+            }
         } catch (const std::exception& e) {
             std::cerr << "mbps::receivePub: " << e.what() << std::endl;
             exit(1);
         }
-    }
 
-    // sort of hack so applications can get originating message time
-    dct::timeVal msgTime(const mbpsMsg& p) {
-        try {
-            auto m = p.number("msgID");
-            if (!m_msgTm.contains(m)) return std::chrono::system_clock::now();
-            auto t = m_msgTm[m];
-            m_msgTm.erase(m);
-            return t;
-        } catch (const std::exception& e) {
-            std::cerr << "mbps::msgTime: " << e.what() << std::endl;
-            return std::chrono::system_clock::now();
+        // clean up state of incomplete messages when m_msgs cache exceeds threshold (for test on every pass, set threshold=0)
+        if (m_msgs.size() >= MaxMsgCache) {
+            auto expireTm = std::chrono::system_clock::now() - MaxMsgHold;
+            std::erase_if(m_msgs, [expireTm](auto& kv) { return kv.second.tm < expireTm; });
         }
     }
 
@@ -372,7 +364,7 @@ struct mbps
 
         // determine number of message segments to carry msg: sCnt forces n < 256,
         n = (size + (contentSp - 1)) / contentSp;
-        if(n > MAX_SEGS) throw error("publishMsg: message too large");
+        if(n > MaxSegs) throw error("publishMsg: message too large");
         auto sCnt = n > 1? n + 256 : 0;
         mp.back().second = sCnt;    //sCnt is last argument on the list
 
@@ -408,13 +400,13 @@ struct mbps
      */
     bool pacing() { return m_pacing; }
 
-    void doSegment(uint32_t sC, uint32_t mid, std::chrono::milliseconds paceTm,
+    void doSegment(uint32_t sC, uint32_t mId, std::chrono::milliseconds paceTm,
             std::vector< uint8_t>&& msg, const bool hasCH )
     {
         size_t k = sC >> 8; 
-        auto off = k>0? (k-1)*m_maxContent[mid] : 0;
+        auto off = k>0? (k-1)*m_msgs[mId].contentSz : 0;
         auto size = msg.size();
-        auto len = std::min(size - off, m_maxContent[mid]);
+        auto len = std::min(size - off, m_msgs[mId].contentSz);
         // try...catch for errors in building the pub
         try {
             doPublish(m_pb.pub(std::span(msg).subspan(off, len), "sCnt", sC), hasCH);
@@ -423,14 +415,14 @@ struct mbps
             return;
         }
 
-        if(off + m_maxContent[mid] >= size) {
+        if(off + m_msgs[mId].contentSz >= size) {
             // no more content to send - but wait pace time for this final segment
-            oneTime(paceTm, [this,mid] { m_pacing = false; m_msgPaceCb(*this, true, mid); });
+            oneTime(paceTm, [this,mId] { m_pacing = false; m_msgPaceCb(*this, true, mId); });
             return;
         }
         sC += 256;
-        oneTime(paceTm, [this,sC,mid,paceTm,msg=std::move(msg),hasCH]() mutable {
-                doSegment(sC, mid, paceTm, std::move(msg), hasCH); });
+        oneTime(paceTm, [this,sC,mId,paceTm,msg=std::move(msg),hasCH]() mutable {
+                doSegment(sC, mId, paceTm, std::move(msg), hasCH); });
     }
 
     MsgID publishPaced(std::chrono::milliseconds paceTm, const paceHndlr&& paceCb, msgParms&& mp,
@@ -453,7 +445,7 @@ struct mbps
         crypto_generichash(h.data(), h.size(), emsg.data(), emsg.size(), NULL, 0);
         uint32_t mId = h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24;
         mp.emplace_back("msgID", mId);
-        if (m_maxContent.contains(mId)) throw error("mbps::publishPaced: duplicate message id");
+        if (m_msgs.contains(mId)) throw error("mbps::publishPaced: duplicate message id");
 
         // mp now contains all the parameters that don't change per-segment so make them defaults
         m_pb.defaults(mp);
@@ -462,15 +454,15 @@ struct mbps
 
         // determine max content for publications of this message
         mp.emplace_back("sCnt", 0u); // just to get a name size for this message
-       m_maxContent[mId] = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
-        if (m_maxContent[mId] < 10) {
-            dct::print("mbps::publish Publication name only leaves {} bytes for content\n", m_maxContent[mId]);
+       m_msgs[mId].contentSz = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
+        if (m_msgs[mId].contentSz < 10) {
+            dct::print("mbps::publish Publication name only leaves {} bytes for content\n", m_msgs[mId].contentSz);
             return 0;
         }
 
         // determine number of message segments to carry msg: sCnt forces n < 256,
-        size_t n = (size + (m_maxContent[mId] - 1)) / m_maxContent[mId];
-        if(n > MAX_SEGS) throw error("publishMsg: message too large");
+        size_t n = (size + (m_msgs[mId].contentSz - 1)) / m_msgs[mId].contentSz;
+        if(n > MaxSegs) throw error("publishMsg: message too large");
         auto sCnt = n > 1? n + 256 : 0;
 
         // try...catch for errors in building the pub

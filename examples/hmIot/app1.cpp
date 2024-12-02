@@ -124,10 +124,9 @@ static void msgPubr(mbps &cm) {
  * May take action(s) based on message content
  */
 
-void msgRecv(mbps& cm, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
+void msgRecv(mbps&, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
-    auto mtm = cm.msgTime(mt);   // can only call once, subsequent calls return current time
-    // auto ptm = mt.time("_ts"); just gets timestamp of last pub received
+    auto mtm = mt.time("_ts"); // gets timestamp of message origination
     auto now = tp2d(std::chrono::system_clock::now());
     auto dt = (now - tp2d(mtm)).count() / 1000.;
 

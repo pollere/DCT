@@ -60,11 +60,11 @@ static std::string room{};          // this instance's roomId (same as id for a 
  * when subscribing through the mbps, hence must be a
  * Does not use the message body
  */
-void cmdRecv(mbps &cm, const mbpsMsg& msg, std::vector<uint8_t>&)
+void cmdRecv(mbps &cm, const mbpsMsg& msg, const std::span<const uint8_t>&)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - cm.msgTime(msg)).count() / 1000.;
+    auto dt = ticks(now - msg.time("_ts")).count() / 1000.;
     const auto& f = msg["func"];
     const auto& a = msg["args"];
 

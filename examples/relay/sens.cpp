@@ -90,7 +90,7 @@ static void sensRprtr(mbps &cm) {
  * Could take action(s) based on message content
  */
 
-void cmdRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
+void cmdRecv(mbps&, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();

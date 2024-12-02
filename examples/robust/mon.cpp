@@ -71,7 +71,7 @@ static int Cnt = 0;
  * Could take action(s) based on message content
  */
 
-void locRecv(mbps&, const mbpsMsg& mt, std::vector<uint8_t>& msgPayload)
+void locRecv(mbps&, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
     auto now = std::chrono::system_clock::now();
