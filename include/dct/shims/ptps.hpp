@@ -27,7 +27,6 @@
 #include <algorithm>
 #include <bitset>
 #include <functional>
-#include <getopt.h>
 #include <iostream>
 #include <random>
 #include <stdexcept>
