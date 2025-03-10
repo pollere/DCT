@@ -29,6 +29,7 @@
 #include <utility>
 #include <vector>
 #include "dct/format.hpp"
+#include "dct/tdv_clock.hpp"
 #include "tlv.hpp"
 
 namespace dct {
@@ -229,7 +230,7 @@ struct tlvParser {
 
     // convert encoded integer to a microsecond timestamp
     auto bsToTS(auto l, auto o) const noexcept {
-        return std::chrono::system_clock::time_point(std::chrono::microseconds(bsToUInt(l, o)));
+        return tdv_clock::time_point(std::chrono::microseconds(bsToUInt(l, o)));
     }
 
     // return contents of a 1 byte tlv block

@@ -124,11 +124,11 @@ static void msgPubr(mbps &cm) {
  * May take action(s) based on message content
  */
 
-void msgRecv(mbps&, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
+void msgRecv(mbps &cm, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
     auto mtm = mt.time("_ts"); // gets timestamp of message origination
+    auto dt = (tp2d(cm.tdvcNow()) - tp2d(mtm)).count() / 1000.;
     auto now = tp2d(std::chrono::system_clock::now());
-    auto dt = (now - tp2d(mtm)).count() / 1000.;
 
     dct::print("{:%M:%S} {}:{}-{} rcvd ({:.3}ms transit): {} {}: {} {} | {}\n",
             now, role, myId, myPID, dt, mt["target"], mt["topic"], mt["trgtLoc"], mt["topicArgs"],

@@ -26,7 +26,24 @@
 #include <functional>
 #include <memory>
 
+#if 1
+// As of Dec 2022, get spurious warnings when include boost asio
+// because sprintf is deprecated (on mac os xcode 12+).
+// Theses pragmas are to prevent the warning from this.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
+// XXX boost bug workaround: this should be defined for any c++17 or beyond compiler and is
+// *required* for c++20 or beyond since std::result_of is gone.
+// Broken in boost 1.77 and earlier
+#if BOOST_ASIO_VERSION<102200
+#define BOOST_ASIO_HAS_STD_INVOKE_RESULT 1
+#endif
 #include <boost/asio.hpp>
+#pragma GCC diagnostic pop
+#else
+#include <boost/asio.hpp>
+#endif
 
 #include <dct/schema/rpacket.hpp>
 

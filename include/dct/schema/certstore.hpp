@@ -61,6 +61,9 @@ struct certStore {
     auto begin() const { return certs_.cbegin(); }
     auto end() const { return certs_.cend(); }
 
+    // certs are evaluated against the system clock. In case of a large tdvcAdjust value,
+    // may want to allow for grace period. However, normally expect members to take
+    // that into account when computing certOverlap for making new signing pairs
     auto removeExpired() {  // remove expired certs
         std::erase_if(certs_, [this,now = std::chrono::system_clock::now()](const auto& i) {
                 if (rCert(i.second).validUntil() > now) return false;

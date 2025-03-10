@@ -202,8 +202,8 @@ static void msgPubr(mbps &cm) {
 void msgRecv(mbps &cm, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
     auto mtm = mt.time("_ts");
+    auto dt = (tp2d(cm.tdvcNow()) - tp2d(mtm)).count() / 1000.;
     auto now = tp2d(std::chrono::system_clock::now());
-    auto dt = (now - tp2d(mtm)).count() / 1000.;
     nRcv++;
 
     // actions can be conditional upon msgArgs and msgPayload

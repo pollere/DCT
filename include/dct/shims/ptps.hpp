@@ -99,6 +99,13 @@ struct DCTmodelPT final : DCTmodel  {
         return false;
     }
 
+    // domain virtual clock methods
+    void setRlyCbVC(std::function<void(dct::thumbPrint, int64_t, size_t, size_t, tdv_clock::duration)> rcb) { if (m_vcd) m_vcd->setRelayCb(rcb); }
+    void setSetSzVC(size_t s) { if (m_vcd) m_vcd->m_set = s; }
+    void vcRound(uint8_t s, std::chrono::microseconds a, size_t n) { if(m_vcd) m_vcd->publishRound(s,a,n);}
+    void calibrateVC() { if (m_vcd) m_vcd->calibrateClock(); }
+    void finishCalibrateVC( std::chrono::microseconds adj, uint8_t n) { if (m_vcd) m_vcd->finishCalibration(adj, n); }
+
     // checks if capability c is present and, if so, returns its argument (as a stringview)
     auto capArgument(std::string_view c) {
         const auto& tp = cs_.Chains()[0];  // thumbprint of newest signing cert
@@ -147,7 +154,6 @@ struct ptps
     connectCb m_connectCb;
     DCTmodelPT m_pb;
     crName m_pubpre{};     // full prefix for Publications
-    Timer* m_timer;
     chnCb m_chCb;             // call back to app when this DefTT's cert distributor gets a fully validated signing cert that arrived from its syncps
     pubCb m_gkCb;            // call back for Publication group key distributor pubs
     pubCb m_failCb;           // call back to app when publication fails if confirmation was requested on publication
@@ -168,6 +174,24 @@ struct ptps
     void endKeysBatch(size_t n) { m_pb.keysColl()->batchDone(n); }
      auto keysBatching() { return m_pb.keysColl()->batching_; }
      static constexpr std::chrono::microseconds m_batchDly = 1ms;   // amount of time relayed Pubs can accumulate
+
+     // virtual clock
+     pTimer m_tdvcTimer{std::make_shared<Timer>(getDefaultIoContext())};
+     bool haveVC() { return m_pb.m_virtClk; }
+     void setupVC(size_t s, std::function<void(dct::thumbPrint, int64_t, size_t, size_t, tdv_clock::duration)> rcb) {
+         m_pb.setSetSzVC(s);
+         m_pb.setRlyCbVC(std::move(rcb));
+     }
+    void calibrate() { m_pb.calibrateVC(); }
+    void finishCalibrate( std::chrono::microseconds adj, uint8_t n) { m_pb.finishCalibrateVC(adj, n); }
+    auto tdvcAdjust() const noexcept { return m_pb.face_.tdvcAdjust(); }
+    dct::tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur, int8_t n) noexcept
+    {
+        if (m_pb.m_vcd) m_pb.m_vcd->m_nbrs = n;
+        return m_pb.face_.tdvcAdjust(dur);
+    }
+    auto VCisStarted() { if(m_pb.m_vcd) return m_pb.m_vcd->isStarted(); return false; }
+    void vcRound(size_t r, std::chrono::microseconds a, uint8_t n) { m_pb.vcRound(r, a, n); }
 
     ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
              std::string_view addrLoc, const chnCb& certHndlr = {}, const pubCb& distCb = {}, const pubCb& failCb={}) :

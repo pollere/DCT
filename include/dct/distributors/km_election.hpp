@@ -81,7 +81,7 @@ struct kmElection {
 
     // build and publish a key maker ('km') publication
     void publishKM(const char* topic) {
-        crData p(prefix_ / topic / epoch_ / std::chrono::system_clock::now());
+        crData p(prefix_ / topic / epoch_ / sync_.tdvcNow());
         p.content(std::vector<uint8_t>{});
         sync_.signThenPublish(std::move(p));
     }

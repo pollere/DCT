@@ -120,7 +120,7 @@ subdom=Loc
 for nm in ${relay[@]}; do
     echo $nm$subdom
     # make a local multicast relay capability cert
-    LocRelayCap={$nm}locRly.cap
+    LocRelayCap=locRly$nm.cap
     make_cert -s $CertValidator -o $LocRelayCap $PubPrefix/CAP/RLY/$LLM $RootCert
     # change for next pass
     LLM=ff02::5678

@@ -141,6 +141,7 @@ static inline certItem currentSigningPair(int i=0) {
 // since changing signing chain requires a new DeftT
 // In setting the validity start period for a future time, make sure you know what you are doing
 // To handle clock skew, certOverlap is set to at least twice the worst clock skew
+// With tdvc use, can incorporate tdvcAdjust value into certOverlap if needed)
 
 static inline certItem getSigningPair( int i=0) {
     if(std::cmp_greater(idChain.size(), i)) {   //must be an identity chain for i

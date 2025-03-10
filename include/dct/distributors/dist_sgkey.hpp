@@ -108,10 +108,10 @@ struct DistSGKey {
     std::unordered_map<thumbPrint,thumbPrint> m_mbrIds{};
     std::unordered_map<thumbPrint,std::chrono::system_clock::time_point> m_mrSent;
 
-    std::chrono::milliseconds m_reKeyInt{3600s};
-    std::chrono::milliseconds m_keyRand{10s};
-    std::chrono::milliseconds m_keyLifetime{3600s+10s};
-    std::chrono::milliseconds m_mrLifetime{5s}; // set to ~ a few disperson delays
+    tdv_clock::duration m_reKeyInt{3600s};
+    tdv_clock::duration m_keyRand{10s};
+    tdv_clock::duration m_keyLifetime{3600s+10s};
+    tdv_clock::duration m_mrLifetime{5s}; // set to ~ a few disperson delays
     kmElection* m_kme{};
     uint32_t m_KMepoch{};      // current election epoch
     bool m_keyMaker{false};     // true if this entity is a key maker
@@ -135,9 +135,9 @@ struct DistSGKey {
     }
 
     DistSGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& sgkeyCb, const certStore& cs,
-             std::chrono::milliseconds reKeyInterval = std::chrono::seconds(3600),
-             std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
-             std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
+             tdv_clock::duration reKeyInterval = 3600s,
+             tdv_clock::duration reKeyRandomize = 10s,
+             tdv_clock::duration expirationGB = 60s) :
              m_prefix{pPre}, m_krPrefix{pPre/"kr"}, m_mrPrefix{pPre/"mr"}, m_keyColl{dPre.last().toSv()},
              m_sync(face, dPre, m_keySM.ref(), m_keySM.ref()),
              m_certs{cs}, m_newKeyCb{std::move(sgkeyCb)}, //called when a (new) group key arrives or is created      
@@ -153,10 +153,10 @@ struct DistSGKey {
         print ("DistSGKey: maxContent is {} max num key records is {}\n", m_maxContent, m_maxKR);
         // if the syncps set its cStateLifetime longer, means we are on a low rate network
         if (m_sync.cStateLifetime_ < 5233ms) m_sync.cStateLifetime(5233ms);
-        m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
-        m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),elec=crPrefix(m_prefix/"km"/"elec"),mreq=crPrefix(m_mrPrefix)](const auto& p) ->std::chrono::milliseconds {
+        m_sync.pubLifetime(tdv_clock::duration(reKeyInterval + reKeyRandomize + expirationGB));
+        m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),elec=crPrefix(m_prefix/"km"/"elec"),mreq=crPrefix(m_mrPrefix)](const auto& p) ->tdv_clock::duration {
               if (mreq.isPrefix(p.name())) return m_mrLifetime;
-              if (cand.isPrefix(p.name()) || elec.isPrefix(p.name())) return 3000ms;
+              if (cand.isPrefix(p.name()) || elec.isPrefix(p.name())) return 3s;
               // if the Publication's signer is the keymaker, its assertion kr and km/elec should persist until there's a new epoch
               // expire normal kr lists with same lifetime as membership requests
               const auto& tp = p.signer();    // get thumbprint of this Pub's signer
@@ -193,7 +193,7 @@ struct DistSGKey {
         if (m_msgsdist && isRelay(m_tp))  return;   // relays don't get pub encryption keys
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it
         if(!m_subr) return;     // don't have permission to be a member
-        crData p(m_mrPrefix/std::chrono::system_clock::now());
+        crData p(m_mrPrefix/m_sync.tdvcNow());
         p.content(std::vector<uint8_t>{});
         m_mrPending = true;
         try {
@@ -538,10 +538,12 @@ struct DistSGKey {
         m_sgSK.resize(kxskKeySz);
         crypto_kx_keypair(m_sgPK.data(), m_sgSK.data());    //X25519
         //set the creation time
+        auto vNow = m_sync.tdvcNow();
         m_curKeyCT = std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
+                        vNow.time_since_epoch()).count();
 
         // remove expired (not valid) certs (thumbprints) from memberList
+        // may need to address time differences in wildly unsynced domains
         auto now = std::chrono::system_clock::now();
         std::erase_if(m_mbrList, [this,now](auto& kv) { return m_certs.contains(kv.first)? rCert(m_certs[kv.first]).validUntil() < now : true; });
 
@@ -550,7 +552,7 @@ struct DistSGKey {
         tlvEncoder sgkp{};    //tlv encoded content
         sgkp.addNumber(36, m_curKeyCT);
         sgkp.addArray(130, std::vector<egkr>{});
-        publishKeyRange(m_tp, m_tp, now, sgkp.vec(), m_init);   // use own tp in range
+        publishKeyRange(m_tp, m_tp, vNow, sgkp.vec(), m_init);   // use own tp in range
 
         //encrypt the new secret key for all the subscriber group members
         std::vector<egkr> pubPairs;
@@ -574,7 +576,7 @@ struct DistSGKey {
             sgkp.addArray(150, m_sgPK);
             it = sgkp.addArray(130, it, r);
             auto l = i*m_maxKR;
-            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, now, sgkp.vec());
+            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, vNow, sgkp.vec());
             s -= r;
         }
         m_sync.batchDone(pcnt);
@@ -653,7 +655,7 @@ struct DistSGKey {
         sgkp.addNumber(36, m_curKeyCT);
         sgkp.addArray(150, m_sgPK);
         sgkp.addArray(130, ekp);
-        publishKeyRange(tp, tp, std::chrono::system_clock::now(), sgkp.vec());
+        publishKeyRange(tp, tp, m_sync.tdvcNow(), sgkp.vec());
 
         if (m_init) initDone();    // Have a keyMaker, a group key, and at least one member: exit init state
     }

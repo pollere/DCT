@@ -1,0 +1,66 @@
+#! /bin/sh
+# tdvcgraf [file] - convert dctwatch output to a tdvc behavior graf
+true + /; exec -a "$0" gawk -f "$0" -- "$@"; / {}
+function ts(timestr, t, n, tim) {
+    if (timestr ~ /@/) {
+        # remove leading date component
+        n = split(timestr, t, "@")
+        timestr = t[n]
+    }
+    split(timestr,t,":")
+    tim = t[1]*3600 + t[2]*60 + t[3]
+    if (firstTS == 0) firstTS = tim
+    else if (tim-firstTS < -82800) tim += 86400
+    return tim
+}
+BEGIN {
+    firstTS = 0
+    doAll = 0
+    p2rid[0] = "bug"
+    for (i = 1; i < ARGC && ARGV[i] ~ /^-/; ++i) {
+        switch (ARGV[i]) {
+            case "-a": doAll = 1; break;
+            default: ptyp[substr(ARGV[i],2)] = substr(ARGV[i],2); break;
+        }
+        ARGV[i] = ""
+    }
+    inTdvcAdd = 0
+}
+/^[0-9][0-9].* Ad /  {
+    if ($0 !~ /\/tdvc\//) {
+        inTdvcAdd = 0
+        next
+    }
+    # Have a cAdd into the tdvc collection. Save the time it was
+    # captured as a time reference for this data point..
+    # The next line should start with a | and be the pub name
+    # added to the collection. Extract its roleId and timestamp.
+    inTdvcAdd = 1
+    tim = ts($1)
+    port = $4
+}
+inTdvcAdd && /^ \| / {
+    nf = split($0, t, "/")
+    if (t[3] != "cal") {
+        if (doAll && !(t[3] in ptyp)) ptyp[t[3]] = t[3]
+        if (!(t[3] in ptyp) || !(port in p2rid)) next
+        roleId = p2rid[port] "-" t[3]
+    } else {
+        roleId = t[5]
+        p2rid[port] = roleId
+    }
+    tdvts = ts(t[nf])
+    clkup[roleId][tim] = tdvts
+}
+END {
+    for (rid in clkup) {
+        # give graf the label for this data set then sort
+        # its data points into timestamp order
+        printf("\n# %s\n", rid)
+        asorti(clkup[rid], rsamp, "@ind_num_asc")
+        for (i = 1; i <= length(rsamp); ++i) {
+            tm = rsamp[i]
+            printf("%.6f %.6f #%s\n", tm, clkup[rid][tm] - tm, rid)
+        }
+    }
+}

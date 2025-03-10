@@ -60,6 +60,9 @@ static std::chrono::microseconds pubWait = std::chrono::seconds(45);
 static int Cnt = 0;
 static int nMsgs = 5;
 
+using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
+
 /*
  * reports environmental information periodically
  */
@@ -90,15 +93,14 @@ static void sensRprtr(mbps &cm) {
  * Could take action(s) based on message content
  */
 
-void cmdRecv(mbps&, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
-{
-    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-    auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - mt.time("_ts")).count() / 1000.;
+void cmdRecv(mbps& cm, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
+{    
+    auto mtm = mt.time("_ts"); // gets timestamp of message origination
+    auto dt = (tp2d(cm.tdvcNow()) - tp2d(mtm)).count() / 1000.;
+    auto now = tp2d(std::chrono::system_clock::now());
 
     dct::print("{:%M:%S} {} rcvd ({:.3} mS transit): {} {}: {} | {}\n",
-            ticks(now.time_since_epoch()), fullId, dt, mt["target"],
-                mt["topic"], mt["args"],
+           now, fullId, dt, mt["target"], mt["topic"], mt["args"],
                 std::string(msgPayload.begin(), msgPayload.end()));
 
     // further action can be conditional upon msgArgs and msgPayload

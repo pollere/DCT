@@ -168,11 +168,7 @@ template<> struct dct::formatter<dct::rPrefix> {
             auto s = blk.rest();
             if (blk.isType(dct::tlv::Timestamp)) {
                 auto ts = blk.toTimestamp();
-                if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
-                    out = dct::format_to(out, "/@{:%T}", ts);
-                } else {
-                    out = dct::format_to(out, "/{:%g-%m-%d@%T}", ts);
-                }
+                out = dct::format_to(out, "/{:%g-%m-%d@%T}", ts);
             } else if (np(s)) {
                 // if there are any non-printing characters, format as hex. Otherwise format as a string.
                 //XXX look for 'tagged' timestamps (should change to TLV and get rid of this)
@@ -181,12 +177,8 @@ template<> struct dct::formatter<dct::rPrefix> {
                 } else if (s.size() == 9 && s[0] == 0xfc && s[1] == 0) {
                     auto us = ((uint64_t)s[2] << 48) | ((uint64_t)s[3] << 40) | ((uint64_t)s[4] << 32) |
                               ((uint64_t)s[5] << 24) | ((uint64_t)s[6] << 16) | ((uint64_t)s[7] << 8) | s[8];
-                    auto ts = std::chrono::system_clock::time_point(std::chrono::microseconds(us));
-                    if (std::chrono::system_clock::now() - ts < std::chrono::hours(12)) {
-                        out = dct::format_to(out, "/@{:%T}", ts);
-                    } else {
-                        out = dct::format_to(out, "/{:%g-%m-%d@%T}", ts);
-                    }
+                    auto ts = dct::tdv_clock::time_point(std::chrono::microseconds(us));
+                    out = dct::format_to(out, "/{:%g-%m-%d@%T}", ts);
                 } else {
                     out = dct::format_to(out, "/^{:02x}", fmt::join(s, ""));
                 }

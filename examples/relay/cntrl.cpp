@@ -61,6 +61,9 @@ static int Cnt = 0;
 static int Cmd = 0;
 static std::chrono::microseconds pubWait = std::chrono::seconds(30);
 
+using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
+
 /*
  * rprtRecv handles a message received in subscription.
  * Used as callback passed to subscribe()
@@ -68,13 +71,13 @@ static std::chrono::microseconds pubWait = std::chrono::seconds(30);
  * Prints the message content
  */
 
-void rprtRecv(mbps&, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
+void rprtRecv(mbps& cm, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
-    using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
-    auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - mt.time("_ts")).count() / 1000.;
+    auto mtm = mt.time("_ts"); // gets timestamp of message origination
+    auto dt = (tp2d(cm.tdvcNow()) - tp2d(mtm)).count() / 1000.;
+    auto now = tp2d(std::chrono::system_clock::now());
     dct::print("{:%M:%S} {}:{} rcvd ({:.3} mS transit): {} {} \n\t{}\n",
-            ticks(now.time_since_epoch()), role, myId, dt, mt["topic"],
+            now, role, myId, dt, mt["topic"],
                 mt["args"], std::string(msgPayload.begin(), msgPayload.end()));
     Cnt++;
 }

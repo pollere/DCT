@@ -30,7 +30,7 @@ This repository is organized into directories:
   - face: interface between syncps and the system-provided packet transport
   - schema: the run-time library that makes use of the binary schema
   - sigmgrs: supplies a range of signing and validation methods
-  - distributors: distribute certs and group keys and manage the associated collections
+  - distributors: distribute certs, keys, virtual clock and manage the associated collections
   - shims: library APIs for DeftT - mbps (message-based pub/sub) and ptps (pass-through pub/sub for relays)
 
 - examples: this directory contains illustrative examples

@@ -63,8 +63,8 @@ static std::string room{};          // this instance's roomId (same as id for a 
 void cmdRecv(mbps &cm, const mbpsMsg& msg, const std::span<const uint8_t>&)
 {
     using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+    auto dt = ticks(cm.tdvcNow() - msg.time("_ts")).count() / 1000.;
     auto now = std::chrono::system_clock::now();
-    auto dt = ticks(now - msg.time("_ts")).count() / 1000.;
     const auto& f = msg["func"];
     const auto& a = msg["args"];
 

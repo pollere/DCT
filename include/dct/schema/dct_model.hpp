@@ -38,6 +38,7 @@
 #include "validate_bootstrap.hpp"
 #include "validate_pub.hpp"
 #include "dct/distributors/dist_cert.hpp"
+#include "dct/distributors/dist_tdvc.hpp"
 #include "dct/distributors/dist_gkey.hpp"
 #include "dct/distributors/dist_sgkey.hpp"
 
@@ -60,11 +61,20 @@ struct DCTmodel {
     SyncPS m_sync;  // sync collection for msgs
     static inline std::function<size_t(std::string_view)> _s2i;
     DistCert m_ckd;         // cert collection distributor
+    DistTDVC* m_vcd{};     // virtual clock distributor
     DistGKey* m_gkd{};      // group key distributor (if needed)
     DistSGKey* m_sgkd{};    // subscriber group key distributor (if needed)
     DistGKey* m_pgkd{};      // msgs group key distributor (if needed)
     DistSGKey* m_psgkd{};    // msgs subscriber group key distributor (if needed)
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
+    bool m_virtClk{false};     // true if using trust domain virtual clock distributor
+
+    // Trust Domain Virtual Clock access is via face (many things need its 'now()' method)
+    auto tdvcNow() const noexcept { return face_.tdvcNow(); }
+    auto tdvcAdjust() const noexcept { return face_.tdvcAdjust(); }
+    tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur) noexcept { return face_.tdvcAdjust(dur); }
+    void tdvcReset() noexcept { return face_.tdvcReset(); }
+    auto tdvcToSys(tdv_clock::time_point tp) const noexcept { return face_.tdvcToSys(tp); }
 
     SigMgr& pduSigMgr() { return psm_.ref(); }
     SigMgr& msgSigMgr() { return msm_.ref(); }  // sigmgr for publications that carry application msgs
@@ -97,7 +107,7 @@ struct DCTmodel {
         // certstore with its signing chain 0 set to 'tp'.
         certStore cs = cs_;
         cs.chains_[0] = tp;
-        pubBldr bld(bs_, cs, bs_.pubName(0));
+        pubBldr bld(bs_, cs, face_.tdvclk_, bs_.pubName(0));
         pv_.emplace(tp, pubValidator(std::move(bld.pt_), std::move(bld.ptm_),
                                      std::move(bld.ptok_), std::move(bld.pstab_)));
     }
@@ -186,10 +196,16 @@ struct DCTmodel {
         m_sync.oneTime(std::chrono::duration_cast<std::chrono::microseconds>(delay), std::move(cb));
     }
 
-    // called to get a new signing pair
-    // new SPs are shipped certOverlap/2 after they become valid and are valid for certOverlap in addition to the certLifetime
-    // Handles adding the new cert to cs_, publishing it, and making it the new signing key  and informing the group key distributors, if any
-    // Waits for a publication confirmation before making this pair the new signing pair and calling the group key distributors
+    /*
+     *  called to get a new signing pair
+     *  new SPs are shipped certOverlap/2 after they become valid and are valid for certOverlap in addition to the certLifetime
+     * Handles adding the new cert to cs_, publishing it, and making it the new signing key  and informing the group key distributors, if any
+     * Waits for a publication confirmation before making this pair the new signing pair and calling the group key distributors
+     *
+     * Configured certs should be made on devices with calibrated clocks; assuming system clock for signing certs
+     * If tdvcAdjust() is on the order of certOverlap or larger, may need to adjust certOverlap or pass tdvc to the spCb()
+     * and use tdvc in expire checks
+    */
     void getNewSP(const pairCb& spCb) {
         auto sp = spCb();       //new signing key pair callback
         auto sc = sp.first;     // public cert of pair
@@ -212,6 +228,7 @@ struct DCTmodel {
                 // pass new signing pair to sigmgrs and distributors
                 msgSigMgr().updateSigningKey(sp.second, sc);
                 pduSigMgr().updateSigningKey(sp.second, sc);
+                if (m_virtClk) m_vcd->updateSigningKey(sp.second, sc);
                 // update group key distributors for cAdds, if any
                 if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
                 else if (m_sgkd) m_sgkd->updateSigningKey(sp.second, sc);
@@ -237,17 +254,19 @@ struct DCTmodel {
     DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, strCb addrCb) :
             bs_{validateBootstrap(rootCb, schemaCb, idChainCb, signIdCb, cs_)},
             face_{addrCb()},
-            bld_{pubBldr(bs_, cs_, bs_.pubName(0))},
+            bld_{pubBldr(bs_, cs_, face_.tdvclk_, bs_.pubName(0))},
             msm_{getSigMgr(bs_)},
             csm_{getCertSigMgr(bs_)},
             psm_{getPduSigMgr(bs_)},
             syncSm_{msm_.ref(), bs_, pv_},
             m_sync{face_, pduPrefix()/"msgs", pduSigMgr(), syncSm_},
-            m_ckd{ face_, pubPrefix(), pduPrefix()/"cert",
-                   [this](auto cert){ addCert(cert);},  [](auto /*p*/){return false;} }
+            m_ckd{face_, pubPrefix(), pduPrefix()/"cert", [this](auto cert){ addCert(cert);}}
     {
         // sync session for msgs pubs is started after distributor(s) have completed their setup
         m_sync.autoStart(false);
+        // check for using trust domain virtual clock
+        if (m_virtClk)
+            m_vcd = new DistTDVC(face_, pubPrefix(), pduPrefix()/"tdvc", certs());
         if(psm_.ref().encryptsContent()) {
             if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                 throw schema_error("Encrypted CAdds require that some entity(s) have KeyMaker capability");
@@ -377,7 +396,11 @@ struct DCTmodel {
         auto pdu_dist = m_gkd == NULL? m_sgkd != NULL :  true;
         auto pub_dist = m_pgkd == NULL ? m_psgkd != NULL :  true;
         if (!pdu_dist && !pub_dist) {
-            m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+        //m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+                    if (!c) { cb(false); return; }
+                    if (m_virtClk) m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                });
             return;
         }
 
@@ -385,26 +408,68 @@ struct DCTmodel {
         if ( pdu_dist && !pub_dist ) {
             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                         if (!c) { cb(false); return; }
-                        if (m_gkd) {
-                            m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                        } else { // must be m_sgkd
-                            m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                        if (m_virtClk) {
+                             m_vcd->setup([this,cb=std::move(cb)](bool c){
+                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
+                                if (m_gkd)
+                                    m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                else    // must be m_psgkd
+                                    m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           });
+                        } else {    //no tdvc distributor
+                            if (m_gkd) {
+                                m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                            } else { // must be m_sgkd
+                                m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                            }
                         }
                     });
             return;
         } else  if ( !pdu_dist && pub_dist) {
              m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                         if (!c) { cb(false); return; }
-                        if (m_pgkd) {
-                            m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                        } else { // must be m_psgkd
-                            m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                        if (m_virtClk) {
+                            m_vcd->setup([this,cb=std::move(cb)](bool c){
+                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
+                                if (m_pgkd)
+                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                else    // must be m_psgkd
+                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           });
+                        } else {    //no tdvc distributor
+                            if (m_pgkd) {
+                                m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                            } else { // must be m_psgkd
+                                m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                            }
                         }
                     });
             return;
         } else {    //both pdus and msgs have a distributor
            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
-                        if (!c) { cb(false); return; }
+                    if (!c) { cb(false); return; }
+                    if (m_virtClk) {
+                        m_vcd->setup([this,cb=std::move(cb)](bool c){
+                         if (!c) { cb(false); return; }  // check if gk distributor returns false
+                            if (m_gkd) {
+                            m_gkd->setup([this,cb=std::move(cb)](bool c){
+                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
+                                if (m_pgkd)
+                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                else    // must be m_psgkd
+                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           });
+                        } else { // must be m_sgkd
+                           m_sgkd->setup([this,cb=std::move(cb)](bool c){
+                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
+                                if (m_pgkd)
+                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                else    // must be m_psgkd
+                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           });
+                        }
+                      });
+                    } else {
                         if (m_gkd) {
                             m_gkd->setup([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false
@@ -422,7 +487,8 @@ struct DCTmodel {
                                     m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                            });
                         }
-                    });
+                    }
+                });
         }
     }
 
@@ -442,13 +508,11 @@ struct DCTmodel {
     // #pubPrefix or #chainInfo. If used on a pub that requires parameters it
     // will throw an error.
     auto pubVal(std::string_view pubnm) const {
-        auto cs{cs_};
-        pubBldr<false> bld{bs_, cs, pubnm};
+        pubBldr<false> bld(bs_, cs_, face_.tdvclk_, pubnm);
         return bld.name();
     }
     auto pubVal(std::string_view pubnm, std::string_view fldNm) const {
-        auto cs{cs_};
-        pubBldr<false> bld{bs_, cs, pubnm};
+        pubBldr<false> bld(bs_, cs_, face_.tdvclk_, pubnm);
         return std::string(bld.name().nthBlk(bld.index(fldNm)).toSv());;
     }
 
@@ -466,9 +530,6 @@ struct DCTmodel {
 
         uint64_t number(auto c) const { return name().nthBlk(index(c)).toNumber(); }
         auto time(auto c) const { return name().nthBlk(index(c)).toTimestamp(); }
-        double timeDelta(auto c, std::chrono::system_clock::time_point tp = std::chrono::system_clock::now()) const {
-                    return std::chrono::duration_cast<std::chrono::duration<double>>(tp - time(c)).count();
-        }
         auto operator[](auto c) const { return string(c); }
     };
 };

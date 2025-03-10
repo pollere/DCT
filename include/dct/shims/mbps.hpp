@@ -115,6 +115,7 @@ struct mbps
     void stop() { m_pb.stop(); }
     auto maxContent() { return pubSpace_ - m_pubpre.size(); }   // an upper bound on max content bytes per pub - names are larger
     const auto& pubPrefix() const noexcept { return m_pubpre; }
+     auto tdvcNow() { return m_pb.tdvcNow(); }
 
     auto startMsgsBatch() { return m_pb.m_sync.batchPubs(); }
     void endMsgsBatch() { m_pb.m_sync.batchDone(0); }   // zero forces sendCAdd attempt
@@ -208,7 +209,7 @@ struct mbps
                 }
                 // create or retrieve a message state entry
                 auto& mS = m_msgs[mId];
-                mS.tm = std::chrono::system_clock::now();    // time field to use for clean up
+                mS.tm = m_pb.tdvcNow();    // time field to use for clean up
                 if (mS.contentSz == 0) {
                     mS.contentSz = pubSpace_ - p.name().size();    // max content size for pubs of message mId
                 } else if (pubSpace_ - p.name().size() != mS.contentSz) {
@@ -238,7 +239,7 @@ struct mbps
 
         // clean up state of incomplete messages when m_msgs cache exceeds threshold (for test on every pass, set threshold=0)
         if (m_msgs.size() >= MaxMsgCache) {
-            auto expireTm = std::chrono::system_clock::now() - MaxMsgHold;
+            auto expireTm = m_pb.tdvcNow() - MaxMsgHold;
             std::erase_if(m_msgs, [expireTm](auto& kv) { return kv.second.tm < expireTm; });
         }
     }

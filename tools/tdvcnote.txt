@@ -1,0 +1,20 @@
+
+Experiment with dist_tdvc
+
+Set m_virtClk to true in dct_model.hpp (line 70).
+
+Meshed configurations can be tested by setting MESHTEST at compile time
+(see Makefiles). The options are either two overlapping sets of members
+or all the members sorted into a line.
+
+The relay and ptps files can handle its use.
+
+dist_tdvc.hpp has a method, publishCalibrate() which is called before a
+member starts calibrating and at the end of each round. It's format is:
+    <prefix>/cal/<role>/<id>/<neighborhood_size>/<vcTimestamp>
+
+The tdvcgraf script can be run on dctwatch output to pull out the "cal"
+publications logged by dist_tdvc. It sorts them into groups by their ids
+with lines that extract the dctwatch time and the amount of difference
+between dctwatch time and the publication's (vc) timestamp.
+This format can be input to graf.

@@ -22,6 +22,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -58,15 +59,15 @@ using namespace std::literals::chrono_literals;
  * the "type-length" overhead for the Name and Content, leaving an upper bound on the information
  * size (Name value field plus Content value field) available for the shim or distributor using this syncps
  */
- static constexpr size_t cAddTLVs = 37 + 107;    // max of 144 bytes of required TLVs in every cAdd.
-                                                        // XXX this should be function of sigmgr type - 107 for EdDSA and 80 for AEAD
+static constexpr size_t cAddTLVs = 37 + 107;    // max of 144 bytes of required TLVs in every cAdd.
+                                                // XXX this should be function of sigmgr type - 107 for EdDSA and 80 for AEAD
 //default values
-static constexpr std::chrono::milliseconds maxPubLifetime = 2s;
-static constexpr std::chrono::milliseconds maxClockSkew = 1s;
-static constexpr std::chrono::milliseconds stateLifetime = 1357ms;
+static constexpr tdv_clock::duration maxPubLifetime = 2s;
+static constexpr tdv_clock::duration maxClockSkew = 1s;
+static constexpr tdv_clock::duration stateLifetime = 1357ms;
 
 // set an estimated processing overhead that will dominate distDelay for higher speed networks
-static constexpr std::chrono::milliseconds pduProc = 50ms;
+static constexpr tdv_clock::duration pduProc = 50ms;
 
 /*
  * In syncps constructor, add the mtu()/rate() to distDelay. distDelay is (an estimate of) the time to
@@ -93,13 +94,15 @@ using SubCb = std::function<void(const rPub&)>;
 using DelivCb = std::function<void(const rPub&, bool)>;
 
 /**
- * @brief app callback to test if publication is expired
+ * @brief app callback to test if arriving publication is expired
  */
 using IsExpiredCb = std::function<bool(const rPub&)>;
 /**
- * @brief app callback to return lifetime of this Publication
+ * @brief app callbacks to return lifetime and creation time of a Publication
  */
-using GetLifetimeCb = std::function<std::chrono::milliseconds(const rPub&)>;
+using GetLifetimeCb = std::function<tdv_clock::duration(const rPub&)>;
+using GetCreationCb = std::function<tdv_clock::time_point(const rPub&)>;
+
 /**
  * @brief app callback to filter peer publication requests
  *
@@ -195,6 +198,9 @@ struct SyncPS {
         template<typename C=Item> requires hasView<C>
         auto addNet(decltype(C().asView())&& c) { return add(Item{c}, Ent::act); }
 
+        auto activate(PubHash h) {
+            if (auto p = Base::find(h); p != Base::end()) p->second.activate();
+        }
         auto deactivate(PubHash h) {
             if (auto p = Base::find(h); p != Base::end() && p->second.active()) {
                 p->second.deactivate();
@@ -242,17 +248,27 @@ struct SyncPS {
     std::map<uint32_t,PubHashVec> pendOthers_{};    // for effective meshing, need to send non-local origin pubs
 
     DirectFace& face_;
+
+    // Trust Domain Virtual Clock access is via face (many things need its 'now()' method)
+    tdv_clock::time_point tdvcNow() const noexcept { return face_.tdvcNow(); }
+    auto tdvcAdjust() const noexcept { return face_.tdvcAdjust(); }
+    tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur) noexcept { return face_.tdvcAdjust(dur); }
+    void tdvcReset() noexcept { return face_.tdvcReset(); }
+    auto tdvcToSys(tdv_clock::time_point tp) const noexcept { return face_.tdvcToSys(tp); }
+    auto tdvcFromSys(std::chrono::sys_time<tdv_clock::duration> tp) const noexcept { return face_.tdvcFromSys(tp); }
+
     const crName collName_;     // 'name' of the collection
     SigMgr& pktSigmgr_;         // cAdd packet signing and validation
     SigMgr& pubSigmgr_;         // Publication validation
     size_t maxPubSize_;         // max space in bytes available in Content of a cAdd
     size_t maxInfoSize_;        // max space in bytes for Publication Name plus Content
-    std::chrono::milliseconds cStateLifetime_{stateLifetime};
-    std::chrono::milliseconds pubLifetime_{};
-    std::chrono::milliseconds pubExpirationGB_{};
-    std::chrono::milliseconds distDelay_{pduProc};  // time for a PDU to be distributed to all members on this subnet
+    tdv_clock::duration cStateLifetime_{stateLifetime};
+    tdv_clock::duration pubLifetime_{};
+    tdv_clock::duration pubExpirationGB_{};
+    tdv_clock::duration distDelay_{pduProc};  // time for a PDU to be distributed to all members on this subnet
+    tdv_clock::duration pubHoldtime_{distDelay_};             // time to hold a publication before resending
     std::chrono::system_clock::time_point lastNeed_{};       // if non-zero, hold time for "needs" cStates
-    std::chrono::milliseconds signerHold_{distDelay_};
+    tdv_clock::duration signerHold_{distDelay_};        // set to zero to never hold a publication that may arrive before signing cert
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
     std::uniform_int_distribution<unsigned short> randInt_{1u, 4u}; //  cState delay  randomization
     Nonce  nonce_{};            // nonce of current cState
@@ -263,17 +279,49 @@ struct SyncPS {
     bool netCState_{false};     // no cState from net seen in this collection yet
     bool batching_{false};      // can be used to hold off cState for a batch of new Publications
     bool autoStart_{true};      // call 'start()' when done registering
-    GetLifetimeCb getLifetime_{ [this](auto){ return pubLifetime_; } };
-    IsExpiredCb isExpired_{
-        // default CB assumes last component of name is a timestamp and says pub is expired
-        // if the time from publication to now is >= the pub lifetime
-        [this](const auto& p) { auto dt = std::chrono::system_clock::now() - p.name().last().toTimestamp();
-                         return dt >= getLifetime_(p) + maxClockSkew || dt <= -maxClockSkew; } };
+    bool noOthers_{false};      // if true, don't (re)send publications received from others
+ 
+    // Timing model:
+    //
+    // Time intervals and offsets are relative to the TDVC (Trust Domain Virtual Clock).
+    // There is one TDVC per face and dist_tdvc syncs that clock instance with other DeftTs
+    // on that subnet. Relays sync TDVCs across subnets.
+    //
+    // The TDVC has a 1us tick interval and uses the standard Unix time epoch (seconds
+    // since 1 Jan 1970 00:00:00 UTC). Since clock intervals and offsets in C++ are carried
+    // in the std::chrono type of a variable, it's far too easy to confuse what units
+    // are being used where. The convention followed in this code is that all variables
+    // and parameters use tdv_clock::time_point for time points and tdv_clock::duration
+    // for durations. Constant time intervals used for initialization or passed as
+    // parameters must have the appropriate chrono suffix. If something needs different
+    // units than uS, appropriate scaling should happen at the point of use. E.g., the cState
+    // lifetime TLV requires mS so cStateLifetime_ is rounded up to the nearest mS when
+    // the TLV is constructed using 'std::chrono::ceil<std::chrono::milliseconds>(lt)'.
+    //
+    // Each publication must have a 'creation time' field covered by pub's signature.
+    // Usually it's the last component of the pub name but may be elsewhere in particular
+    // collections. Each collection's publications have a 'lifetime' measured from the
+    // publication's creation time. By default the lifetime is the same for all of the
+    // collection's publications but the collection creator can make it publication
+    // specific by setting a different getLifetimeCb.  For example, the 'cert' collection
+    // uses each cert's validity period TLV for both its creation time and lifetime.
+    // Publications with a creation time earlier than tdvcNow()-publifetime are 'expired'
+    // and can never be 'active' in the collection (they won't be delivered to subscribers
+    // or included in the collection's iblt). 
+    GetCreationCb getCreation_{ [](const rPub& p) { return p.name().last().toTimestamp(); } };
+    constexpr tdv_clock::duration pubAge(const rPub& p) const { return tdvcNow() - getCreation_(p); };
+    GetLifetimeCb getLifetime_{ [this](const rPub& /*p*/) -> tdv_clock::duration { return pubLifetime_; } };
+    // default CB assumes last component of name is a timestamp and says pub is expired
+    // if the time from publication to now is >= the pub lifetime
+    IsExpiredCb isExpired_{[this](const rPub& p) {
+        auto dt = pubAge(p);
+        return dt >= getLifetime_(p) + maxClockSkew || dt <= -maxClockSkew; }
+    };
     OrderPubCb orderPub_{[](PubVec& pv){   //default
-            // can't use modern c++ on a mac
-            //std::ranges::sort(pOurs, {}, [](const auto& p) { return p.name().last().toTimestamp(); });
-            std::sort(pv.begin(), pv.end(), [](const auto& p1, const auto& p2){
-                    return p1.name().last().toTimestamp() < p2.name().last().toTimestamp(); });
+            // note: can't use c++ ranges on a mac until clang-18
+            std::ranges::sort(pv, {}, [](const auto& p) { return p.name().last().toTimestamp(); });
+            //std::sort(pv.begin(), pv.end(), [](const auto& p1, const auto& p2){
+             //       return p1.name().last().toTimestamp() < p2.name().last().toTimestamp(); });
             return true;
         }
     };
@@ -316,28 +364,44 @@ struct SyncPS {
         maxInfoSize_ = maxPubSize_ -(2 + 3 + pubSigmgr_.sigSpace() +2);
         if (maxPubSize_ <= 0 || maxInfoSize_ <= 0)
             throw runtime_error("syncps: no space for Pub /Info");
-        distDelay_ += std::chrono::milliseconds(tts());
+        distDelay_ += tts();
         signerHold_ = distDelay_;   //default
         if (distDelay_ > 300ms) {
-            cStateLifetime_ = 30 * distDelay_ > 6000s ? 6000ms : 30*distDelay_;  // distributors can change
+            cStateLifetime_ = 30 * distDelay_ > 6s ? 6s : 30*distDelay_;  // distributors can change
             pubLifetime_ = maxPubLifetime > 10*cStateLifetime_ ? maxPubLifetime : 10*cStateLifetime_;
-        } else
+        } else {
             pubLifetime_ = maxPubLifetime;
-        pubExpirationGB_ = pubLifetime_;
+        }
+        pubExpirationGB_ = maxClockSkew;
         // print ("syncps for {} computes pubSize: {}, infoSize: {}, distDly: {}\n", collName_, maxPubSize_, maxInfoSize_, distDelay_.count());
     }
 
     SyncPS(rName collName, SigMgr& wsig, SigMgr& psig) : SyncPS(defaultFace(), collName, wsig, psig) {}
 
 
-    /**
+    /*
      * complete lifetime timer setup for pub newly added to collection or just activated.
      */
-    auto finishActivate(PubHash hash, std::chrono::milliseconds lt) {
-        if (hash == 0 || lt == decltype(lt)::zero()) return hash;
+    PubHash finishActivate(PubHash hash) {
+        if (hash == 0) return hash;
+        const auto e = pubs_.find(hash);
+        if (e == pubs_.end()) return 0;
+        const auto& p = e->second.i_;
+        auto lt = getLifetime_(p);
+        if ((lt -= pubAge(p)) <= 0s) {
+            // pub already expired
+            if ((lt -= pubExpirationGB_) <= 0s) {
+                pubs_.erase(hash);
+            } else {
+                pubs_.deactivate(hash);
+                oneTime(lt, [this, hash]{ pubs_.erase(hash); });
+            }
+            return 0;
+        }
 
-        // We remove an expired publication from our active set at twice its pub
-        // lifetime (the extra time is to prevent replay attacks enabled by clock skew).
+        // A publication is made inactive at end of its lifetime
+        // We remove an expired publication from our active set at end of lifetime plus
+        // clock skew (the extra time is to prevent replay attacks enabled by clock skew).
         // An expired publication is never supplied in a cAdd so this hold time prevents
         // spurious end-of-lifetime exchanges due to clock skew.
         //
@@ -345,8 +409,8 @@ struct SyncPS {
         // interval to prevent a peer with a late clock giving it back to us as soon
         // as we delete it.
 
-        oneTime(lt + maxClockSkew, [this, hash]{ pubs_.deactivate(hash); });
-        oneTime(lt + pubExpirationGB_, [this, hash]{ pubs_.erase(hash); });
+        oneTime(lt, [this, hash]{ pubs_.deactivate(hash); });   // becomes inactive (expired) at end of lifetime
+        oneTime(lt + pubExpirationGB_, [this, hash]{ pubs_.erase(hash); }); // remove entirely after GB to avoid replay
         return hash;
     }
 
@@ -354,10 +418,7 @@ struct SyncPS {
      * @brief add a new local or network publication to the 'active' pubs set
      */
     auto addToActive(crData&& p, bool localPub) {
-        //print("{:%M:%S} addToActive {} {}: {}\n", std::chrono::system_clock::now(), p.name(), p.size(), localPub);
-        auto lt = getLifetime_(p);
-        auto hash = localPub? pubs_.addLocal(std::move(p)) : pubs_.addNet(std::move(p));
-        return finishActivate(hash, lt);
+        return finishActivate(localPub? pubs_.addLocal(std::move(p)) : pubs_.addNet(std::move(p)));
     }
 
     /*
@@ -369,7 +430,7 @@ struct SyncPS {
         if (e.fromNet())
             if (auto s = subscriptions_.findLM(p.name()); subscriptions_.found(s)) deliver(p, s->second);
 
-        return finishActivate(hashPub(p), getLifetime_(p));
+        return finishActivate(hashPub(p));
     }
 
     /**
@@ -380,6 +441,7 @@ struct SyncPS {
      * This is only kept for a short time (~distDelay)
      */
     bool addToNoSigner(crData&& p) {
+        if (signerHold_ == 0ms)   return false;     // this collection is not holding
         auto hash = pubs_.addNoSigner(std::move(p));
         //print("{:%M:%S} addToNoSigner {} {} ^{:x}\n", std::chrono::system_clock::now(), p.name(), p.size(), hash);
         if (hash == 0 || noSignerPubs_ > 50) return false;
@@ -461,9 +523,9 @@ struct SyncPS {
         auto h = hashPub(pub);
         if (pubs_.contains(h)) {
             if ((pubs_.at(h)).fromNet()) {
-                print("syncps::publish w cb instant cb for {}\n", pub.name());
+                //print("syncps::publish w cb instant cb for {}\n", pub.name());
                 cb((pubs_.find(h))->second.i_,true);
-                }
+            }
             return h;     // if already in collection and is local assume it has already set cb
         }
         h = publish(std::move(pub));
@@ -518,7 +580,7 @@ struct SyncPS {
             t->second = std::move(cb);
             return *this;
         }
-        // deliver all active pubs matching this subscription
+        // deliver all active pubs matching this subscription (XXX doesn't seem to check active)
         for (const auto& [h, pe] : pubs_) if (pe.fromNet() && topic.isPrefix(pe.i_.name())) deliver(pe.i_, cb);
 
         subscriptions_.add(std::move(topic), std::move(cb));
@@ -562,7 +624,7 @@ struct SyncPS {
      * restart the time. (This is used to collect all the cAdds responding to a cState
      * before sending a new cState.)
      */
-    void sendCStateSoon(std::chrono::milliseconds dly = 0ms) {
+    void sendCStateSoon(tdv_clock::duration dly = 0ms) {
         scheduledCStateId_->cancel();
         if (unicast()) sendCState();    // no delay
         else scheduledCStateId_ = schedule(dly + std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
@@ -576,12 +638,13 @@ struct SyncPS {
 
     // remove expired, suppressed, ineligible pubs from a pubvector
     // the contains() check is needed for delayed sending, for meshing
+    // returns false if no pubs left on the passed-in vector
     bool updatePV(PubHashVec& hv) {
         if (hv.empty()) return false;
         auto now = std::chrono::system_clock::now();
         for (auto it=hv.begin(); it != hv.end(); ) {
             auto h = *it;
-            if (!pubs_.contains(h) || isExpired_(pubs_.at(h).i_) || pubs_.at(h).hold_ > now) {
+            if (!pubs_.contains(h) || !pubs_.at(h).active() || pubs_.at(h).hold_ > now) {
                 it = hv.erase(it);
             } else {
                 ++it;
@@ -619,7 +682,7 @@ struct SyncPS {
      */
     auto shipCAdd(const rName& csName, const PubVec& pv) noexcept {
         PubVec sv{};
-        auto ht = std::chrono::system_clock::now() + distDelay_;   // set hold time for sent pubs
+        auto ht = std::chrono::system_clock::now() + pubHoldtime_;   // set hold time for sent pubs
         // send all the newPubs that will fit into the cAdd
         crData cAdd{crName{csName.first(-1)}.append(tlv::csID, mhashView(csName)).done(), tlv::ContentType_CAdd};
         for (ssize_t sz = mtu() - cAdd.ssize() - pktSigmgr_.sigSpace(); const auto& p : pv) {
@@ -636,9 +699,9 @@ struct SyncPS {
         return true;
     }
 
-    // for effective meshing, need to send non-local pubs while avoiding broadcast storms
-    // called when a timer expires and proceeds to create a cAdd for eligible pubs, if any
-    // does not change cState sending unless the csId has not been removed but there are
+    // For effective meshing, need to send non-local pubs while avoiding broadcast storms
+    // Called when a timer expires and proceeds to create a cAdd for eligible pubs, if any
+    // Does not change cState sending unless the csId has not been removed but there are
     // no eligible pubs to send - this is done in case there is/are disconnected members
     void sendOthers(uint32_t csId) {
         // check that the pubs on list are still eligible to send and the
@@ -647,9 +710,10 @@ struct SyncPS {
         if (it == pendOthers_.end()) return;
         auto& hv = it->second;
         const auto name = face_.hash2Name(csId);
-        if (name.size() == 0) { // ||  !updatePV(hv)) {
+        auto b = !updatePV(hv);
+        if (name.size() == 0 ||  b) {
             pendOthers_.erase(it);
-            if (!updatePV(hv)) {
+            if (b) {
                 face_.unsuppressCState(collName_/pubs_.iblt().rlEncode());
                 sendCStateSoon();
             }
@@ -657,13 +721,13 @@ struct SyncPS {
         }
 
         // send all the eligible matching non-local origin pubs for csId that fit in a cAdd packet
-        // set hold time
+        // reset hold time if not sending
         PubVec sv{};
         auto now = std::chrono::system_clock::now();
-        for (const auto h : hv) { if ( pubs_.at(h).hold_ <= now) sv.emplace_back(pubs_.at(h).i_);}
+        for (const auto h : hv) { if ( pubs_.at(h).hold_ <= now) sv.emplace_back(pubs_.at(h).i_); }
         if (sv.empty() || !orderPub_(sv)) return;
+        pendOthers_.erase(csId);  // erases everything pending on csId so a new csId starts the timer again
         shipCAdd(name, sv);
-        pendOthers_.erase(it);  // erases everything pending on csId so a new csId starts the hold clock again
     }
 
     // send a cState when received cState shows needed Pubs
@@ -691,7 +755,7 @@ struct SyncPS {
         //   have - (hashes of) items we have that they don't
         //   need - (hashes of) items we need that they have
         //
-        // pubs_ contains all pubs we have so send the ones we have & the peer doesn't.
+        // pubs_ contains all pubs we have, so send the ones we have & the peer doesn't.
         netCState_ = true;
         auto iblt{name2iblt(name)};
         handleDeliveryCb(iblt);
@@ -707,7 +771,7 @@ struct SyncPS {
                 if (p->second.local()) {
                     if (p->second.hold_ > now) continue;     // sent this pub too recently to send again
                     pv.emplace_back(p->second.i_);
-                } else if (p->second.fromNet()) {
+                } else if (!noOthers_ && p->second.fromNet()) {
                     phOth.emplace_back(hash);    // others get checked at their (delayed) send time
                 }
             }
@@ -725,7 +789,7 @@ struct SyncPS {
             } else {
                 // set up a delayed send of others Pubs that are missing from this cState
                 uint32_t csId = mhashView(name);
-                if (pendOthers_.find(csId) == pendOthers_.end()) {
+                if (!noOthers_ && pendOthers_.find(csId) == pendOthers_.end()) {
                     pendOthers_.emplace(csId, phOth);
                     oneTime(distDelay_ + std::chrono::milliseconds(randInt()), [this,csId]{ sendOthers(csId); });
                 }
@@ -753,7 +817,7 @@ struct SyncPS {
         auto now = std::chrono::system_clock::now();
         for (const auto hash : have) {
             if (const auto& p = pubs_.find(hash); p != pubs_.end()) {
-                if (p->second.hold_ > now) continue;   // sent this pub too recently to send again
+                if (p->second.hold_ > now) continue;   // sent this pub too recently to send again or inactive
                 if (p->second.local()) pv.emplace_back(p->second.i_);
             }
         }
@@ -829,7 +893,8 @@ struct SyncPS {
         if ( auto it = pendOthers_.find(ci) != pendOthers_.end()) pendOthers_.erase(it);
         // sets the hold time on its Pubs to keep from resending too soon
          decltype(std::chrono::system_clock::now()) ht{};
-         if (!pendOthers_.empty()) ht = std::chrono::system_clock::now() + distDelay_;
+         // if (!pendOthers_.empty())
+         ht = std::chrono::system_clock::now() + distDelay_;
 
         auto ap = 0;    // count added pubs from this cAdd
         for (auto c : cAdd.content()) {
@@ -957,6 +1022,7 @@ struct SyncPS {
                             onCAdd(rd);
                         },
                        [this](rName) -> void {
+                        // print("syncps register done\n");
                            registering_ = false;
                            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode()); // force sending initial state
                            sendCState();
@@ -978,6 +1044,7 @@ struct SyncPS {
     /**
      * @brief methods to change callbacks
      */
+    auto& getCreationCb(GetCreationCb&& getCreation) { getCreation_ = std::move(getCreation); return *this; }
     auto& getLifetimeCb(GetLifetimeCb&& getLifetime) { getLifetime_ = std::move(getLifetime); return *this; }
     auto& isExpiredCb(IsExpiredCb&& isExpired) { isExpired_ = std::move(isExpired); return *this; }
     auto& orderPubCb(OrderPubCb&& orderPub) { orderPub_ = std::move(orderPub); return *this; }
@@ -985,15 +1052,19 @@ struct SyncPS {
     /**
      * @brief methods to change various timer values
      */
-    auto& cStateLifetime(std::chrono::milliseconds time) { cStateLifetime_ = time; return *this; }
+    auto& cStateLifetime(auto time) { cStateLifetime_ = time; return *this; }
 
-    auto& pubLifetime(std::chrono::milliseconds time) { pubLifetime_ = time; return *this; }
+    auto& pubLifetime(auto time) { pubLifetime_ = time; return *this; }
 
-    auto& pubExpirationGB(std::chrono::milliseconds time) {
+    auto& pubHoldtime(auto time) { pubHoldtime_ = time; return *this; }
+
+    auto& pubExpirationGB(auto time) {
         pubExpirationGB_ = time > maxClockSkew? maxClockSkew : time;
         return *this;
     }
-    auto& signerHoldtime(std::chrono::milliseconds time) { signerHold_ = time; return *this; }
+    // set to zero to disable signer hold
+    auto& signerHoldtime(auto time) { signerHold_ = time; return *this; }
+    auto& noOthers(bool o=true) { noOthers_ = o; return *this; }
 };
 
 }  // namespace dct

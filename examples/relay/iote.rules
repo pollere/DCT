@@ -80,6 +80,7 @@ domCert: _domain/_keyinfo
 #certValidator: "EdDSA"
 // for cAdds
 #pduValidator: "AEAD"
+//#pduValidator: "EdDSA"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version

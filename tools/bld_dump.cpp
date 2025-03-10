@@ -20,19 +20,21 @@
  *  The DCT proof-of-concept is not intended as production code.
  *  More information on DCT is available from info@pollere.net
  */
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <string_view>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-#include <variant>
 #include "dct/format.hpp"
-#include "dct/schema/buildpub.hpp"
-#include "dct/schema/validate_bootstrap.hpp"
+#include "dct/schema/dct_model.hpp"
+#include "../examples/util/dct_example.hpp"
 
 using namespace dct;
+
+static auto& getDCTmodel(const char* bsfile) {
+    static dct::DCTmodel* dm{};
+    if (! dm) {
+        dct::readBootstrap(bsfile);
+        dm = new dct::DCTmodel(dct::rootCert, []{return dct::schemaCert();},
+                            []{return dct::identityChain();}, []{return dct::getSigningPair();});
+    }
+    return *dm;
+}
 
 int main(int argc, const char* argv[]) {
     if (argc < 2) {
@@ -40,14 +42,8 @@ int main(int argc, const char* argv[]) {
         exit(1);
     }
     try {
-        certStore cs{};
-        auto bs = validateBootstrap(argv[1], cs);
-        
-        if (argc < 3) {
-            pubBldr<true> bld(bs, cs, bs.pubName(0));
-        } else {
-            pubBldr<true> bld(bs, cs, argv[2]);
-        }
+        auto& dm = getDCTmodel(argv[1]);
+        pubBldr<true> bld(dm.bs_, dm.cs_, dm.face_.tdvclk_, argc<3? dm.bs_.pubName(0) : argv[2]);
     } catch (const schema_error& se) { print("schema error: {}\n", se.what()); }
 
     exit(0);

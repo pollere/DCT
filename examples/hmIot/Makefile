@@ -8,7 +8,7 @@
 INCLUDES = ../../include
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 CXXFLAGS = -g -O0 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
-CXXFLAGS += -DMESHTEST=0
+#CXXFLAGS += -DMESHTEST=1
 ## Note: on a Mac sanitize=address and sanitize=leak are mutually exclusive
 CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=leak
@@ -23,6 +23,10 @@ ifeq ($(shell uname -s),Darwin)
 CXX=clang++
 LIBS += -L/opt/local/lib -lsodium
 JUNK += $(addsuffix .dSYM,$(BINS))
+# llvm-18+ wrong libc++ bug work-around (19jan25)
+LLVM = $(shell llvm-config --prefix)
+LDFLAGS += -rpath $(LLVM)/lib/libc++ -rpath $(LLVM)/lib/libunwind
+LDFLAGS += -L$(LLVM)/lib/libc++ -lc++ -lc++abi
 else
 # ubuntu packages are compiled with gcc and its sanitizer doesn't cooperate with clang's
 #CXX=c++
@@ -37,16 +41,16 @@ all: app1 app2 app3 app4
 .PHONY: clean distclean tags
 
 app1: app1.cpp $(DEPS)
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 app2: app2.cpp $(DEPS)
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 app3: app3.cpp $(DEPS)
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 app4: app4.cpp $(DEPS)
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 clean:
 	rm -rf $(BINS) $(JUNK)

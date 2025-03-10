@@ -287,7 +287,12 @@ static inline crName operator/(crName p, uint64_t n) { p.append(tlv::SequenceNum
 static inline crName operator/(crName p, std::chrono::microseconds t) {
        p.append(tlv::Timestamp, t.count()).done(); return p;
 }
+//template <typename Clk> requires requires(Clk c) { c.time_since_epoch(); }
+//static inline crName operator/(crName p, Clk t) {
 static inline crName operator/(crName p, std::chrono::system_clock::time_point t) {
+       return p / std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch());
+}
+static inline crName operator/(crName p, tdv_clock::time_point t) {
        return p / std::chrono::duration_cast<std::chrono::microseconds>(t.time_since_epoch());
 }
 
@@ -318,9 +323,9 @@ struct crPrefix : crTLV<rPrefix,tlv::Name> {
 };
 
 struct crState : crTLV<rState,tlv::cState> {
-    crState(crName&& n, std::chrono::milliseconds lt, uint32_t non = rand32()) : crTLV{std::move(n)} {
+    crState(crName&& n, auto lt, uint32_t non = rand32()) : crTLV{std::move(n)} {
         append(tlv::Nonce, std::array{uint8_t(non), uint8_t(non >> 8), uint8_t(non >> 16), uint8_t(non >> 24)});
-        append(tlv::Lifetime, lt.count());
+        append(tlv::Lifetime, std::chrono::ceil<std::chrono::milliseconds>(lt).count());
         done();
     }
 };

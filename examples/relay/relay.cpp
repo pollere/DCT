@@ -52,6 +52,7 @@
 #include <chrono>
 
 #include "../util/dct_relay.hpp"
+#include "dct/rand.hpp"
 
 using namespace std::literals;
 
@@ -82,6 +83,7 @@ static std::vector<ptps*> transList{};  //list of transports for this relay
 bool skipValidatePubs = false;      // if set true, may skip validate on publish if DeftTs have the same trust schema
 uint32_t failThresh = 0;   //defaults to not set
 using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
+dct::rand ran{};
 
 static constexpr bool deliveryConfirmation = false; // get per-publication delivery confirmation
                                                     //    which can be used for failure detection
@@ -152,6 +154,189 @@ static void keysRecv(ptps* s, const Publication& p) {
                sp->publishGKey(Publication(p));
             }
     } catch (const std::exception& e) {}
+}
+
+/*
+ *  tdvcRecv is callback set when each ptps is constructed for its tdvc distributor
+ *  callback for the trust domain virtual clock distributor's syncps.
+ *
+ *  Distributor publications do not currently appear in schemas, so instead, a test is made to
+ *  determine if a  pub's signer is known (in the  DeftT's cert store) to a shim before it is forwarded there.
+ *  Since need the same (within tolerance) vc throughout domain, this may cause problem?
+ *  In a round, each deftt publishes setSz values separated by 2*nbhDly
+ *
+ *  ptps shim has calls that will call its tdvc distributor
+ */
+dct::tdv_clock::duration nhdDly{5ms}; // rough estimate of transit + process time between neighbors in my 'hood
+size_t setSz = 3;
+dct::tdv_clock::duration computeDly{5*setSz*2*nhdDly};  //needs to be long enough for the set to be sent for each transport
+struct cdiff {
+         size_t nhSz{};                // size of neighborhood used in this vc estimate
+         uint8_t st{};                  // the state of this neighbor
+         int64_t v{};                   // min of differences of my vc estimate and received value
+         bool lives{true};
+};
+std::map<dct::thumbPrint,cdiff> clkDiffs{};
+dct::tdv_clock::duration adjust{0us};         // in-progress adjustment to vc
+int64_t calSp{300};  // number of seconds to space calibration
+uint8_t myState = 0;    // 0 for not calibrating, 1 for localling in tolerance and counting nbrs, 2+ for calibrating
+size_t myNbrs = 1;
+size_t tolRnds = 0;
+
+void computeOffset();
+void scheduleCompute() {
+     ptps* tr{};
+     for (auto sp : transList) if (sp) { tr = sp; break; }
+     tr->oneTime(computeDly, [](){ computeOffset(); });
+}
+
+ // starts the transport's tdvc distributor publishing its VC value if there are other members in its tdvc collection
+ // have to schedule the computeOffset also
+ void startCalibrate() {
+     myState = 2;
+     for (auto sp : transList) if (sp->VCisStarted()) sp->calibrate();
+     scheduleCompute();
+ }
+ void finishCalibration(std::chrono::microseconds a) {
+ dct::print("relay finished Calibration adding {} for ", adjust );
+ for (auto sp : transList) dct::print("{} ", sp->label());
+ dct::print("\n");
+     myState = 0;
+     tolRnds = 0;
+     for (auto sp : transList) {
+         if (sp->VCisStarted()) sp->finishCalibrate(a, myNbrs);
+         else sp->tdvcAdjust(a,myNbrs); // whether started or not, need to have the same vc
+     }
+     adjust = 0us;
+     for (auto& m : clkDiffs) m.second.nhSz = 0;    // clear last round's values
+ }
+ void calibrateRound() {
+     for (auto sp : transList) if (sp->VCisStarted()) sp->vcRound(myState,adjust,myNbrs);
+     scheduleCompute();
+ }
+
+    int zAdj;    // number of times I've used a zero adjustment
+    int64_t tolVal = 20000; // integer us for tolerance check
+  void computeOffset() { 
+        // find my neighborhood size in this round and nbrs who are in tolerance
+        size_t z = 0;
+        size_t nbhd = 1;               // neighborhood always has at least one member
+        size_t n = myNbrs; // to find smallest neighborhood among my neighbors
+        for (auto& m : clkDiffs) {
+            auto& cd = m.second;
+            if (cd.nhSz != 0) {
+                ++nbhd;                                // I have clks from this neighbor, increase
+                if (cd.nhSz < n) n = cd.nhSz;
+                if (cd.st <= 1) ++z;       // count neighbors who were in tolerance this round
+            } else cd.lives = false;    // this will get set back to true if hear from it, else gets cleaned up later
+        }
+        ptps* tr{};
+        for (auto sp : transList) if (sp) { tr = sp; break; }
+        auto me =tr->label();
+        if (nbhd==1) {
+            if (tolRnds > 4) {
+                finishCalibration(-adjust);  // no neighbors communicating
+                return;
+            }
+           dct::print("relay.computeOffset(): {} found no neighbors, state={}, tolRnds={}\n", me, myState, tolRnds);
+            if (myState > 1) myState = (myState == 255) ? 2 : ++myState;
+           tr->oneTime(nhdDly, [](){ calibrateRound(); }); // prompts others to send clock values when receive mine
+           return;
+        }
+        dct::print("rcomputeOffset(): {} state={}, tolRnds={} nbhd={}\n", me, myState, tolRnds, myNbrs);
+
+        auto q = nhdDly.count();  // an estimate of tx+proc time in the neighborhood
+        n -=1;                                      // replication factor
+        std::vector<int64_t> ud{};  // for the microsecond differences from my virtual clock
+        // put values from each tpId in a vector and sort
+        // want to use those in largest neighborhoods preferentially so replicate them
+        for (size_t i=0; i<myNbrs-n; ++i) ud.push_back(0);  // zero diffs for my clock
+        for (auto& m : clkDiffs) {
+            auto& cd = m.second;
+            // replicate by nbrhd size - smallest nbrhd +1
+            if (cd.nhSz != 0) for (size_t j=0; j<cd.nhSz-n; ++j)  ud.push_back(cd.v);
+        }
+
+        // sort differences from smallest to largest and find median
+        // (this is amount by which my clock is ahead of others)
+        int64_t adj;
+        std::sort(ud.begin(), ud.end());
+
+        // find the mode
+        std::map<int64_t, int> freq;
+        int64_t v;
+        int c = 0;
+        int64_t md = 0;
+        for (int d : ud) {  // finding frequency of each quantized diff
+            v = std::floor((double)(d)/q) * q;
+            if (std::abs(v) > std::abs(md)) md = v; // largest abs value diff
+            freq[v]++;
+            if (freq[v] > c) c = freq[v];
+        }
+        std::erase_if(freq, [c](const auto& it) { return it.second != c; });
+        int64_t md2 = md;   // set to largest abs value diff
+        for (const auto& it : freq) {   // set md to the smallest abs diff, preferring neg
+            if (std::abs(it.first) < std::abs(md) || (std::abs(it.first) == std::abs(md) && it.first < md)) {
+                md2 = md;  // second smallest abs value difference
+                md = it.first; // smallest abs value difference
+            } else if (std::abs(it.first) < std::abs(md2) || (std::abs(it.first) == std::abs(md2) && it.first < md2))
+                md2 = it.first;
+        }
+        // check for special cases:  more than one value has the max number of occurances?
+        //  move toward smallest non-zero diff,  tie-breaker is move toward forward clock
+        if (freq.size() > 1 && md == 0 && md2 < 0) adj = md2;
+        else adj = md;
+        if (adj == 0 && zAdj > 10 && myState > 12) {   // detect if I haven't moved in many rounds
+            size_t i = 0;
+            for ( ; i < ud.size(); ++i) if (ud[i] == 0) break; // find first zero
+            if (i != 0) adj = std::floor((double)(ud[i-1])/q) * q; // use smallest neg value, if any
+        }
+        myNbrs = 1; // start by counting self as contributing to this vc used in  next samples
+        for (const auto& m : clkDiffs)   // count number of neighbors quantized within q of adj
+            if (m.second.nhSz != 0 && (m.second.v - adj) < 2*q && (m.second.v-adj ) > -q) ++myNbrs;
+        if (myNbrs == nbhd) myState = 1; // this adjustment makes me in tolerance with all
+        else myState =  (myState == 255) ? 2 : ++myState;    // if state was 1 for in tolerance, will start back at 2
+
+         // add to adjust which is the running total for this calibration
+        zAdj = adj == 0 ? ++zAdj : 0;   // track number of zero adjustments
+        adjust += std::chrono::microseconds(adj);  // total amount being added to vc for next round
+
+        /*
+         * stopping criteria: all neighbors must be within tolerance of the median
+         * compute this by my neighbors must all be sending rounds marked zero
+         * and have completed some minimal number of rounds
+         */
+        // Note: used the previous value of adjust (-med) in computing the clkDiffs
+        if (myState==1 && z == (nbhd - 1)) ++tolRnds;    // start counting rounds in tolerance
+        else tolRnds = 0;                                         // reset count
+        if (tolRnds > 4) {   // all in tolerance for more than 4 rounds?
+            finishCalibration(-adjust); // calibrated: set the clock and related values
+            //dct::print("\tcomputeOffset: {}  is calibrated with total tdvc offset {} from sysclk (counted {} values within {})\n\n", me, m_sync.tdvcAdjust(),k,tol);
+        } else { // try again
+            dct::print("computeOffset: {}  state={} tolcnt={}\n", me, myState, tolRnds);
+            for (auto& m : clkDiffs) m.second.nhSz = 0; // clear this round's value
+            tr->oneTime(computeDly/setSz + std::chrono::milliseconds(ran(3,47)), [](){ calibrateRound(); });
+        }
+     }
+
+/*
+ *  tdvcRecv is callback for tdvc distributor when it receives a clock value from a neighbor
+ *  dist_tdvc *only* passes a value if it's needed for calibration
+ *  Receiving a value while in state 0 means dist_tdvc found the received value exceeded tolerance
+ */
+ void tdvcRecv(dct::thumbPrint tp, int64_t diff, size_t nhd, size_t r, dct::tdv_clock::duration nd) {
+     if (nd > nhdDly) dct::print("relay gets a new neighborhood rtt {} (old={}\n", nd, nhdDly);
+       if (r != clkDiffs[tp].st ) {
+            clkDiffs[tp].st = r;
+            clkDiffs[tp].v = diff;
+         } else if (clkDiffs[tp].nhSz == 0 || diff < clkDiffs[tp].v) clkDiffs[tp].v = diff;
+        clkDiffs[tp].nhSz = nhd;    // use most recent value
+        clkDiffs[tp].lives = true;
+       // if not currently calibrating, launch a new session and schedule the compute phase
+       if (myState == 0) {
+          myState = 2;
+          startCalibrate();
+       }
 }
 
 /*
@@ -228,12 +413,14 @@ int main(int argc, char* argv[])
                                            [i=s_id]{return identityChain(i);},
                                            [i=s_id]{return getSigningPair(i);},
                                            "RLY", chainRecv, keysRecv} );
+                if (transList.back()->haveVC()) transList.back()->setupVC(setSz, tdvcRecv);
             } else {
                 transList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
                                            [i=s_id]{return getSigningPair(i);},
                                            "RLY", chainRecv, keysRecv, pubFailure} );
+                if (transList.back()->haveVC()) transList.back()->setupVC(setSz, tdvcRecv);
             }
         } catch (const std::exception& e) {
             std::cerr << "relay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;

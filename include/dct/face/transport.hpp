@@ -31,10 +31,9 @@
 #include <string>
 #include <string_view>
 
-#include <boost/asio/version.hpp>
 #if 1
 // As of Dec 2022, get spurious warnings when include boost asio
-// because sprintf in deprecated (on mac os xcode 12+).
+// because sprintf is deprecated (on mac os xcode 12+).
 // Theses pragmas are to prevent the warning from this.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -93,7 +92,7 @@ struct Transport {
      * (pubSize + cAdd name, etc + 80B for AEAD, 107B for EdDSA). Test this is syncps
      */
     virtual constexpr ptrdiff_t mtu() const noexcept = 0;
-    virtual constexpr std::chrono::milliseconds tts() const noexcept = 0;
+    virtual constexpr std::chrono::microseconds tts() const noexcept = 0;
     virtual void connect() = 0;
     virtual void close() = 0;
     virtual void send_pkt(const uint8_t* pkt, size_t len, _sendCb&& cb) = 0;
@@ -133,7 +132,7 @@ struct TransportUdp : Transport {
     // values should match ifconfig of interface: using 1500 for interface MTU and 1.2ms tts (10Mbps interface)
     // XXX had to remove "final" because of derived LoRa transport
     constexpr ptrdiff_t mtu() const noexcept final  { return 1500 - 40 - 8; }
-    constexpr std::chrono::milliseconds tts() const noexcept final  { return std::chrono::milliseconds(1500/(10000/8)); }
+    constexpr std::chrono::microseconds tts() const noexcept final  { return std::chrono::microseconds(1500/(10000/8)); }
 
     TransportUdp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
@@ -390,7 +389,7 @@ struct TransportTcp : Transport {
     // 64 bytes of signature plus 32 bytes of key locator) so an 8K mtu results in 99% efficiency
     // with 65ms worst-case jitter on a 1Mbps backhaul.
     constexpr ptrdiff_t mtu() const noexcept final { return max_pkt_size; }
-    constexpr std::chrono::milliseconds tts() const noexcept final  { return std::chrono::milliseconds(1500/(1000/8)); }
+    constexpr std::chrono::microseconds tts() const noexcept final  { return std::chrono::microseconds(1500/(1000/8)); }
 
     TransportTcp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
         : Transport(std::move(rcb), std::move(ccb)), sock_{ioc} { }
@@ -403,7 +402,7 @@ struct TransportTcp : Transport {
         sock_.close(ec);
     }
 
-    void doAfter(std::chrono::milliseconds delay, auto cb) {
+    void doAfter(std::chrono::microseconds delay, auto cb) {
         using Timer = boost::asio::system_timer;
         auto timer = std::make_unique<Timer>(sock_.get_executor(), delay);
         timer->async_wait([t=std::move(timer),cb=std::move(cb)](const auto& e) { if (e == boost::system::errc::success) cb(); });

@@ -3,7 +3,7 @@
 #  'schema' is the filename of the schema's .rules file
 PATH=../../../tools:$PATH
 
-device=(frontdoor backdoor gate patio)
+device=(frontdoor backdoor gate patio window1 window2 sidedoor garage)
 operator=(alice bob)
 
 if [ -z "$1" ]; then echo "-$0: must supply a .rules schema filename"; exit 1; fi;

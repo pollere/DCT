@@ -1,6 +1,7 @@
 CXXFLAGS = -g -O0 -std=c++20 -I../include
 #CXXFLAGS += -Wall -Wextra
 CXXFLAGS += -fsanitize=address,undefined
+#CXXFLAGS += -fuse-ld=/opt/local/libexec/llvm-19/bin/ld64.lld
 #CXXFLAGS = -Wall -Wextra -g -O3 -std=c++20 -I../include
 
 ifeq ($(shell uname -s),Linux)
@@ -13,6 +14,10 @@ CXXFLAGS += -I/opt/local/include
 # we can't fix boost warnings so suppress them
 CXXFLAGS += --system-header-prefix=boost/
 LDFLAGS += -L/opt/local/lib
+# llvm-18+ wrong libc++ bug work-around (19jan25)
+LLVM = $(shell llvm-config --prefix)
+LDFLAGS += -rpath $(LLVM)/lib/libc++ -rpath $(LLVM)/lib/libunwind
+LDFLAGS += -L$(LLVM)/lib/libc++ -lc++ -lc++abi
 endif
 
 CXXFLAGS += -I/usr/local/include
@@ -85,11 +90,19 @@ tst_crpack: tst_crpack.cpp
 	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
+tst_tdvclock: tst_tdvclock.cpp 
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
 tst_encoder: tst_encoder.cpp 
 	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
 tst_iblt: tst_iblt.cpp 
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
+tst_rand: tst_rand.cpp 
 	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 

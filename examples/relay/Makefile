@@ -20,6 +20,10 @@ ifeq ($(shell uname -s),Darwin)
 CXX=clang++
 LIBS += -L/opt/local/lib -lsodium
 JUNK += $(addsuffix .dSYM,$(BINS))
+# llvm-18+ wrong libc++ bug work-around (19jan25)
+LLVM = $(shell llvm-config --prefix)
+LDFLAGS += -rpath $(LLVM)/lib/libc++ -rpath $(LLVM)/lib/libunwind
+LDFLAGS += -L$(LLVM)/lib/libc++ -lc++ -lc++abi
 else
 CXX=clang++
 LIBS += -lsodium

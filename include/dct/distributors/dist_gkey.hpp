@@ -101,10 +101,10 @@ struct DistGKey {
     std::unordered_map<thumbPrint,thumbPrint> m_mbrIds{};
     std::unordered_map<thumbPrint,std::chrono::system_clock::time_point> m_mrSent;
 
-    std::chrono::milliseconds m_reKeyInt{3600s};
-    std::chrono::milliseconds m_keyRand{10s};
-    std::chrono::milliseconds m_keyLifetime{3600s+10s};
-    std::chrono::milliseconds m_mrLifetime{4s}; // set to ~ few dispersion delays
+    tdv_clock::duration m_reKeyInt{3600s};
+    tdv_clock::duration m_keyRand{10s};
+    tdv_clock::duration m_keyLifetime{3600s+10s};
+    tdv_clock::duration m_mrLifetime{4s}; // set to ~ few dispersion delays
     std::uniform_int_distribution<unsigned short> randInt_{2u, 9u};
     kmElection* m_kme{};
     uint32_t m_KMepoch{};        // current election epoch
@@ -129,9 +129,9 @@ struct DistGKey {
     }
 
     DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, addKeyCb&& gkeyCb, const certStore& cs,
-             std::chrono::milliseconds reKeyInterval = std::chrono::seconds(360), //XXX make methods
-             std::chrono::milliseconds reKeyRandomize = std::chrono::seconds(10),
-             std::chrono::milliseconds expirationGB = std::chrono::seconds(60)) :
+             tdv_clock::duration reKeyInterval = 3600s, //XXX make methods
+             tdv_clock::duration reKeyRandomize = 10s,
+             tdv_clock::duration expirationGB = 60s) :
              m_prefix{pPre}, m_gkPrefix{pPre/"gk"}, m_mrPrefix{pPre/"mr"},
              m_sync(face, dPre, m_keySM.ref(), m_keySM.ref()),
              m_certs{cs}, m_newKeyCb{std::move(gkeyCb)}, //called when a (new) group key arrives or is created
@@ -143,11 +143,11 @@ struct DistGKey {
        m_sync.autoStart(false); // shouldn't start until cert distributor is done initializing
        // if the syncps set its cStateLifetime longer, means we are on a low rate network
        if (m_sync.cStateLifetime_ < 6763ms) m_sync.cStateLifetime(6763ms);
-       m_sync.pubLifetime(std::chrono::milliseconds(reKeyInterval + reKeyRandomize + expirationGB));
-       m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),elec=crPrefix(m_prefix/"km"/"elec"),mreq=crPrefix(m_mrPrefix)](const auto& p) ->std::chrono::milliseconds {
+       m_sync.pubLifetime(tdv_clock::duration(reKeyInterval + reKeyRandomize + expirationGB));
+       m_sync.getLifetimeCb([this,cand=crPrefix(m_prefix/"km"/"cand"),elec=crPrefix(m_prefix/"km"/"elec"),mreq=crPrefix(m_mrPrefix)](const auto& p) ->tdv_clock::duration {
             auto n = p.name();
             if (mreq.isPrefix(n)) return m_mrLifetime;
-            if (cand.isPrefix(n) || elec.isPrefix(n)) return 3000ms;
+            if (cand.isPrefix(n) || elec.isPrefix(n)) return 3s;
             const auto& tp = p.signer();    // get thumbprint of this Pub's signer
             if (! crPrefix(m_gkPrefix).isPrefix(n)) return 0ms; // shouldn't happen - expect a gk list
             auto epoch = n.nextAt(m_gkPrefix.size()).toNumber();
@@ -185,7 +185,7 @@ struct DistGKey {
         auto now = std::chrono::system_clock::now();
         print("{:%M:%S} {} publishes a {} membership request\n",  ticks(now.time_since_epoch()), m_certs[m_tp].name(), m_sync.collName_.last().toSv());*/
         m_mrRefresh->cancel();  // if a membership request refresh is scheduled, cancel it       
-        crData p(m_mrPrefix/std::chrono::system_clock::now());
+        crData p(m_mrPrefix/m_sync.tdvcNow());
         p.content(std::vector<uint8_t>{});
         m_mrPending = true;
         try {
@@ -505,11 +505,13 @@ struct DistGKey {
         m_curKey.resize(aeadKeySz); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
         crypto_aead_xchacha20poly1305_ietf_keygen(m_curKey.data());
         //print("{} makes a new {} GK\n", m_certs[m_tp].name(), m_sync.collName_.last().toSv());
-        //set the key's creation time
+        //set the key's creation time using the domain virtual clock
+        auto vNow = m_sync.tdvcNow();
         m_curKeyCT = std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
+                        vNow.time_since_epoch()).count();
 
         // remove expired certs (thumbprints) from memberList
+        // could give some "grace time" if there is a non-zero tdvc but signing certs should have sufficient overlap
         auto now = std::chrono::system_clock::now();
         std::erase_if(m_mbrList, [this,now](auto& kv) { return m_certs.contains(kv.first)? rCert(m_certs[kv.first]).validUntil() < now : true; });
 
@@ -519,7 +521,7 @@ struct DistGKey {
         tlvEncoder gkrEnc{};    //tlv encoded content
         gkrEnc.addNumber(36, m_curKeyCT);
         gkrEnc.addArray(130, std::vector<gkr>{});
-        publishKeyRange(m_tp, m_tp, now, gkrEnc.vec());   // use own tp in range
+        publishKeyRange(m_tp, m_tp, vNow, gkrEnc.vec());   // use own tp in range
 
         auto s = m_mbrList.size();  // publish new gkey to all members
         if (s==0) {
@@ -544,7 +546,7 @@ struct DistGKey {
             gkrEnc.addNumber(36, m_curKeyCT);
             it = gkrEnc.addArray(130, it, r);
             auto l = i*m_maxKR;
-            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, now, gkrEnc.vec());
+            publishKeyRange(pubPairs[l].first, pubPairs[l+r-1].first, vNow, gkrEnc.vec());
             s -= r;
         }
         m_sync.batchDone(pcnt);
@@ -579,8 +581,6 @@ struct DistGKey {
 
     void addGroupMem(const rData& p) {
         if (!m_keyMaker) return;
-        // number of Publications should be fewer than 'complete peeling' iblt threshold (currently 80).
-        if (m_mbrList.size() == 80*m_maxKR) return;
 
         auto tp = p.signer();   // thumbprint of the signer of the member request (signing cert)
         if (m_msgsdist && isRelay(tp)) return;  // identities with RLY don't get pub keys
@@ -613,7 +613,7 @@ struct DistGKey {
         tlvEncoder gkrEnc{};    //tlv encoded content
         gkrEnc.addNumber(36, m_curKeyCT);
         gkrEnc.addArray(130, ek);
-        publishKeyRange(tp, tp, std::chrono::system_clock::now(), gkrEnc.vec());
+        publishKeyRange(tp, tp, m_sync.tdvcNow(), gkrEnc.vec());
     }
 
     // won't encrypt a group key for this thumbPrint in future

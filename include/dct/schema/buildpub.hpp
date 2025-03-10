@@ -41,9 +41,8 @@
 #include "rpacket.hpp"
 
 // parameter types allowed
-//using timeVal = std::chrono::sys_time<std::chrono::microseconds>;
 namespace dct {
-    using timeVal = std::chrono::time_point<std::chrono::system_clock>;
+    using timeVal = tdv_clock::time_point;
     using paramVal = std::variant<std::monostate, std::string, std::string_view, uint64_t, timeVal>;
     using parItem = std::pair<std::string_view, paramVal>;
 }
@@ -83,17 +82,14 @@ struct pTmplt {
 
 template<bool pbdebug = false>
 struct pubBldr {
-    // make a 'builder' for pub 'pub' of binary schema 'bs' using certificate store 'cs'.
-    pubBldr(const bSchema& bs, certStore& cs, bTok pub) : bs_{bs}, cs_{cs} {
-        pidx_ = bs_.findPub(pub);
-        if (pidx_ < 0) throw schema_error(dct::format("pub {} not found", pub));
-        makePubTmplts(findCerts());
-    }
-    // internal struct and utility definitions
-    template <typename... T>
-    static inline void dprint(fmt::format_string<T...> format_str, T&&... args) {
-        if constexpr (pbdebug) print(format_str, std::forward<T>(args)...);
-    }
+ 
+    // A paramVal is a variant type capable of holding any type that can
+    // be put in a crName component. Params is a vector of paramVals the
+    // same size as the pub template. Thus pub tag, template and Param
+    // indices are the same making it easy to build pubs and detect
+    // missing or duplicate params in build calls.
+    using Params = std::vector<paramVal>;
+
     struct tagMap : std::unordered_map<bTok,compidx> {
         using std::unordered_map<bTok,compidx>::unordered_map;
         compidx operator[](bTok key) const {
@@ -102,13 +98,44 @@ struct pubBldr {
         }
     };
 
-    // *** methods
+    bName tag_;                 // pub's tags
+    tagMap tm_{};               // tag name-to-component-index map
+    std::vector<pTmplt> pt_{};  // viable templates for pub
+    Params pdefault_{};
+    parmSet parmbm_{};
+    chainBM cbm_{};
+    const bSchema& bs_;
+    const certStore& cs_;
+    const tdv_clock& tdvc_;
+    std::unordered_map<bTok,bComp> ptm_{}; // pub-specific token map
+    std::vector<bTok> ptok_{};
+    std::string pstab_{};       // pub-specific string table
+    int pidx_{-1};              // pub's index in bs_.pub_
+
+    // make a 'builder' for pub 'pub' of binary schema 'bs' using certificate store 'cs'.
+    pubBldr(const bSchema& bs, const certStore& cs, const tdv_clock& tdvc, bTok pub) : bs_{bs}, cs_{cs}, tdvc_{tdvc} {
+        pidx_ = bs_.findPub(pub);
+        if (pidx_ < 0) throw schema_error(dct::format("pub {} not found", pub));
+        makePubTmplts(findCerts());
+    }
+
+    template <typename... T>
+    static inline void dprint(fmt::format_string<T...> format_str, T&&... args) {
+        if constexpr (pbdebug) print(format_str, std::forward<T>(args)...);
+    }
+
     std::string formatTok(bComp c) const {
+        constexpr static const std::array calls {
+            "timestamp","sysID","c2","c3","c4","c5","c6","c7","c8","c9","c10","c11","c12","c13","c14","c15",
+            "c16","c17","c18","c19","c20","c21","c22","c23", "c24","c25","c26","c27","c28","c29","c30","c31",
+        };
         std::string res{};
         if (c < maxTok) {
             res = bs_.tok_[c];
         } else if (isIndex(c)) {
             res = ptok_[typeValue(c)];
+        } else if (isCall(c)) {
+            res = dct::format("{:s}()", calls[typeValue(c)]);
         } else if (c == SC_ANON) {
             res = "_";
         } else {
@@ -310,14 +337,6 @@ struct pubBldr {
     }
 
     // routines to build and sign pubs
- 
-    // A paramVal is a variant type capable of holding any type that can
-    // be put in a crName component. Params is a vector of paramVals the
-    // same size as the pub template. Thus pub tag, template and Param
-    // indices are the same making it easy to build pubs and detect
-    // missing or duplicate params in build calls.
-
-    using Params = std::vector<paramVal>;
 
     // common routine for checking and adding one parameter value 'val' at component index 'c' of 'par'
     void doOneParam(Params& par, compidx c, paramVal val) {
@@ -355,7 +374,7 @@ struct pubBldr {
         if (!isCall(c)) throw schema_error(dct::format("invalid comp {} in template", c));
         // handle 'call()' ops
         c = typeValue(c);
-        if (c == 0) return res / std::chrono::system_clock::now();
+        if (c == 0) return res / tdvc_.now();
         if (c == 1) return res / sysID();
         throw schema_error(dct::format("invalid call {} in template", c));
     }
@@ -466,20 +485,6 @@ struct pubBldr {
 
     // tag name to component index
     auto index(std::string_view s) const { return tm_[s]; }
-
-    // *** variables
-    bName tag_;                 // pub's tags
-    tagMap tm_{};               // tag name-to-component-index map
-    std::vector<pTmplt> pt_{};  // viable templates for pub
-    Params pdefault_{};
-    parmSet parmbm_{};
-    chainBM cbm_{};
-    const bSchema& bs_;
-    certStore& cs_;
-    std::unordered_map<bTok,bComp> ptm_{}; // pub-specific token map
-    std::vector<bTok> ptok_{};
-    std::string pstab_{};       // pub-specific string table
-    int pidx_{-1};              // pub's index in bs_.pub_
 };
 
 } // namespace dct

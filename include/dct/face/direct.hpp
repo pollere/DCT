@@ -39,8 +39,9 @@
 #include <type_traits>
 #include <unordered_set>
 
-#include "transport.hpp"
+#include "dct/tdv_clock.hpp"
 #include "lpm_tables.hpp"
+#include "transport.hpp"
 
 namespace dct {
 
@@ -58,7 +59,16 @@ class DirectFace {
     using connectCbList = std::vector<std::pair<std::vector<uint8_t>, RegisterCb>>;
 
     boost::asio::io_context& ioContext_{getDefaultIoContext()};
-    dct::Transport& io_;   // boost async I/O transport (defaults to UDP6 multicast)
+    Transport& io_;   // boost async I/O transport (defaults to UDP6 multicast)
+
+    tdv_clock tdvclk_{};  // trust domain virtual clock for this subnet
+
+    tdv_clock::time_point tdvcNow() const noexcept { return tdvclk_.now(); }
+    auto tdvcAdjust() const noexcept { return tdvclk_.adjust(); }
+    tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur) noexcept { return tdvclk_.adjust(dur); }
+    void tdvcReset() noexcept { return tdvclk_.reset(); }
+    auto tdvcToSys(tdv_clock::time_point tp) const noexcept { return tdvclk_.to_sys(tp); }
+    auto tdvcFromSys(std::chrono::sys_time<tdv_clock::duration> tp) const noexcept { return tdvclk_.from_sys(tp); }
 
     RST rst_{}; // Registered State Table
     PST pst_{}; // Pending State Table

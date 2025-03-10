@@ -63,16 +63,18 @@ struct DistCert
     bool m_havePeer{false};
     bool m_initDone{false};
 
-    DistCert(DirectFace& face, const Name& pPre, const Name& wPre, addCertCb&& addCb, IsExpiredCb&& eCb) :
-        m_pubPrefix{pPre},
-        m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref())
+    DistCert(DirectFace& face, const Name& pPre, const Name& wPre, addCertCb&& addCb) :
+        m_pubPrefix{pPre}, m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref())
     {
         m_sync.cStateLifetime(4789ms);
-        m_sync.getLifetimeCb([](auto p) {
-                auto lt = rCert(p).validUntil() - std::chrono::system_clock::now();
-                return std::chrono::duration_cast<std::chrono::milliseconds>(lt);
+        m_sync.getCreationCb([this](const auto& p) { return m_sync.tdvcFromSys(rCert(p).validAfter()); });
+        m_sync.getLifetimeCb([](const auto& p) {
+                auto c = rCert(p);
+                return std::chrono::duration_cast<tdv_clock::duration>(c.validUntil() - c.validAfter());
             });
-        m_sync.isExpiredCb(std::move(eCb));
+        // Unlike most pubs, certs can go into the collection before they're valid since the validity period is
+        // checked when they're used but they expire at the end of their validity period. 
+        m_sync.isExpiredCb([](const auto& p) { return rCert(p).expired(); });
         m_sync.subscribe(m_pubPrefix, std::move(addCb));
     }
 

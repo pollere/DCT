@@ -109,6 +109,7 @@ static void msgPubr(mbps &cm) {
     std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
     if(role == "operator") {
         lastSend = std::chrono::system_clock::now().time_since_epoch();
+        tp2d(std::chrono::system_clock::now());
         mp = msgParms{{"target", capability},{"topic", "command"s},{"trgtLoc",l},{"topicArgs", a}};
     } else {
         mp = msgParms{{"target", capability},{"topic", "event"s},{"trgtLoc",myId},{"topicArgs", myState}};
@@ -122,7 +123,7 @@ static void msgPubr(mbps &cm) {
                             tp2d(now), role, myId, myPID, Cnt - 1, delivered? "confirmed":"timed out", dt);
                     });
         } catch (const std::exception&) {
-            std::cout << "    msg " << Cnt << " structure is not permitted for this entity\n";
+            dct::print("\t{}:{} tried to publish msg #{} with unpermitted structure\n", role, myId, Cnt);
         }
     } else {
 //         auto now = std::chrono::system_clock::now();
@@ -161,8 +162,8 @@ static void msgPubr(mbps &cm) {
 void msgRecv(mbps &cm, const mbpsMsg& mt, const std::span<const uint8_t>& msgPayload)
 {
     auto mtm = mt.time("_ts");
+    auto dt = (tp2d(cm.tdvcNow()) - tp2d(mtm)).count() / 1000.;
     auto now = tp2d(std::chrono::system_clock::now());
-    auto dt = (now - tp2d(mtm)).count() / 1000.;
     nRcv++;
 
     // actions can be conditional upon msgArgs and msgPayload
