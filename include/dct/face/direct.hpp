@@ -68,7 +68,7 @@ class DirectFace {
     tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur) noexcept { return tdvclk_.adjust(dur); }
     void tdvcReset() noexcept { return tdvclk_.reset(); }
     auto tdvcToSys(tdv_clock::time_point tp) const noexcept { return tdvclk_.to_sys(tp); }
-    auto tdvcFromSys(std::chrono::sys_time<tdv_clock::duration> tp) const noexcept { return tdvclk_.from_sys(tp); }
+    auto tdvcFromSys(auto tp) const noexcept { return tdvclk_.from_sys(tp); }
 
     RST rst_{}; // Registered State Table
     PST pst_{}; // Pending State Table

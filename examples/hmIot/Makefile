@@ -30,8 +30,9 @@ LDFLAGS += -L$(LLVM)/lib/libc++ -lc++ -lc++abi
 else
 # ubuntu packages are compiled with gcc and its sanitizer doesn't cooperate with clang's
 #CXX=c++
-#LIBS += -lpthread -lsodium
+#LIBS += -lpthread
 CXX=clang++
+LIBS += -L/usr/local/lib
 LIBS += -lsodium
 endif
 

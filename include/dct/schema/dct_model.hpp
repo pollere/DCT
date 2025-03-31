@@ -161,9 +161,7 @@ struct DCTmodel {
             // cert is structurally ok so see if it crytographically validates
             if (! cs_.contains(stp)) {
                 // don't have cert's signing cert - check it when that arrives
-                if (pending_.size() > 64) {
-                    // XXX too many pending certs - drop something
-                } 
+                // XXX too many pending certs - drop something
                 pending_.emplace(stp, cert);
                 return;
             }
@@ -396,10 +394,9 @@ struct DCTmodel {
         auto pdu_dist = m_gkd == NULL? m_sgkd != NULL :  true;
         auto pub_dist = m_pgkd == NULL ? m_psgkd != NULL :  true;
         if (!pdu_dist && !pub_dist) {
-        //m_ckd.setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
-                    if (!c) { cb(false); return; }
-                    if (m_virtClk) m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                    if (!m_virtClk || !c) { cb(c); if (c) m_sync.start(); return; }
+                    m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                 });
             return;
         }

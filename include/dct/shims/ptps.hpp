@@ -73,7 +73,7 @@ struct DCTmodelPT final : DCTmodel  {
     addChnCb m_rlyCertCb{};        //used to relay validated cert chain to shim
     thumbPrint m_tp{};                  // for testing for capability
 
-    bool wasRelayed(thumbPrint tp) { return m_rlyCerts.count(tp);}
+    bool wasRelayed(thumbPrint tp) { return m_rlyCerts.contains(tp);}
     void addRelayed(const thumbPrint tp, const dctCert& c) { m_rlyCerts[tp] = true;  addCert(c); }  // if c valid, add to certstore
     const auto& keysColl() { return m_gkSync; }
     auto& certColl() { return m_ckd.m_sync; }

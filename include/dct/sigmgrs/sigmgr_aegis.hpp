@@ -62,6 +62,10 @@
 #include <ranges>
 #include "sigmgr.hpp"
 
+#if SODIUM_LIBRARY_VERSION_MAJOR<11
+#warning libsodium too old for AEGIS support -- need v1.0.19 or later
+#else
+
 namespace dct {
 
 struct SigMgrAEGIS final : SigMgr {
@@ -172,4 +176,5 @@ struct SigMgrAEGIS final : SigMgr {
 
 } // namespace dct
 
+#endif // SODIUM_LIBRARY_VERSION_MAJOR<11
 #endif // SIGMGRAEGIS_HPP

@@ -293,8 +293,8 @@ struct TransportUdpA final : TransportUdp {
 
     TransportUdpA(std::string_view host, std::string_view port, asio::io_context& ioc,
             onRcv&& rcb, onConnect&& ccb) : TransportUdp(ioc, std::move(rcb), std::move(ccb)) {
-        auto dst = udp::resolver(ioc).resolve(host, port, udp::resolver::query::numeric_service);
-        asio::connect(sock_, dst.begin());
+        auto dst = udp::resolver(ioc).resolve(host, port, boost::asio::ip::resolver_base::numeric_service);
+        asio::connect(sock_, dst);
     }
 
     void connect() {
@@ -507,7 +507,7 @@ struct TransportTcpA final : TransportTcp {
     TransportTcpA(std::string_view host, std::string_view port, asio::io_context& ioc,
             onRcv&& rcb, onConnect&& ccb) : TransportTcp(ioc, std::move(rcb), std::move(ccb)) {
         boost::system::error_code ec{};
-        auto dst = tcp::resolver(ioc).resolve(host, port, tcp::resolver::query::numeric_service, ec);
+        auto dst = tcp::resolver(ioc).resolve(host, port, boost::asio::ip::resolver_base::numeric_service, ec);
         if (ec.failed()) throw runtime_error(dct::format("resolve {} failed: {}", host, ec.message()));
         peer_ = dst.begin()->endpoint(); //XXX maybe try entire list?
     }

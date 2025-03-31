@@ -255,7 +255,7 @@ struct SyncPS {
     tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur) noexcept { return face_.tdvcAdjust(dur); }
     void tdvcReset() noexcept { return face_.tdvcReset(); }
     auto tdvcToSys(tdv_clock::time_point tp) const noexcept { return face_.tdvcToSys(tp); }
-    auto tdvcFromSys(std::chrono::sys_time<tdv_clock::duration> tp) const noexcept { return face_.tdvcFromSys(tp); }
+    auto tdvcFromSys(auto tp) const noexcept { return face_.tdvcFromSys(tp); }
 
     const crName collName_;     // 'name' of the collection
     SigMgr& pktSigmgr_;         // cAdd packet signing and validation
@@ -357,8 +357,9 @@ struct SyncPS {
     SyncPS(DirectFace& face, rName collName, SigMgr& wsig, SigMgr& psig)
         : face_{face}, collName_{collName}, pktSigmgr_{wsig}, pubSigmgr_{psig} {
         // if auto-starting at the time 'run()' is called, fire off a register for collection name
-        getDefaultIoContext().dispatch([this]{ if (autoStart_) start(); });
-        // maxPubSize_ is the mtu minus (top-level TL + size of the name including csID + MetaInfo size + Content TL + crypto overhead)
+        boost::asio::dispatch(getDefaultIoContext(), [this]{ if (autoStart_) start(); });
+        // maxPubSize_ is the mtu minus
+        // (top-level TL + size of the name including csID + MetaInfo size + Content TL + crypto overhead)
         maxPubSize_ = mtu() - (4 + (collName_.ssize() + 2+4) + 5 + 3 + pktSigmgr_.sigSpace());
         // max information size (Name Value components plus Content Value) available for shim/distributor
         maxInfoSize_ = maxPubSize_ -(2 + 3 + pubSigmgr_.sigSpace() +2);

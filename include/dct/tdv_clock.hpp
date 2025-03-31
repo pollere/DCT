@@ -39,6 +39,7 @@ struct tdv_clock {
     typedef duration::rep rep;
     typedef duration::period period;
     typedef std::chrono::time_point<tdv_clock> time_point;
+    using sysclk_dur = decltype(std::chrono::system_clock::now().time_since_epoch());
     static constexpr const bool is_steady = false;
 
     time_point now() const noexcept { return time_point{
@@ -46,9 +47,9 @@ struct tdv_clock {
     duration adjust(duration delta) noexcept { return (_offset_ += delta); }
     duration adjust() const noexcept { return _offset_; }
     void reset() noexcept { _offset_ = duration::zero(); }
-    auto to_sys(time_point tdvctp) const noexcept { return std::chrono::sys_time<duration>{
+    auto to_sys(time_point tdvctp) const noexcept { return std::chrono::sys_time<sysclk_dur>{
         std::chrono::duration_cast<duration>(tdvctp.time_since_epoch() - _offset_)}; }
-    auto from_sys(std::chrono::sys_time<duration> systp) const noexcept { return time_point{
+    auto from_sys(std::chrono::sys_time<sysclk_dur> systp) const noexcept { return time_point{
         std::chrono::duration_cast<duration>(systp.time_since_epoch()) + _offset_}; }
   private:
     duration _offset_{duration::zero()};
