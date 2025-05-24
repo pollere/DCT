@@ -280,6 +280,15 @@ struct crName : crTLV<rName,tlv::Name> {
 template <typename C> requires requires(C&& c) { c.begin(); }
 static inline crName operator/(crName p, C&& c) { p.append(tlv::Generic, std::forward<C>(c)).done(); return p; }
 
+static inline crName operator/(crName p, crName&& n) {
+    for (const auto& c : n) p.append(c.m_blk);
+    p.done();
+    return p;
+}
+static inline crName operator/(crName p, const crName& n) { return p / crName{n}; }
+
+static inline crName operator/(crName p, tlvParser t) { return p.append(t.asSpan()).done(); }
+
 static inline crName operator/(crName p, std::string_view s) { p.append(tlv::Generic, s).done(); return p; }
 
 static inline crName operator/(crName p, uint64_t n) { p.append(tlv::SequenceNum, n).done(); return p; }

@@ -62,6 +62,7 @@ namespace dct {
 
 struct DistSGKey {
     using connectedCb = std::function<void(bool)>;
+    using logEvCb = std::function<void(crName&&, std::span<const uint8_t>)>;
 
     static constexpr uint32_t kxpkKeySz = crypto_kx_PUBLICKEYBYTES;
     static constexpr uint32_t kxskKeySz = crypto_kx_SECRETKEYBYTES;
@@ -94,6 +95,7 @@ struct DistSGKey {
     const certStore& m_certs;
     addKeyCb m_newKeyCb;   // called when subscriber group key pair rcvd
     connectedCb m_connCb{[](auto) {}};
+    logEvCb logsCb_{[](crName&&, std::span<const uint8_t>){}};  // default logs callback
     kmpriCB m_kmpri;   // to check a signing chain for key maker capability
     sgmCB m_sgMem;    //to check signing chain for sub group capability for this keys subcollection
     Cap::capChk m_relayChk; // method to return true if the identity chain has the relay (RLY) capability

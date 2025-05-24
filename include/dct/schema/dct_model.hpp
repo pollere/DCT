@@ -38,6 +38,7 @@
 #include "validate_bootstrap.hpp"
 #include "validate_pub.hpp"
 #include "dct/distributors/dist_cert.hpp"
+#include "dct/distributors/dist_logs.hpp"
 #include "dct/distributors/dist_tdvc.hpp"
 #include "dct/distributors/dist_gkey.hpp"
 #include "dct/distributors/dist_sgkey.hpp"
@@ -46,6 +47,8 @@ using namespace std::literals;
 
 namespace dct {
 
+// format for logging events - may want to add src if including in name is not sufficiently rigorous
+using logEvCb = std::function<void(crName&&, std::span<const uint8_t>)>;
 
 //template<typename sPub>
 struct DCTmodel {
@@ -61,13 +64,16 @@ struct DCTmodel {
     SyncPS m_sync;  // sync collection for msgs
     static inline std::function<size_t(std::string_view)> _s2i;
     DistCert m_ckd;         // cert collection distributor
+    DistLogs* lgd_{};         // logs collection distributor
     DistTDVC* m_vcd{};     // virtual clock distributor
     DistGKey* m_gkd{};      // group key distributor (if needed)
     DistSGKey* m_sgkd{};    // subscriber group key distributor (if needed)
     DistGKey* m_pgkd{};      // msgs group key distributor (if needed)
     DistSGKey* m_psgkd{};    // msgs subscriber group key distributor (if needed)
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
-    bool m_virtClk{false};     // true if using trust domain virtual clock distributor
+    bool m_virtClk{true};     // true if using trust domain virtual clock distributor
+    bool logging_{true};   // true if using the logs distributor
+    logEvCb logsCb_;
 
     // Trust Domain Virtual Clock access is via face (many things need its 'now()' method)
     auto tdvcNow() const noexcept { return face_.tdvcNow(); }
@@ -227,6 +233,8 @@ struct DCTmodel {
                 msgSigMgr().updateSigningKey(sp.second, sc);
                 pduSigMgr().updateSigningKey(sp.second, sc);
                 if (m_virtClk) m_vcd->updateSigningKey(sp.second, sc);
+                // if (logging_)
+                lgd_->updateSigningKey(sp.second, sc);
                 // update group key distributors for cAdds, if any
                 if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
                 else if (m_sgkd) m_sgkd->updateSigningKey(sp.second, sc);
@@ -261,10 +269,11 @@ struct DCTmodel {
             m_ckd{face_, pubPrefix(), pduPrefix()/"cert", [this](auto cert){ addCert(cert);}}
     {
         // sync session for msgs pubs is started after distributor(s) have completed their setup
-        m_sync.autoStart(false);
-        // check for using trust domain virtual clock
-        if (m_virtClk)
+        m_sync.autoStart(false);       
+        if (m_virtClk)  // check if using trust domain virtual clock
             m_vcd = new DistTDVC(face_, pubPrefix(), pduPrefix()/"tdvc", certs());
+        if (logging_)   // check if logging enabled
+            lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
         if(psm_.ref().encryptsContent()) {
             if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                 throw schema_error("Encrypted CAdds require that some entity(s) have KeyMaker capability");
@@ -359,7 +368,6 @@ struct DCTmodel {
     // only for timers that need to be canceled before they fire.
     auto schedule(std::chrono::microseconds delay, TimerCb&& cb) { return m_sync.schedule(delay, std::move(cb)); }
 
-
     // construct a pub name from pairs of tag, value parameters
     template<typename... Rest> requires ((sizeof...(Rest) & 1) == 0)
     auto name(Rest&&... rest) { return bld_.name(std::forward<Rest>(rest)...); }
@@ -393,39 +401,64 @@ struct DCTmodel {
     void start(connectedCb&& cb) {
         auto pdu_dist = m_gkd == NULL? m_sgkd != NULL :  true;
         auto pub_dist = m_pgkd == NULL ? m_psgkd != NULL :  true;
+        if (logging_) // logs callback - if not set uses  default no-op
+            logsCb_ = [lgd=lgd_] (crName&& ln, std::span<const uint8_t> c) mutable { lgd->publishLog(std::move(ln), c); };
+
         if (!pdu_dist && !pub_dist) {
             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
-                    if (!m_virtClk || !c) { cb(c); if (c) m_sync.start(); return; }
-                    m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                });
+                if (!c) { cb(false); return; }
+                if (logging_) {
+                    lgd_->setup([this,cb=std::move(cb)](bool c) {
+                               if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
+                               else { // set logs callback for distributors
+                                   if (m_virtClk) m_vcd->logsCb_ = logsCb_;
+                               }
+                     });
+                }
+                if (!m_virtClk) { cb(c); if (c) m_sync.start(); }
+                else m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); if (c) m_sync.start(); });
+            });
             return;
         }
 
         // complete pdu key distribution before pub key distribution
         if ( pdu_dist && !pub_dist ) {
             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
-                        if (!c) { cb(false); return; }
-                        if (m_virtClk) {
-                             m_vcd->setup([this,cb=std::move(cb)](bool c){
-                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
-                                if (m_gkd)
-                                    m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                                else    // must be m_psgkd
-                                    m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                       if (!c) { cb(false); return; }
+                       if (logging_) {    // log distributor should always return true but go ahead and continue without logging
+                           lgd_->setup([this,cb=std::move(cb)](bool c) {
+                               if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
+                               else { // set logs callback for distributors
+                                   if (m_virtClk) m_vcd->logsCb_ = logsCb_;
+                               }
                            });
-                        } else {    //no tdvc distributor
-                            if (m_gkd) {
-                                m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                            } else { // must be m_sgkd
-                                m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                            }
-                        }
-                    });
+                       }
+                       if (m_virtClk) {
+                           m_vcd->setup([this,cb=std::move(cb)](bool c){
+                                    if (!c) { cb(false); return; }  // check if pdu distributor returns false
+                                    if (m_gkd)
+                                        m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    else    // must be m_psgkd
+                                        m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                });
+                       } else {    //no tdvc distributor
+                           if (m_gkd) m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           else m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); }); // must be m_sgkd
+                       }
+             });
             return;
         } else  if ( !pdu_dist && pub_dist) {
              m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
-                        if (!c) { cb(false); return; }
-                        if (m_virtClk) {
+                       if (!c) { cb(false); return; }
+                       if (logging_) {    // log distributor should always return true but go ahead and continue without logging
+                           lgd_->setup([this,cb=std::move(cb)](bool c) {
+                               if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
+                               else { // set logs callback for distributors
+                                   if (m_virtClk) m_vcd->logsCb_ = logsCb_;
+                               }
+                           });
+                       }
+                       if (m_virtClk) {
                             m_vcd->setup([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false
                                 if (m_pgkd)
@@ -433,18 +466,26 @@ struct DCTmodel {
                                 else    // must be m_psgkd
                                     m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                            });
-                        } else {    //no tdvc distributor
+                       } else {    //no tdvc distributor
                             if (m_pgkd) {
                                 m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                             } else { // must be m_psgkd
                                 m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                             }
                         }
-                    });
+                    }); // end of ckd setup
             return;
         } else {    //both pdus and msgs have a distributor
            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
                     if (!c) { cb(false); return; }
+                    if (logging_) {    // log distributor should always return true but go ahead and continue without logging
+                           lgd_->setup([this,cb=std::move(cb)](bool c) {
+                               if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
+                               else { // set logs callback for distributors
+                                   if (m_virtClk) m_vcd->logsCb_ = logsCb_;
+                               }
+                           });
+                    }
                     if (m_virtClk) {
                         m_vcd->setup([this,cb=std::move(cb)](bool c){
                          if (!c) { cb(false); return; }  // check if gk distributor returns false
@@ -466,7 +507,7 @@ struct DCTmodel {
                            });
                         }
                       });
-                    } else {
+                    } else { // no tdvc
                         if (m_gkd) {
                             m_gkd->setup([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false

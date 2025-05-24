@@ -67,9 +67,12 @@ namespace dct {
 struct DistTDVC {
     static constexpr std::chrono::milliseconds MaxTDdiff = 60s;  // delays outside of this will be ignored
     int64_t calSp{300};  // number of seconds between status publications, fractions of this used for probe clocks, pings
+    //tdv_clock::duration tstDiff{60ms};  // XXX for testing
+
 
     using connectedCb = std::function<void(bool)>;
     using relayValueCb = std::function<void(thumbPrint, int64_t, size_t, size_t, tdv_clock::duration)>;
+    using logEvCb = std::function<void(crName&&, std::span<const uint8_t>)>;
 
     /*
      * DistTDVC Publications contain the value of their local system clock in their timestamp
@@ -92,6 +95,7 @@ struct DistTDVC {
     SyncPS m_sync;
     const certStore& m_certs;
     connectedCb m_connCb{[](auto) {}};
+    logEvCb logsCb_{[](crName&&, std::span<const uint8_t>){}};  // default logs callback
     relayValueCb m_relayCb{[](auto,auto,auto,auto,auto){}};  //only for relays/ptps: called when a new clock value received from neighbor
     size_t m_sentClks{};        // number of clock values sent this publishing round
     size_t m_nbrs{1};            // number of neighbors (incl. me) that were used in previous round's computation (neighborhood size)
@@ -293,7 +297,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      }
 
     void publishStatus() {
-        auto myId = m_certs[m_tp].name().nthBlk(2).toSv(); //XXX can add before vc field for debugging
+        auto myId = m_certs[m_tp].name()[2].toSv(); //XXX can add before vc field for debugging
         crData p(m_prefix/"sts"/m_nbrs/myId/m_sync.tdvcNow());
         p.content(std::vector<uint8_t>{});
         try { m_sync.signThenPublish(std::move(p)); }
@@ -318,19 +322,16 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
         if (++m_sentClks < m_set) m_sync.oneTime(m_computeDly/m_set + std::chrono::milliseconds(rand(20)),  [this](){ publishClock(); });
         else {
             m_sentClks = 0;
-            if (m_state == 0 || isRelay(m_tp)) return;
+            if (m_state == 0 || isRelay(m_tp)) return; // sending probe clocks or I'm a relay, so don't do computeOffset
             m_sync.oneTime(m_computeDly/m_set, [this](){ computeOffset(); });
         }
     }
 
-    // XXX for test/logging - no subscribers needed, use dctwatch and postprocess
+    // log distributor publishes to logs collection; use dctwatch and postprocess
     void publishCalibrate() {
-        auto myRole = m_certs[m_tp].name().nthBlk(1).toSv();
-        auto myId = m_certs[m_tp].name().nthBlk(2).toSv();
-        crData p(m_prefix/"cal"/myRole/myId/m_nbrs/m_sync.tdvcNow());
-        p.content(std::vector<uint8_t>{});
-        try { m_sync.signThenPublish(std::move(p)); }
-        catch (const std::exception& e) { std::cerr << "dist_tdvc::publishCalibrate: " << e.what() << std::endl; }
+        // name portion for tdvc calibrate log publication with role and role-id and # nbrs, no content
+        // XXX role and role-id only works for examples - consider using more of cert name to be more general?
+        logsCb_( crName("tdvc")  / "cal" / m_certs[m_tp].name()[1] / m_certs[m_tp].name()[2] / m_nbrs, {});
     }
 
     /*
@@ -340,7 +341,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
         if (m_state>0) return;   // already calibrating
         m_state = 2; //cleared when computeOffset finishes
         m_sentClks = 0;
-        if(m_init) publishCalibrate(); // testing only - gives my baseline clock for this session
+        if (m_init) publishCalibrate(); // logs my baseline clock
         publishClock();     //publish a set of clock values and  schedule a computeOffset upon completion
     }
 
@@ -368,7 +369,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
                 m_sync.oneTime(2*m_computeDly, [this](){ calculateDlys(); });
                 m_pinging = true;
             }
-            if (m_state==0) calibrateClock();
+            if (m_state==0) calibrateClock(); // always runs calibrateClock at start up
             return;
         }
       }
@@ -433,9 +434,11 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
           m_tolRnds = 0;
           m_state = 0;
           if (isRelay(m_tp)) m_nbrs = n;      
-          if (a != 0us) m_sync.tdvcAdjust(a); // apply adustment to the virtual clock
-          publishStatus();
-          m_sync.oneTime(100ms, [this](){ publishCalibrate(); }); // (temporary) logging function - delay so goes in sep cAdd
+          if (a != 0us) {
+              m_sync.tdvcAdjust(a); // apply adustment to the virtual clock
+              publishCalibrate();  // log changes to dvc only
+          }
+          publishStatus();        
           //dct::print("finishCalibration: {} with total virtual clock offset {}, {} nbrs ({} this session) sent={}\n", m_certs[m_tp].name().nthBlk(2).toSv(), m_sync.tdvcAdjust(), m_nbrs, m_adjust, m_sentClks);
           m_adjust = 0us;
           if (m_init) {
@@ -458,7 +461,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      */
      int m_zAdj;    // number of times I've used a zero adjustment
      void computeOffset() {
-         if (m_state==0 || isRelay(m_tp))  return;    // relay computes centrally
+         if (m_state==0 || isRelay(m_tp))  return;    // no clock differences or relay (computes centrally)
 
         // find my neighborhood size for the next round and nbrs who are in tolerance
         size_t z = 0;
@@ -576,8 +579,22 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      *
      * Calls its syncps's start() before returning to start participating in collection
      */
+
+     // XXX these 5 lines just for testing
+     /* std::chrono::milliseconds m_drift = std::chrono::milliseconds(5); //will get updated ~2.5 sec
+     void driftEm() {   // drift emulator
+        if (m_state == 0) m_sync.tdvcAdjust(rand(-2,4)*m_drift);    // don't do this if calibrating
+        m_sync.oneTime(std::chrono::seconds(calSp/2), [this](){ driftEm(); });
+      } */
+
     void setup(connectedCb&& ccb) {
-        m_connCb = std::move(ccb);      
+        m_connCb = std::move(ccb);
+        // XXXX for  testing - make an offset large enough to exceed tolerance
+        /*  if (!isRelay(m_tp)) {
+            auto t = rand(-5,10)*tstDiff;
+            m_sync.tdvcAdjust(t);   //emulates offset
+            m_sync.oneTime(std::chrono::seconds(calSp/2), [this](){ driftEm(); });
+         } */   // XXX - end testing lines
         m_sync.start();     // distributors "before" me have initialized (cert distributor)
         m_sync.subscribe(m_prefix/"clk", [this](const auto& p){ receiveClkValue(p); });
         m_sync.subscribe(m_prefix/"sts", [this](const auto& p){ receiveStsValue(p); });

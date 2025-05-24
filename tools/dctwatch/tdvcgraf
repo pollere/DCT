@@ -27,11 +27,11 @@ BEGIN {
     inTdvcAdd = 0
 }
 /^[0-9][0-9].* Ad /  {
-    if ($0 !~ /\/tdvc\//) {
+    if ($0 !~ /\/logs\//) {
         inTdvcAdd = 0
         next
     }
-    # Have a cAdd into the tdvc collection. Save the time it was
+    # Have a cAdd into the logs collection. Save the time it was
     # captured as a time reference for this data point..
     # The next line should start with a | and be the pub name
     # added to the collection. Extract its roleId and timestamp.
@@ -41,12 +41,12 @@ BEGIN {
 }
 inTdvcAdd && /^ \| / {
     nf = split($0, t, "/")
-    if (t[3] != "cal") {
+    if (t[3] != "tdvc") {
         if (doAll && !(t[3] in ptyp)) ptyp[t[3]] = t[3]
         if (!(t[3] in ptyp) || !(port in p2rid)) next
         roleId = p2rid[port] "-" t[3]
-    } else {
-        roleId = t[5]
+    } else if (t[4] == "cal") {
+        roleId = t[6]
         p2rid[port] = roleId
     }
     tdvts = ts(t[nf])

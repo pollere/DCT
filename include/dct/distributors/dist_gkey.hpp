@@ -63,6 +63,7 @@ namespace dct {
 
 struct DistGKey {
     using connectedCb = std::function<void(bool)>;
+    using logEvCb = std::function<void(crName&&, std::span<const uint8_t>)>;
 
     static constexpr uint32_t aeadKeySz = crypto_aead_xchacha20poly1305_IETF_KEYBYTES;
     static constexpr size_t encGKeySz = crypto_box_SEALBYTES + aeadKeySz;
@@ -90,6 +91,7 @@ struct DistGKey {
     const certStore& m_certs;
     addKeyCb m_newKeyCb;   // called when group key rcvd
     connectedCb m_connCb{[](auto) {}};
+    logEvCb logsCb_{[](crName&&, std::span<const uint8_t>){}};  // default logs callback
     kmpriCB m_kmpri;
     thumbPrint m_tp{};
     thumbPrint m_kmtp{};        // thumbprint of the keymaker  
@@ -401,7 +403,10 @@ struct DistGKey {
         // decrypt and save the key
         const auto& nk = it->second;
         uint8_t m[aeadKeySz];
-        if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) return;
+        if(crypto_box_seal_open(m, nk.data(), nk.size(), m_pDecKey.data(), m_sDecKey.data()) != 0) {
+            if(!m_mrPending) publishMembershipReq(); // make sure there is a published request
+            return;
+        }
 
         // print ("DistGKey::receiveGKey {} got a new key made at {}\n", (m_certs[m_tp]).name(), newCT);
         m_curKeyCT = newCT;

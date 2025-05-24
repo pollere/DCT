@@ -544,7 +544,7 @@ struct SyncPS {
      * @brief sign then publish pub
      */
     PubHash signThenPublish(crData&& pub, DelivCb&& cb={}) {
-        pubSigmgr_.sign(pub);
+        if (! pubSigmgr_.sign(pub)) return 0;
         if(cb)   return publish(std::move(pub), std::move(cb));
         return publish(std::move(pub));
     }
@@ -1023,7 +1023,6 @@ struct SyncPS {
                             onCAdd(rd);
                         },
                        [this](rName) -> void {
-                        // print("syncps register done\n");
                            registering_ = false;
                            face_.unsuppressCState(collName_/pubs_.iblt().rlEncode()); // force sending initial state
                            sendCState();
