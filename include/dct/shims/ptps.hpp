@@ -370,10 +370,10 @@ struct ptps
      * all signing certs and have 0 or "false" if locally received, but currently that is tested in
      * relay by not calling this method for chains that arrive locally
      *
-     * addRelayed() alls the dct model's checker m_pb.addCert(&c) just like is done on reception from a cAdd
+     * addRelayed() calls the dct model's checker m_pb.addCert(&c) just like is done on reception from a cAdd
      * which will check the cert for validity against this DefTT's trust schema.
      *
-     * Although the passed in cert should be valid against the trust schema of the originating DeftT,
+     * Although the passed in cert should be valid against the schema of the originating DeftT,
      * this is only useful for the case of identical trust schema for all DefTTs so is both
      * less general and not "belt and suspenders" security
      */
@@ -398,18 +398,17 @@ struct ptps
 
     /*
      * Pass all all received validated signing chains that were not relayed to me on to sibling deftt r
-     * (i.e., the signing chains of members on my face's subnet)
-     * nor are relay identities to r
+     * (i.e., the signing chains of members on my face's subnet) nor are relay identities to r
+     *
      * Intended for use when a DeftT connects
      */
     void passValidChains(const auto& r) {
         // print ("ptps:passValidChains: transport {} conn={} passing to {}\n", relayTo(), m_connected, r->relayTo());
         for (auto kv : m_pb.certs()) {
             auto c = kv.second;
-            if (m_pb.isSigningCert(c) && !m_pb.wasRelayed(kv.first)) {
-              if (!isRelay(kv.first))
+            // add "&& !m_pb.wasRelayed(kv.first)" to test if want to prefer getting from originator
+            if (m_pb.isSigningCert(c) && !isRelay(kv.first))
                     r->addRelayedChain(c, m_pb.certs());
-            }
         }
     }
 

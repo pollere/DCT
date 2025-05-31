@@ -13,7 +13,8 @@
 _domain:    "office"
 
 // Publication definition.
-// Use of mbps shim means publications have mId, sCnt, mts (set by mbps) and
+// _ts is set at publication build by the specified method.
+// Use of mbps shim means publications have mId, sCnt (set by mbps) and
 // at least one leading component to identify the domain. Between those
 // components, at least one more component followed by others as needed
 

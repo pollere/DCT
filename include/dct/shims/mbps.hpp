@@ -356,7 +356,7 @@ struct mbps
         }
 
         // determine name size in order to determine the space left for content
-        auto contentSp = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
+        auto contentSp = pubSpace_ - (m_pb.name(mp).size() + 4);   // add bytes in case multiple segments
         if (contentSp < 10) {
             dct::print("mbps::publish Publication name only leaves {} bytes for content\n", contentSp);
             return 0;

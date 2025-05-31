@@ -8,7 +8,8 @@ _domain:    "iot2"
 
 // MBPS Publication definition
 // target, topic, topicArgs are set using application parameters
-// msgID, sCnt, mts get set in mbps.hpp (the MBPS "shim") for a particular message
+// _ts and _origin are set at publication build by the specified methods
+// msgID, sCnt get set in mbps.hpp (the MBPS "shim") for a particular message
 // In addition, all trust schemas for mbps-based applications must include a #chainInfo
 // which lists all the signing chain tags so schemaLib can access them
 // A particular application process can make its subscription more

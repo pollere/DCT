@@ -71,8 +71,8 @@ struct DCTmodel {
     DistGKey* m_pgkd{};      // msgs group key distributor (if needed)
     DistSGKey* m_psgkd{};    // msgs subscriber group key distributor (if needed)
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
-    bool m_virtClk{true};     // true if using trust domain virtual clock distributor
-    bool logging_{true};   // true if using the logs distributor
+    bool m_virtClk{false};     // true if using trust domain virtual clock distributor
+    bool logging_{false};   // true if using the logs distributor
     logEvCb logsCb_;
 
     // Trust Domain Virtual Clock access is via face (many things need its 'now()' method)
@@ -233,8 +233,7 @@ struct DCTmodel {
                 msgSigMgr().updateSigningKey(sp.second, sc);
                 pduSigMgr().updateSigningKey(sp.second, sc);
                 if (m_virtClk) m_vcd->updateSigningKey(sp.second, sc);
-                // if (logging_)
-                lgd_->updateSigningKey(sp.second, sc);
+                if (logging_) lgd_->updateSigningKey(sp.second, sc);
                 // update group key distributors for cAdds, if any
                 if (m_gkd)   m_gkd->updateSigningKey(sp.second, sc);
                 else if (m_sgkd) m_sgkd->updateSigningKey(sp.second, sc);

@@ -106,7 +106,7 @@ struct DistGKey {
     tdv_clock::duration m_reKeyInt{3600s};
     tdv_clock::duration m_keyRand{10s};
     tdv_clock::duration m_keyLifetime{3600s+10s};
-    tdv_clock::duration m_mrLifetime{4s}; // set to ~ few dispersion delays
+    tdv_clock::duration m_mrLifetime{10s}; // set to ~ few dispersion delays, this is also the lifetime of non-empty gklists
     std::uniform_int_distribution<unsigned short> randInt_{2u, 9u};
     kmElection* m_kme{};
     uint32_t m_KMepoch{};        // current election epoch
