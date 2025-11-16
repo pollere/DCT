@@ -104,8 +104,8 @@ static void msgPubr(mbps &cm) {
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
 
-    std::string l = (std::rand() & 2)? "gate" : "frontdoor"; // randomly toggle targeted location
-    //std::string l = "frontdoor";
+    std::string l = (std::rand() & 2)? "frontdoor" : "gate"; // randomly toggle targeted location
+    //std::string l = "all";
     std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
     if(role == "operator") {
         lastSend = std::chrono::system_clock::now().time_since_epoch();
@@ -126,12 +126,12 @@ static void msgPubr(mbps &cm) {
             dct::print("\t{}:{} tried to publish msg #{} with unpermitted structure\n", role, myId, Cnt);
         }
     } else {
-//         auto now = std::chrono::system_clock::now();
-//        dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
+         auto now = std::chrono::system_clock::now();
+        dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
         try {
             cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
         } catch (const std::exception&) {
-            std::cout << "    msg " << Cnt << " structure is not permitted for this entity\n";
+            std::cout << "    msg " << Cnt << " structure (loc= " << l << ",cmd= " << a << ") is not permitted by schema for this entity\n";
         }
     }
 
@@ -226,7 +226,7 @@ int main(int argc, char* argv[])
     /*
      *  These are useful in developing DeftT-based applications and/or
      *  learning about Defined-trust Communications and DeftT.  The rootCert,
-     *  schemaCert, identityChain and currentSigningPair callbacks are how
+     *  schemaCert, identityChain and getSigningPair callbacks are how
      *  DeftT's internals request the four kinds of information needed to
      *  bootstrap an app. In a real deployment these would be handled in
      *  a Trusted Execution Environment. For expository purposes,
@@ -240,8 +240,9 @@ int main(int argc, char* argv[])
     readBootstrap(argv[optind]);
 
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
-    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return getSigningPair();}, addr);
+    // cert chain, and the signing secret key plus public cert (see util/identity_access.hpp)
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();},
+            [itp=dct::idTag()](std::chrono::microseconds a){return getSigningPair(itp, a);}, addr);
 
     // this example application needs information about some of its identity attributes which can now be returned by
     // DeftT modules through the shim but this may not be needed in a deployed application

@@ -47,7 +47,6 @@ using dct::readBootstrap;
 using dct::rootCert;
 using dct::schemaCert;
 using dct::identityChain;
-using dct::currentSigningPair;
 using dct::getSigningPair;
 
 

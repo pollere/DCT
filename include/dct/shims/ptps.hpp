@@ -100,10 +100,12 @@ struct DCTmodelPT final : DCTmodel  {
     }
 
     // domain virtual clock methods
-    void setRlyCbVC(std::function<void(dct::thumbPrint, int64_t, size_t, size_t, tdv_clock::duration)> rcb) { if (m_vcd) m_vcd->setRelayCb(rcb); }
-    void setSetSzVC(size_t s) { if (m_vcd) m_vcd->m_set = s; }
+    void setRlyCbVC(std::function<void(dct::thumbPrint, int64_t, size_t, size_t)> rcb) { if (m_vcd) m_vcd->setRelayCb(rcb); }
+    size_t vcSetSz() { if (m_vcd) return m_vcd->getSetSize(); else return 0; }
     void vcRound(uint8_t s, std::chrono::microseconds a, size_t n) { if(m_vcd) m_vcd->publishRound(s,a,n);}
-    void calibrateVC() { if (m_vcd) m_vcd->calibrateClock(); }
+    void vcCalibrate() { if (m_vcd) m_vcd->calibrateClock(); }
+    dct::tdv_clock::duration  vcComputeDly() {  if (m_vcd) return m_vcd->getComputeDly(); else return 0ms; }
+    dct::tdv_clock::duration vcNhdDly() { if(m_vcd) return m_vcd->getNhdDly(); else return 0ms; }
     void finishCalibrateVC( std::chrono::microseconds adj, uint8_t n) { if (m_vcd) m_vcd->finishCalibration(adj, n); }
 
     // checks if capability c is present and, if so, returns its argument (as a stringview)
@@ -125,6 +127,7 @@ struct DCTmodelPT final : DCTmodel  {
             DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, [this,a=addrLoc]{ return capArgument(a);}  ),
             ptPubSm_{msm_.ref()}
     {
+        m_sync.tdvcReset(); //VCTEST - resets the vc if dctmodel changed it
         m_tp = cs_.Chains()[0]; // thumbprint of signing cert
         // reset  m_sync.pubSigmgr_ to syncPTSm_ to use the pass-through version
         syncSm_.setSigMgr(ptPubSm_);
@@ -178,20 +181,24 @@ struct ptps
      // virtual clock
      pTimer m_tdvcTimer{std::make_shared<Timer>(getDefaultIoContext())};
      bool haveVC() { return m_pb.m_virtClk; }
-     void setupVC(size_t s, std::function<void(dct::thumbPrint, int64_t, size_t, size_t, tdv_clock::duration)> rcb) {
-         m_pb.setSetSzVC(s);
+     void setupVC(std::function<void(dct::thumbPrint, int64_t, size_t, size_t)> rcb) {
          m_pb.setRlyCbVC(std::move(rcb));
      }
-    void calibrate() { m_pb.calibrateVC(); }
+    void calibrate() { m_pb.vcCalibrate(); }
     void finishCalibrate( std::chrono::microseconds adj, uint8_t n) { m_pb.finishCalibrateVC(adj, n); }
+    auto tdvcNow() { return m_pb.tdvcNow(); }
     auto tdvcAdjust() const noexcept { return m_pb.face_.tdvcAdjust(); }
     dct::tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur, int8_t n) noexcept
     {
-        if (m_pb.m_vcd) m_pb.m_vcd->m_nbrs = n;
+        if (m_pb.m_vcd) m_pb.m_vcd->vs_.nbrs = n;
         return m_pb.face_.tdvcAdjust(dur);
     }
-    auto VCisStarted() { if(m_pb.m_vcd) return m_pb.m_vcd->isStarted(); return false; }
+    auto vcIsStarted() { if(m_pb.m_vcd) return m_pb.m_vcd->isStarted(); return false; }
     void vcRound(size_t r, std::chrono::microseconds a, uint8_t n) { m_pb.vcRound(r, a, n); }
+    auto vcSetSz() { return m_pb.vcSetSz(); }
+    dct::tdv_clock::duration vcComputeDly() { return m_pb.vcComputeDly(); }
+    dct::tdv_clock::duration vcNhdDly() { return m_pb.vcNhdDly(); }
+    auto vcMgr() { return m_pb.m_vcd; }
 
     ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
              std::string_view addrLoc, const chnCb& certHndlr = {}, const pubCb& distCb = {}, const pubCb& failCb={}) :

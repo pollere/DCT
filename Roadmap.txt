@@ -1,0 +1,18 @@
+Roadmap (or hopeful to-do list)
+
+1. Better integration of TCP
+    - certs
+    - specification in rules files
+    - make sure ONLY validated client can use up the tcp port
+    = fill transmission "pipe"
+2. Streamline distributors
+    - templatize
+    - improve how they get set up in dct_model
+3. Visibility of parameters that might be changed for different environments
+    - collect in a text note
+    - collect for ease of setting
+4. Update documentation (ugh)
+5. VerSec improvements
+6. Evaluate whether IBLT advances can be useful for syncps
+7. Home Assistant integration
+8. Implement trusted guest/worker framework

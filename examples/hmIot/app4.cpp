@@ -274,7 +274,7 @@ int main(int argc, char* argv[])
     /*
      *  These are useful in developing DeftT-based applications and/or
      *  learning about Defined-trust Communications and DeftT.  The rootCert,
-     *  schemaCert, identityChain and currentSigningPair callbacks are how
+     *  schemaCert, identityChain and getSigningPair callbacks are how
      *  DeftT's internals request the four kinds of information needed to
      *  bootstrap an app. In a real deployment these would be handled in
      *  a Trusted Execution Environment. For expository purposes,
@@ -289,8 +289,9 @@ int main(int argc, char* argv[])
     readBootstrap(argv[optind]);
 
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
-    // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
-    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return getSigningPair();}, addr);
+    // cert chain, and the signing secret key plus public cert (see util/identity_access.hpp)
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();},
+            [itp=dct::idTag()](std::chrono::microseconds a){return getSigningPair(itp, a);}, addr);
 
     // this example application needs information about some of its identity attributes which can now be returned by
     // DeftT modules through the shim but this may not be needed in a deployed application

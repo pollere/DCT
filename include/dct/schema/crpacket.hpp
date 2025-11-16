@@ -35,7 +35,6 @@
 
 namespace dct {
 
-using namespace std::literals::chrono_literals;
 
 // build a 'complete' raw TLV - vector containing TLV's data together with an rPacket view of it.
 
@@ -47,7 +46,7 @@ struct crTLV : rView {
 
     constexpr auto tlvType() const noexcept { return thisTLV; }
     constexpr auto tlvNum() const noexcept { return (uint8_t)thisTLV; }
-    constexpr rView& asView() const noexcept { return *this; }
+    constexpr const rView& asView() const noexcept { return *this; }
 
     // tlvBytes() is the #bytes of tlv header needed, tlvSize() is the total size of the tlv block
     static constexpr size_t tlvBytes(size_t len) noexcept { return len < extra? 2 : 4; }
@@ -400,6 +399,8 @@ struct crCert : crData {
     crCert(rCert d) : crData{d} { }
     crCert(crName&& n) : crData{std::move(n), tlv::ContentType_Key} { }
     crCert(rName n)  : crData{n, tlv::ContentType_Key} { }
+
+    bool valid(std::chrono::microseconds a=0us, bool vcCal=true) const noexcept { return rCert(asView()).valid(a,vcCal); }
 };
 
 } // namespace dct

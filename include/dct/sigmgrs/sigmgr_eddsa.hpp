@@ -135,7 +135,7 @@ struct SigMgrEdDSA final : SigMgr {
 
     bool validate(rData d) override final {
         assert(m_keyCb != 0);
-        try { return validate(d, m_keyCb(d)); } catch (...) {}
+        try { return validate(d, m_keyCb(d)); } catch (...) { /*dct::print("sigmgr unable to validate name={}\n", d.name());*/ }
         return false;
     }
 

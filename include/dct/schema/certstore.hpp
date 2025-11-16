@@ -42,6 +42,7 @@ using keyVal = std::vector<uint8_t>;
 using certAddCb = std::function<void(const dctCert&)>;
 using chainAddCb = std::function<void(const dctCert&)>;
 using certRemoveCb = std::function<void(const thumbPrint&)>;
+using clkAdjustCb = std::function<std::chrono::microseconds()>;
 
 struct certStore {
     std::unordered_map<thumbPrint,dctCert> certs_{}; // validated certs
@@ -50,6 +51,7 @@ struct certStore {
     certAddCb addCb_{[](const dctCert&){}};          // called when a cert is added
     chainAddCb chainAddCb_{[](const dctCert&){}};    // called when any new signing chain is added
     certRemoveCb certRemoveCb_{[](const thumbPrint&){}};    // called when a cert is being removed
+    clkAdjustCb clkAdjustCb_{[]{return std::chrono::microseconds(0);}};    // adjustment to system clock for domain clock
     static constexpr thumbPrint ztp_{};              // self-signed cert's thumbprint
 
     void dumpcerts() const {
@@ -61,26 +63,26 @@ struct certStore {
     auto begin() const { return certs_.cbegin(); }
     auto end() const { return certs_.cend(); }
 
-    // certs are evaluated against the system clock. In case of a large tdvcAdjust value,
-    // may want to allow for grace period. However, normally expect members to take
-    // that into account when computing certOverlap for making new signing pairs
-    auto removeExpired() {  // remove expired certs
-        std::erase_if(certs_, [this,now = std::chrono::system_clock::now()](const auto& i) {
-                if (rCert(i.second).validUntil() > now) return false;
+    // remove expired certs
+    auto removeExpired() {
+        auto a = clkAdjustCb_();    // cert methods use system clock plus passed in adjustment if any
+        std::erase_if(certs_, [this,a](const auto& i) {
+                if (rCert(i.second).validNow(a)) return false;   // don't remove valid cert
                 // print("removeExpired {} @{:%T}\n", i.second.name(), now);
                 const auto& tp = i.first;
-                // remove any msg validation state associated with this cert
-                certRemoveCb_(tp);
-                // if we have a signing key for this cert remove it
+                // if we have a signing key for this cert remove it unless we have only one signing chain (just use old till updated)
                 if (key_.contains(tp)) {
+                    if (chains_.size() == 1) {
+                       print("certStore::removeExpired @{} {} won't remove only signing cert for {}\n",
+                              std::chrono::system_clock::now(), certs_[chains_[0]].name().nthBlk(2).toSv(),  i.second.name());
+                        return false;
+                    }
                     // print(" removing key: have {} keys and {} chains,", key_.size(), chains_.size());
                     std::erase_if(key_, [&tp](const auto& k) { return k.first == tp; });
                     std::erase(chains_, tp);
                     // print(" after remove have {} keys and {} chains\n", key_.size(), chains_.size());
-                    if (chains_.size() == 0) {
-                        print("removeExpired @{} removed my only signing cert {}\n", now, i.second.name());
-                    }
-                }
+                }                          
+                certRemoveCb_(tp);   // remove any msg validation state associated with this cert
                 return true;
             });
     }
@@ -126,23 +128,23 @@ struct certStore {
     // All return an <iterator,status> pair the points to the element added with
     // 'status' true if the element was added and false if it was already there.
     auto add(const dctCert& c) {
-        if (! c.valid()) {
-            print("cert {} invalid\n", c.name());
+        if (! c.valid(clkAdjustCb_())) {    // cert methods use system clock plus passed in adjustment if any)) {
+            print("cerStore::add(): cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         return finishAdd(certs_.try_emplace(c.computeTP(), c));
     }
-    auto add(dctCert&& c) {
-        if (! c.valid()) {
-            print("cert {} invalid\n", c.name());
+    auto add(dctCert&& c, bool i=true) {
+        if (! c.valid(clkAdjustCb_(), i)) {
+            print("certStore::add(c): cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         return finishAdd(certs_.try_emplace(c.computeTP(), std::move(c)));
     }
 
     auto add(const dctCert& c, const keyVal& k) {
-        if (! c.valid()) {
-            print("cert {} invalid\n", c.name());
+        if (! c.valid(clkAdjustCb_())) {
+            print("certStore::add(c,k): cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         auto it = finishAdd(certs_.try_emplace(c.computeTP(), c));
@@ -156,7 +158,7 @@ struct certStore {
     // add a new signing pair after update. Publishing is handled by calling routine
     // so by passes the addCb_ which is for certs of others arriving through my face
     auto addNewSP(const dctCert& c, const keyVal& k) {
-        if (! c.valid()) {
+        if (! c.valid(clkAdjustCb_())) {
             print("cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }

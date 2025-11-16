@@ -122,7 +122,8 @@ int main(int argc, char* argv[])
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
    //Create the mbps DeftT
-    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();}, []{return getSigningPair();});
+    mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();},
+        [itp=dct::idTag()](std::chrono::microseconds a){return getSigningPair(itp, a);});
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");
     room = cm.attribute("_roomId");

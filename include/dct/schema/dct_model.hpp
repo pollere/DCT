@@ -42,6 +42,7 @@
 #include "dct/distributors/dist_tdvc.hpp"
 #include "dct/distributors/dist_gkey.hpp"
 #include "dct/distributors/dist_sgkey.hpp"
+#include "dct/rand.hpp"
 
 using namespace std::literals;
 
@@ -73,7 +74,9 @@ struct DCTmodel {
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
     bool m_virtClk{false};     // true if using trust domain virtual clock distributor
     bool logging_{false};   // true if using the logs distributor
+    bool vcInit_{false};   // becomes true after initial TD VClk calibration has been done
     logEvCb logsCb_;
+    pTimer makeSP_{std::make_shared<Timer>(getDefaultIoContext())}; // timer for making next signing pair
 
     // Trust Domain Virtual Clock access is via face (many things need its 'now()' method)
     auto tdvcNow() const noexcept { return face_.tdvcNow(); }
@@ -96,7 +99,7 @@ struct DCTmodel {
 
     bool isSigningCert(const dctCert& cert) const {
         // signing certs are the first item each signing chain so go through
-        // all the chains and see if the first item matches 'cert'
+        // all thetemplate chains and see if the first item matches 'cert'
         for (const auto& chn : bs_.chain_) {
             if (chn.size() == 0) continue;
             if (matches(bs_, cert.name(), chn[0])) return true;
@@ -138,6 +141,7 @@ struct DCTmodel {
     // Cryptographically and structurally validate a cert before adding it to the
     // cert store. Since certs can arrive in any order, a small number of certs
     // are held pending their signing cert's arrival.
+    // XXX Need to replace identity certs that get "decommissioned"
     void addCert(rData d) {
         const auto tp = d.computeTP();
         if (cs_.contains(tp)) return;
@@ -153,16 +157,19 @@ struct DCTmodel {
         // XXX eventually need tools to securely check/update certs & bundles
         try {
             auto cert = rCert{d};
-            if (! cert.valid(certSigMgr().type())) return;
+            if (m_virtClk && !vcInit_ && isSigningCert(cert)) {
+                 if (! cert.valid(certSigMgr().type(), tdvcAdjust(), false)) return; //don't check the validity period until clock calibration
+            } else if (! cert.valid(certSigMgr().type())) return;
             auto cname = tlvVec(cert.name());
             if (matchesAny(bs_, cname) < 0) return; // name doesn't match schema
 
-            const auto& stp = cert.signer();    // cert's signer's (identity) thumbprint
+            const auto& stp = cert.signer();    // cert's signer's thumbprint
             if (dctCert::selfSigned(stp)) return; // can't add new root cert
             if (cname.size() >= 7 && cname[-6].toSv() == "schema") return; // can't add new schema
 
             // check if receiving a cert signed by my identity, implying an earlier signing cert of my identity
             if (!cs_.contains(cs_.chains_[0])) std::runtime_error ("DCTmodel::addCert: this member has no signing cert");
+            if ( (cs_.get(cs_.chains_[0])).signer() == stp) return;
  
             // cert is structurally ok so see if it crytographically validates
             if (! cs_.contains(stp)) {
@@ -179,10 +186,12 @@ struct DCTmodel {
                 // against the schema. If the chain is ok, set up structural validation
                 // state for pubs signed with this thumbprint.
                 if (validateChain(bs_, cs_, cert) < 0) return; // chain structure invalid
-                cs_.add(cert);
+                cs_.add(cert, !(m_virtClk & !vcInit_)); // second arg true => no check of validNow
                 setupPubValidator(tp);
                 // let all attached collections know there is a new signer in case have pending Publications
                 // start with PDU key collection, then Pub key collection, then msgs collection
+                if (m_virtClk) m_vcd->m_sync.newSigner(tp);
+                if (logging_) lgd_->m_sync.newSigner(tp);
                 if (m_gkd)   m_gkd->m_sync.newSigner(tp);
                 else if (m_sgkd) m_sgkd->m_sync.newSigner(tp);
                 if (m_pgkd)   m_pgkd->m_sync.newSigner(tp);
@@ -190,9 +199,11 @@ struct DCTmodel {
                 m_sync.newSigner(tp);
                 return; // done since signing cert validation completes the chain
             }
-            cs_.add(cert);
+            cs_.add(cert);  //non-signing cert
             checkPendingCerts(cert, tp);
-        } catch (const std::exception&) {};
+        } catch (const std::exception&) {
+        dct::print("addCert:: {} CATCH rejects sc {}\n", cs_[cs_.Chains()[0]].name().nthBlk(2).toSv(), d.name());
+        };
     }
 
     // schedule a call to 'cb' in 'd' microseconds (cannot be canceled)
@@ -200,35 +211,52 @@ struct DCTmodel {
         m_sync.oneTime(std::chrono::duration_cast<std::chrono::microseconds>(delay), std::move(cb));
     }
 
+    // Can be used by application to schedule a cancelable timer. Note that
+    // this is expensive compared to a oneTime timer and should be used
+    // only for timers that need to be canceled before they fire.
+    auto schedule(std::chrono::microseconds delay, TimerCb&& cb) { return m_sync.schedule(delay, std::move(cb)); }
+
     /*
      *  called to get a new signing pair
-     *  new SPs are shipped certOverlap/2 after they become valid and are valid for certOverlap in addition to the certLifetime
+     *
      * Handles adding the new cert to cs_, publishing it, and making it the new signing key  and informing the group key distributors, if any
      * Waits for a publication confirmation before making this pair the new signing pair and calling the group key distributors
      *
+     *  new SPs should be created as valid certOverlap/2 before systime+tdvcAdjust
+     *  and are valid for certOverlap plus certLifetime after that
+     *
      * Configured certs should be made on devices with calibrated clocks; assuming system clock for signing certs
-     * If tdvcAdjust() is on the order of certOverlap or larger, may need to adjust certOverlap or pass tdvc to the spCb()
-     * and use tdvc in expire checks
+     * If tdvcAdjust() is on the order of certOverlap or larger, creates issues
+     * Pass tdvcAdjust value to the spCb() with default of 0 and the SP-making function must add it to the system clock
+     * and must return a pair that is currently in its validity period
+     * Instead of checking for "expired" need to check for "valid" in case tdvc has been adjusted
     */
-    void getNewSP(const pairCb& spCb) {
-        auto sp = spCb();       //new signing key pair callback
-        auto sc = sp.first;     // public cert of pair
-        auto now = std::chrono::system_clock::now();
-        auto nt = rCert(sc).validUntil() - certOverlap;   // schedule next rekey for certOverlap before expiration time
-        if (nt <= now)
-            std::runtime_error("getNewSP was handed an expired cert");
-        oneTime(nt-now, [this,spCb]{getNewSP(spCb);});    //schedule re-keying
 
-        auto addKP = [this](auto& sp){
-            auto sc = sp.first;
-            cs_.addNewSP(sc, sp.second);   //add this signing pair to cs_ but do not publish
-            m_ckd.publishConfCert(sc, [this, sp](const rData& c, bool acked){    //publish with conf cb
+    void expireTmSP(const rCert& sc, const pairCb& spCb) {
+        auto now = std::chrono::system_clock::now();
+        // next rekey time is certOverlap before expiration time
+        auto rktm = (rCert(sc).validUntil() - now) - certOverlap - tdvcAdjust();
+        // schedule should cancel pending
+        makeSP_ = schedule(rktm, [this, spCb](){getNewSP(spCb);});    //schedule new signing pair
+    }
+    void getNewSP(const pairCb& spCb) {
+        auto sp = spCb(tdvcAdjust());       //new signing key pair callback
+        auto sc = sp.first;     // public cert of pair
+        if (!rCert(sc).valid(certSigMgr().type()) || !rCert(sc).validNow(tdvcAdjust()))    // should check if cert is valid at tdvcNow
+            std::runtime_error("dct_model::getNewSP received signing cert that is not valid at (virtual) now\n");
+        expireTmSP(sc, spCb);    //schedules next getNewSP based on expiration time of new cert
+
+        cs_.addNewSP(sc, sp.second);   //add this signing pair to cs_ but do not publish
+        m_ckd.publishConfCert(sc, [this, sp](const rData& c, bool acked){    //publish with conf cb
                 if (!acked) return;   // unlikely unless became entirely disconnected and cert expired
                 auto sc = sp.first;
                 if (sc.computeTP() != c.computeTP())  std::runtime_error("dct_model:getNewSP:addKP confirmed cert does not match passed in cert");
                 // should be no issue with chain since it hasn't changed so may skip this
                 if (validateChain(bs_, cs_, sc) < 0) throw schema_error(format("getNewSP:addKP cert {} signing chain invalid", sc.name()));
                 cs_.insertChain(sc);                // make it a signing chain head
+                // a good time to check my cert store for expired certs unless using virt clk and not initialized
+                if (!m_virtClk || vcInit_) cs_.removeExpired();
+
                 // pass new signing pair to sigmgrs and distributors
                 msgSigMgr().updateSigningKey(sp.second, sc);
                 pduSigMgr().updateSigningKey(sp.second, sc);
@@ -241,14 +269,6 @@ struct DCTmodel {
                 if (m_pgkd)   m_pgkd->updateSigningKey(sp.second, sc);
                 else if (m_psgkd) m_psgkd->updateSigningKey(sp.second, sc);
             });
-        };
-
-        // schedule usage of the new pair once validity period starts, wait half the overlap to handle clock skew
-        // if certs are made valid certOverlap/2 in the past, this should execute immediately
-        oneTime(rCert(sc).validAfter() - now + certOverlap/2, [addKP,sp] { addKP(sp); } );
-
-        // this would be a good time to check my cert store for expired certs
-        cs_.removeExpired();
     }
 
     using strCb = std::function<std::string_view()>;
@@ -268,9 +288,11 @@ struct DCTmodel {
             m_ckd{face_, pubPrefix(), pduPrefix()/"cert", [this](auto cert){ addCert(cert);}}
     {
         // sync session for msgs pubs is started after distributor(s) have completed their setup
-        m_sync.autoStart(false);       
+        m_sync.autoStart(false);
+
         if (m_virtClk)  // check if using trust domain virtual clock
-            m_vcd = new DistTDVC(face_, pubPrefix(), pduPrefix()/"tdvc", certs());
+            m_vcd = new DistTDVC(face_, pubPrefix(), pduPrefix()/"tdvc", certs(),  [this, signIdCb](){getNewSP(signIdCb);},
+                                [this, signIdCb](const rCert& c){ expireTmSP(c, signIdCb); });
         if (logging_)   // check if logging enabled
             lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
         if(psm_.ref().encryptsContent()) {
@@ -309,6 +331,7 @@ struct DCTmodel {
             }
         }
 
+        if (m_virtClk) cs_.clkAdjustCb_ = [this](){ return tdvcAdjust(); };
         // cert distributor needs a callback when cert added to certstore.
         cs_.addCb_ = [&ckd=m_ckd] (const dctCert& cert) { ckd.publishCert(cert); };
         // cert distributor needs a callback to remove pubValidator for expiring signing certs
@@ -330,7 +353,10 @@ struct DCTmodel {
         _s2i = std::bind(&decltype(bld_)::index, bld_, std::placeholders::_1);
 
         // set up timer to request a new signing pair before this pair expires (getNewSP sets up subsequent rekeys)
-        oneTime( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - dct::certOverlap,
+        // uses system clock as no tdvc possible yet
+        // XXX this first signing key could have an extended lifetime if clock drifts are expected to be extreme
+        // but also need to use a wider range when testing the signing chain of other members
+        makeSP_ = schedule( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - dct::certOverlap,
                  [this, signIdCb] {getNewSP(signIdCb);});
     }
 
@@ -361,11 +387,6 @@ struct DCTmodel {
         m_sync.pubExpirationGB(t);
         return *this;    
     }
-
-    // Can be used by application to schedule a cancelable timer. Note that
-    // this is expensive compared to a oneTime timer and should be used
-    // only for timers that need to be canceled before they fire.
-    auto schedule(std::chrono::microseconds delay, TimerCb&& cb) { return m_sync.schedule(delay, std::move(cb)); }
 
     // construct a pub name from pairs of tag, value parameters
     template<typename... Rest> requires ((sizeof...(Rest) & 1) == 0)
@@ -415,7 +436,7 @@ struct DCTmodel {
                      });
                 }
                 if (!m_virtClk) { cb(c); if (c) m_sync.start(); }
-                else m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); if (c) m_sync.start(); });
+                else m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); if (c) { vcInit_ = true; m_sync.start(); }});
             });
             return;
         }
@@ -434,8 +455,9 @@ struct DCTmodel {
                        }
                        if (m_virtClk) {
                            m_vcd->setup([this,cb=std::move(cb)](bool c){
-                                    if (!c) { cb(false); return; }  // check if pdu distributor returns false
-                                    if (m_gkd)
+                                    if (!c) { cb(false); return; }
+                                    vcInit_ = true;    // first vc calibration finished
+                                    if (m_gkd)  // check if pdu distributor returns false
                                         m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                     else    // must be m_psgkd
                                         m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
@@ -452,15 +474,14 @@ struct DCTmodel {
                        if (logging_) {    // log distributor should always return true but go ahead and continue without logging
                            lgd_->setup([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
-                               else { // set logs callback for distributors
-                                   if (m_virtClk) m_vcd->logsCb_ = logsCb_;
-                               }
+                               else  if (m_virtClk) m_vcd->logsCb_ = logsCb_; // set logs callback for distributors
                            });
                        }
                        if (m_virtClk) {
                             m_vcd->setup([this,cb=std::move(cb)](bool c){
-                                if (!c) { cb(false); return; }  // check if pdu distributor returns false
-                                if (m_pgkd)
+                                if (!c) { cb(false); return; }
+                                 vcInit_ = true;    // first vc calibration finished
+                                if (m_pgkd)   // check if pdu distributor returns false
                                     m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 else    // must be m_psgkd
                                     m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
@@ -487,8 +508,9 @@ struct DCTmodel {
                     }
                     if (m_virtClk) {
                         m_vcd->setup([this,cb=std::move(cb)](bool c){
-                         if (!c) { cb(false); return; }  // check if gk distributor returns false
-                            if (m_gkd) {
+                         if (!c) { cb(false); return; }
+                         vcInit_ = true;    // first vc calibration finished
+                         if (m_gkd) {    // check if gk distributor returns false
                             m_gkd->setup([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false
                                 if (m_pgkd)

@@ -270,7 +270,7 @@ struct SyncPS {
     std::chrono::system_clock::time_point lastNeed_{};       // if non-zero, hold time for "needs" cStates
     tdv_clock::duration signerHold_{distDelay_};        // set to zero to never hold a publication that may arrive before signing cert
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
-    std::uniform_int_distribution<unsigned short> randInt_{1u, 4u}; //  cState delay  randomization
+    std::uniform_int_distribution<unsigned short> randInt_{0u, 10u}; //  cState delay  randomization
     Nonce  nonce_{};            // nonce of current cState
     uint32_t publications_{};   // # locally originated publications
     uint32_t noSignerPubs_{};   // # publications whose signer isn't in my certstore (yet)
@@ -627,7 +627,7 @@ struct SyncPS {
      */
     void sendCStateSoon(tdv_clock::duration dly = 0ms) {
         scheduledCStateId_->cancel();
-        if (unicast()) sendCState();    // no delay
+        if (unicast()) sendCState();    // no delay    
         else scheduledCStateId_ = schedule(dly + std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
     }
 

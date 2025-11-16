@@ -72,7 +72,8 @@ struct DistLogs {
     bool m_init{true};                  // key maker status unknown while in initialization
     Cap::capChk m_relayChk;   // method to return true if the identity chain has the relay (RLY) capability
 
-    DistLogs(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs, tdv_clock::duration logLifetime= 4s) :
+    // setting logLifetime small can remove resends if just post-processing dctwatch. Needs to be longer for a subscriber
+    DistLogs(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs, tdv_clock::duration logLifetime= 5ms) :
              m_prefix{pPre},    // identifier being used on all pubs in domain - could be empty
              m_sync(face, dPre, m_keySM.ref(), m_keySM.ref()),
              m_certs{cs},

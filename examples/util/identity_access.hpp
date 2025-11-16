@@ -57,12 +57,14 @@ namespace dct {
 std::vector<std::vector<dctCert>> idChain{};
 static inline dctCert root{};
 static inline std::vector<dctCert> schema{};
-static inline std::vector<keyVal> idSecretKey{};     // use to sign new locally created signing pairs
-static inline std::vector<certItem> signingPair{};   // current signing key and cert
+// the second member of the certItem pair will be the identity secret key which is used
+// to sign locally created signing pairs. It could be a pointer to storage in secure memory, etc.
+static inline std::unordered_map<thumbPrint,certItem>  idPair{};
 
 static inline dctCert rootCert() { return root; }
 static inline dctCert schemaCert(int i=0) { return schema[i]; }
 static inline std::vector<dctCert> identityChain(int i=0) { return idChain[i]; }
+static inline thumbPrint idTag(int i=0) { return rCert(idChain[i].back()).computeTP(); }
 
 /*
  * new signing pairs are set up to be made certOverlap (set in cert_bundle.hpp) before the end of the current pair's validity
@@ -103,71 +105,57 @@ static inline void readBootstrap(std::string_view bootstrap) {
         ic.push_back(cb[c].first);     //add to
     }
     idChain.push_back(ic);  // add this identity chain to the vector
-    idSecretKey.push_back(cb.back().second);    // final item in chain has the secret key
+    idPair[(ic.back()).computeTP()] = cb.back();  // final item in cb has the identity cert, secret key pair
 }
 
+
 // if not yet created (or if expired) create a new key pair, make a dctCert with the public key,
-// and use the idSecretKey to sign it.
+// and use the idPair's secret key to sign it.
 // This should be called by the bootstrap validation modules after everything else passes
 // Also on expiration of signing pair
 
 // Assumes the initial pairs are made in-order as each DeftT shim is made which is fine since that's
 // the way it's done in the relays but this can be altered if needed
-static inline certItem currentSigningPair(int i=0) {
-    if(std::cmp_equal(signingPair.size(), i)) {
-         try {
-             // make a signature manager of the correct type and set it up to use the identity key for signing
-            auto sm{sigMgrByType(root.getSigType())};
-            sm.ref().updateSigningKey(idSecretKey[i], idChain[i].back());
-            // makes a public/secret key pair, then  a cert with public key and signs it
-            // the signing cert has a distinguishing component appended to the identity cert's unique name
-            // (the last four components of a DCT cert name are pre-defined)
-            // Lifetime of the cert can be set as desired (here 1 day) but the code to automatically make a
-            // new signing pair hasn't been done yet.
-            // Extract the component used in the signing cert (here "sgn") from the schema in future
-            signingPair.push_back( signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), certLifetime) );
-         } catch (const std::runtime_error& se)     { dct::print("runtime error: {}\n", se.what()); }
-    } else if (std::cmp_greater(i, signingPair.size())) {
-        dct::print ("currentSigningPair called with out-of-range id {}\n", i);
-        exit (0);
-    }
-    return signingPair[i];
-}
-// Makes a new signing pair for ith (defaults to zero) identiy chain on-demand. Does not store the pair
-// Optionally pass in which idchain this is for (relays).
+
+// Makes a new signing pair for ith (defaults to zero) identity chain on-demand. Does not store the pair
+// Called by the bootstrap validation modules after everything else passes and on expiration of signing pair
+// Optionally pass in which idchain this is for (relays) and tdvc adjustment
 // The lifetime should come from configuration (schema eventually)
 // An alternative to currentSigningPair above
 // Note that currently can only create a new signing pair with the same name and an updated validity period
 // since changing signing chain requires a new DeftT
-// In setting the validity start period for a future time, make sure you know what you are doing
+// With tdvc use, can incorporate tdvcAdjust value so needs to be passed in and added to now() (default to 0)
+// The validity start period MUST be no farther in past than certOverlap/2 + (now + tdvcAdjust) and the
+// cert must be valid (against now + tdvcAdjust)
 // To handle clock skew, certOverlap is set to at least twice the worst clock skew
-// With tdvc use, can incorporate tdvcAdjust value into certOverlap if needed)
 
-static inline certItem getSigningPair( int i=0) {
-    if(std::cmp_greater(idChain.size(), i)) {   //must be an identity chain for i
+static inline certItem getSigningPair(const thumbPrint& itp, std::chrono::microseconds a=0us) {
+    if(idPair.contains(itp)) {   //must be an identity key pair for itp
          try {
              // make a signature manager of the correct type and set it up to use the identity key for signing
             auto sm{sigMgrByType(root.getSigType())};
-            sm.ref().updateSigningKey(idSecretKey[i], idChain[i].back());
-            auto now = std::chrono::system_clock::now();
-            if ( rCert(idChain[i].back()).validUntil() <= now) {
-                dct::print("getSigningPair called with expired identity cert");
+            auto k = idPair[itp].second;
+            auto c = idPair[itp].first;
+            sm.ref().updateSigningKey(k, c);
+            auto now = std::chrono::system_clock::now() + a;
+            if ( rCert(c).validUntil() <= now || rCert(c).validAfter() >= now) {
+                dct::print("getSigningPair called with invalid (by validity time) identity cert");
                 exit(0);
             }
+            // signing cert must not outlive the identity that signs it
+            auto lt = certLifetime + certOverlap;
+            if (lt > rCert(c).validUntil() - now - certOverlap/2)
+                lt = std::chrono::duration_cast<decltype(lt)> (rCert(c).validUntil() - now - certOverlap/2);
             // makes a public/secret key pair, then  a cert with public key and signs it
             // the signing cert has a distinguishing component appended to the identity cert's unique name
             // (the last four components of a DCT cert name are pre-defined)
             // Lifetime of the cert can be set as desired (here 1 day)
-            // Not currently a way to separately set the validity period start time (that is, starts now) in the library
             // Extract the component used in the signing cert (here "sgn") from the schema in future
             // If the last element (the start time) is not set, it uses now
-            // Don't let signing cert expire after the identity that signs it
-            //auto lt = certLifetime+certOverlap > rCert(idChain[i].back()).validUntil() - now ?  rCert(idChain[i].back()).validUntil() - now : certLifetime+certOverlap;
-            //return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), lt, now-certOverlap/2);
-            return signedCert(crName(idChain[i].back().name().first(-4)/"sgn"), sm.ref(), certLifetime+certOverlap, now-certOverlap/2);
+            return signedCert(crName(c.name().first(-4)/"sgn"), sm.ref(), lt, now-certOverlap/2);
          } catch (const std::runtime_error& se)     { dct::print("getSigningPair runtime error: {}\n", se.what()); }
     } else  {
-        dct::print ("getSigningPair called with out-of-range identity chain id {}\n", i);
+        dct::print ("getSigningPair called with invalid id cert thumbprint {}\n", itp);
         exit (0);
     }
     return certItem{};

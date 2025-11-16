@@ -36,7 +36,7 @@ namespace dct {
 
 using certCb = std::function< dctCert ()>;
 using chainCb = std::function<std::vector<dctCert> ()>;
-using pairCb = std::function<certItem()>;
+using pairCb = std::function< certItem (std::chrono::microseconds)>;
 
 // return the binary schema described by 'scert'. If the schema has already
 // been loaded and parsed, just return it. Otherwise load, parse and save
@@ -110,7 +110,7 @@ static inline const auto& validateBootstrap(const certCb& rootCb, const certCb& 
     }
 
     // all the bootstrap identity certs are valid, ask for a signing pair of <cert, secretKey> to complete the chain
-    auto sp = signIdCb();
+    auto sp = signIdCb((std::chrono::microseconds) 0); // shouldn't be any vc adjustment at bootstrap
     auto sc = sp.first;
 
     // belt and suspenders? This code would be repeated when a new signing pair is created

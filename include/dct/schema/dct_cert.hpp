@@ -90,11 +90,12 @@ struct dctCert : crCert {
     // construct a dctCert with the given name. The name will be suffixed with the
     // 4 required NDN components (KEY/<kid>/<creator>/<creationTime>), have content type
     // 'key', a validity period starting at 'strt' of duration 'dur' and signed with 'sm'.
+    // use 'strt' as the timestamp of the cert publication
     dctCert(crName&& name, keyRef pk, SigMgr& sm, systime strt, seconds dur)
-        : crCert(name/"KEY"/keyId(pk)/"dct"/std::chrono::system_clock::now()) {
+        : crCert(name/"KEY"/keyId(pk)/"dct"/strt) {
         content(pk);
 
-        // set up the cert's signature info including a 1 year validity period
+        // set up the cert's signature info including a validity period of dur starting at strt
         auto vp = TLV<tlv::ValidityPeriod>(tlvFlatten(
                       TLV<tlv::NotBefore>(iso8601(strt)),
                       TLV<tlv::NotAfter>(iso8601(strt + dur))));

@@ -34,6 +34,9 @@
 
 namespace dct {
 
+using namespace std::literals::chrono_literals;
+using std::operator""sv;
+
 // return a parser for a Name object.
 struct rName : tlvParser {
     constexpr rName() = default;
@@ -169,6 +172,9 @@ template<> struct dct::formatter<dct::rPrefix> {
             if (blk.isType(dct::tlv::Timestamp)) {
                 auto ts = blk.toTimestamp();
                 out = dct::format_to(out, "/{:%g-%m-%d@%T}", ts);
+            } else if (blk.isType(dct::tlv::SequenceNum)) {
+                auto ts = blk.toNumber();
+                out = dct::format_to(out, "/{}", ts);
             } else if (np(s)) {
                 // if there are any non-printing characters, format as hex. Otherwise format as a string.
                 //XXX look for 'tagged' timestamps (should change to TLV and get rid of this)
@@ -362,19 +368,19 @@ struct rCert : rData {
     auto validAfter() const noexcept { return ((const iso8601*)(sigInfo().data() + 49))->toTP(); }
     auto validUntil() const noexcept { return ((const iso8601*)(sigInfo().data() + 68))->toTP(); }
 
-    bool expired() const noexcept {
-        auto now = iso8601(std::chrono::system_clock::now());
+    bool expired(std::chrono::microseconds a = 0us) const noexcept {
+        auto now = iso8601(std::chrono::system_clock::now()+a);
         return std::memcmp(sigInfo().data()+68, now.data(), now.size()) < 0;
     }
-    bool notValidYet() const noexcept {
-        auto now = iso8601(std::chrono::system_clock::now());
+    bool notValidYet(std::chrono::microseconds a=0us) const noexcept {
+        auto now = iso8601(std::chrono::system_clock::now()+a);
         return std::memcmp(now.data(), sigInfo().data()+49, now.size()) < 0;
     }
-    bool validNow() const noexcept {
-        auto now = iso8601(std::chrono::system_clock::now());
+    bool validNow(std::chrono::microseconds a=0us) const noexcept {
+        auto now = iso8601(std::chrono::system_clock::now()+a);
         const auto si = sigInfo().data();
         if (std::memcmp(now.data(), si+49, now.size()) < 0) {
-            print("validNow: {} not valid until {}\n", name(), validAfter());
+           // print("validNow: {} not valid until {} vc={}\n", name(), validAfter(), std::chrono::system_clock::now() + a);
             return false;
         }
         if (std::memcmp(si+68, now.data(), now.size()) < 0) {
@@ -386,13 +392,18 @@ struct rCert : rData {
     }
 
     // check that cert's sigInfo is formatted correctly and that it's within its validity period.
-    bool valid() const noexcept { return validForm() && validNow(); }
+    // if virtual clock has not done initial calibration, ignore validNow (used for signing certs only)
+    bool valid(std::chrono::microseconds a=0us, bool vcCal=true) const noexcept {
+        if (vcCal) return validForm() && validNow(a);
+        return validForm();
+    }
 
     // check that cert is valid and its signing type matches 'sType'
     // (which is usually the schema's required cert signing type).
-    bool valid(uint8_t sType) const noexcept {
+    bool valid(uint8_t sType, std::chrono::microseconds a=0us, bool vcCal = true) const noexcept {
         if (sigType() != sType) print("rcert::valid: signing type is {} should be {}\n", sigType(), sType);
-        return valid() && sigType() == sType;
+        if (!vcCal) return validForm() && sigType() == sType;   // for uncalibrated initial clocks
+        return valid(a) && sigType() == sType;
     }
 };
 

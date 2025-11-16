@@ -8,7 +8,7 @@
 INCLUDES = ../../include
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
 CXXFLAGS = -g -O0 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
-#CXXFLAGS += -DMESHTEST=1
+#CXXFLAGS += -DMESHTEST=2
 ## Note: on a Mac sanitize=address and sanitize=leak are mutually exclusive
 CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=leak
