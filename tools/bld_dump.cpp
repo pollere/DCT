@@ -31,7 +31,8 @@ static auto& getDCTmodel(const char* bsfile) {
     if (! dm) {
         dct::readBootstrap(bsfile);
         dm = new dct::DCTmodel(dct::rootCert, []{return dct::schemaCert();},
-                            []{return dct::identityChain();}, []{return dct::getSigningPair();});
+                            []{return dct::identityChain();},
+                            [](std::chrono::microseconds a=0us){return dct::getSigningPair(dct::idTag(),a);});
     }
     return *dm;
 }

@@ -324,14 +324,14 @@ int main(int argc, char* argv[])
                 transList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
-                                           [itp=dct::idTag(s_id)](std::chrono::microseconds a){return getSigningPair(itp, a);},
-                                           "RLY", chainRecv, keysRecv} );
+                                           [i=s_id](std::chrono::microseconds a){return getSigningPair(dct::idTag(i), a);},
+                                           "RLY"s, chainRecv, keysRecv} );
             } else {
                 transList.push_back( new ptps{rootCert,
                                            [i=s_id]{return schemaCert(i);},
                                            [i=s_id]{return identityChain(i);},
-                                           [itp=dct::idTag(s_id)](std::chrono::microseconds a){return getSigningPair(itp, a);},
-                                           "RLY", chainRecv, keysRecv, pubFailure} );
+                                           [i=s_id](std::chrono::microseconds a){return getSigningPair(dct::idTag(i), a);},
+                                           "RLY"s, chainRecv, keysRecv, pubFailure} );
             }
         } catch (const std::exception& e) {
             std::cerr << "relay: unable to create pass-through shim " << l << ": " << e.what() << std::endl;

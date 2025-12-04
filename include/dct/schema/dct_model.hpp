@@ -270,15 +270,26 @@ struct DCTmodel {
                 else if (m_psgkd) m_psgkd->updateSigningKey(sp.second, sc);
             });
     }
+    // checks if capability c is present and, if so, returns its argument (as a stringview)
+    auto capArgument(std::string_view c) {
+        const auto& tp = cs_.Chains()[0];  // thumbprint of newest signing cert
+        // returns empty span if capability wasn't found or has bad argument content
+       auto arg = (Cap::getval(c, pubPrefix(), cs_)(tp)).toSv();
+        if (arg.empty()) std::runtime_error("DCTmodel: no capability or no address in capability cert");
+        //XXXX hack for working without transport.hpp changes
+        if (c == "RLY")
+            if (!arg.starts_with("tcp:") && !arg.starts_with("udp:") && !arg.starts_with("ff02") && !arg.starts_with("ff01")) arg = "";
+        // dct::print ("DCTmodel:capArgument: {} capability argument is {}\n", c, arg);
+        return arg;
+    }
 
-    using strCb = std::function<std::string_view()>;
 
     // create a new DCTmodel instance and pass the callbacks to access required certs to
     // "bootstrap" this new transport instance
     // Pass in a face address callback or default to empty for default face
-    DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, strCb addrCb) :
+    DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr = "") :
             bs_{validateBootstrap(rootCb, schemaCb, idChainCb, signIdCb, cs_)},
-            face_{addrCb()},
+            face_{(addr == "" || addr.size() > 6)? addr : capArgument(addr)},   // hack assumes capability tags are a few chars
             bld_{pubBldr(bs_, cs_, face_.tdvclk_, bs_.pubName(0))},
             msm_{getSigMgr(bs_)},
             csm_{getCertSigMgr(bs_)},
@@ -359,9 +370,6 @@ struct DCTmodel {
         makeSP_ = schedule( rCert(cs_[tp]).validUntil() - std::chrono::system_clock::now() - dct::certOverlap,
                  [this, signIdCb] {getNewSP(signIdCb);});
     }
-
- DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr = "") :
-    DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, [a=addr]{ return a;}  ) {}
 
     const auto& getFace() { return face_; }
 

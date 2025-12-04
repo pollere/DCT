@@ -242,7 +242,7 @@ int main(int argc, char* argv[])
     // the DeftT shim needs callbacks to get the trust root, the trust schema, the identity
     // cert chain, and the signing secret key plus public cert (see util/identity_access.hpp)
     mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();},
-            [itp=dct::idTag()](std::chrono::microseconds a){return getSigningPair(itp, a);}, addr);
+            [](std::chrono::microseconds a){return getSigningPair(dct::idTag(), a);}, addr);
 
     // this example application needs information about some of its identity attributes which can now be returned by
     // DeftT modules through the shim but this may not be needed in a deployed application

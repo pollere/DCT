@@ -108,23 +108,12 @@ struct DCTmodelPT final : DCTmodel  {
     dct::tdv_clock::duration vcNhdDly() { if(m_vcd) return m_vcd->getNhdDly(); else return 0ms; }
     void finishCalibrateVC( std::chrono::microseconds adj, uint8_t n) { if (m_vcd) m_vcd->finishCalibration(adj, n); }
 
-    // checks if capability c is present and, if so, returns its argument (as a stringview)
-    auto capArgument(std::string_view c) {
-        const auto& tp = cs_.Chains()[0];  // thumbprint of newest signing cert
-        // returns empty span if capability wasn't found or has bad argument content
-       auto arg = (Cap::getval(c, pubPrefix(), cs_)(tp)).toSv();
-        if (arg.empty()) std::runtime_error("DCTmodelPT: no RLY capability or no address in RLY capability cert");
-        //XXXX hack for working without transport.hpp changes
-        if (!arg.starts_with("tcp:") && !arg.starts_with("udp:") && !arg.starts_with("ff02") && !arg.starts_with("ff01")) arg = "";
-        // print ("RLY capability argument is {}\n", arg);
-        return arg;
-    }
 
   // create a DCTmodelPT instance using the certs in the bootstrap bundle file 'bootstrap'
 
     DCTmodelPT(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
                std::string_view addrLoc, addChnCb&& rcb = nullptr) :
-            DCTmodel(rootCb, schemaCb, idChainCb, signIdCb, [this,a=addrLoc]{ return capArgument(a);}  ),
+            DCTmodel(rootCb, schemaCb, idChainCb, signIdCb,  addrLoc ),
             ptPubSm_{msm_.ref()}
     {
         m_sync.tdvcReset(); //VCTEST - resets the vc if dctmodel changed it
