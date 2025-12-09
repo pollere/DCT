@@ -157,8 +157,10 @@ struct DCTmodel {
         // XXX eventually need tools to securely check/update certs & bundles
         try {
             auto cert = rCert{d};
-            if (m_virtClk && !vcInit_ && isSigningCert(cert)) {
-                 if (! cert.valid(certSigMgr().type(), tdvcAdjust(), false)) return; //don't check the validity period until clock calibration
+            if (m_virtClk && isSigningCert(cert)) {
+                if (!vcInit_) { //don't check the validity period until vc calibrated
+                    if (! cert.valid(certSigMgr().type(), tdvcAdjust(), false)) return;
+                } else if (! cert.valid(certSigMgr().type(), tdvcAdjust(), true)) return; //vc calibrated
             } else if (! cert.valid(certSigMgr().type())) return;
             auto cname = tlvVec(cert.name());
             if (matchesAny(bs_, cname) < 0) return; // name doesn't match schema
@@ -214,7 +216,9 @@ struct DCTmodel {
     // Can be used by application to schedule a cancelable timer. Note that
     // this is expensive compared to a oneTime timer and should be used
     // only for timers that need to be canceled before they fire.
-    auto schedule(std::chrono::microseconds delay, TimerCb&& cb) { return m_sync.schedule(delay, std::move(cb)); }
+    auto schedule(auto delay, TimerCb&& cb) {
+        return m_sync.schedule(std::chrono::duration_cast<std::chrono::microseconds>(delay), std::move(cb));
+    }
 
     /*
      *  called to get a new signing pair
@@ -289,7 +293,7 @@ struct DCTmodel {
     // Pass in a face address callback or default to empty for default face
     DCTmodel(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb, std::string_view addr = "") :
             bs_{validateBootstrap(rootCb, schemaCb, idChainCb, signIdCb, cs_)},
-            face_{(addr == "" || addr.size() > 6)? addr : capArgument(addr)},   // hack assumes capability tags are a few chars
+            face_{addr != "RLY"? addr : capArgument(addr)},   //hack; maybe test against a list of capabilities with addr args
             bld_{pubBldr(bs_, cs_, face_.tdvclk_, bs_.pubName(0))},
             msm_{getSigMgr(bs_)},
             csm_{getCertSigMgr(bs_)},
@@ -308,7 +312,7 @@ struct DCTmodel {
             lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
         if(psm_.ref().encryptsContent()) {
             if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
-                throw schema_error("Encrypted CAdds require that some entity(s) have KeyMaker capability");
+                throw schema_error("Encrypted CAdd PDUs require that some entity(s) have KeyMaker capability");
             }
             if (! psm_.ref().subscriberGroup()) {
                 m_gkd = new DistGKey(face_, pubPrefix(), pduPrefix()/"keys"/"pdus",
