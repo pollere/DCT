@@ -13,7 +13,7 @@ killall app2
 DCT_MULTICAST_ADDR=ff01::1234
 export DCT_MULTICAST_ADDR
 for mbr in ${members[@]}; do
-  ./app2 -n 10 bundles/$mbr.bundle &
+  ./app2 -n 10 id1/$mbr.bundle &
   echo -n " $mbr"
   echo
 #  sleep .1 

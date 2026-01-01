@@ -129,7 +129,7 @@ struct certStore {
     // 'status' true if the element was added and false if it was already there.
     auto add(const dctCert& c) {
         if (! c.valid(clkAdjustCb_())) {    // cert methods use system clock plus passed in adjustment if any)) {
-            print("cerStore::add(): cert {} invalid\n", c.name());
+            print("certStore::add(): cert {} invalid\n", c.name());
             return std::pair<decltype(certs_)::iterator,bool>{certs_.end(), false};
         }
         return finishAdd(certs_.try_emplace(c.computeTP(), c));

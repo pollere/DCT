@@ -39,7 +39,7 @@
 namespace dct {
 
 // defaults
-static constexpr size_t MaxSegs = 64;  //max segments of a msg, <= maxDifferences in syncps.hpp
+static constexpr size_t MaxSegs = 64;  //max num of segments of a msg, <= smaller of (maxDifferences in syncps.hpp && 255, the limit from name encoding)
 // adjust these to suit local use case
 static constexpr size_t MaxMsgCache = 5;    // maximum number of incomplete messages to cache before clean up
 static std::chrono::microseconds MaxMsgHold = std::chrono::seconds(1);  // max time to wait for publications of incomplete message
@@ -82,7 +82,7 @@ struct msgState {
     std::bitset<64> trackSegs{};  // tracks which segments of the message have been received
     dct::timeVal tm{};          // used to check for elderly incomplete messages at clean up
     MsgSegs mesg{};         // reassembly buffer for content from Pubs of this message
-    size_t contentSz{0};    // space for application message bytes in Publications of this message
+    size_t contentSz{0};    // space for application message bytes in Publications of this message (especially for paced)
     mbpsPub pubInfo{};
 };
 
@@ -179,8 +179,8 @@ struct mbps
      * receivePub() is called when a new Publication (carrying a message segment) is
      * received in a subscribed topic.
      *
-     * A message is uniquely identified by its msgID and its timestamp.
-     * and each name is identical except for the k in the k out of n sCnt.
+     * A message is uniquely identified by its msgID and its creation time.
+     * Each segment name is identical except for the k in the k out of n sCnt and the pub timestamp
      * When all n pieces received,reassemble into a message and callback
      * the message handler associated with subscription.
      * paramNames() gets the paramater tags of a publication while tagNames()
@@ -204,7 +204,7 @@ struct mbps
                 n = 255 & k;    //bottom byte
                 k >>= 8;
                 if (k > n || k == 0 || n > MaxSegs) {
-                    print("receivePub: msgID {} piece {} > n pieces\n", p.number("msgID"), k, n);
+                    dct::print("receivePub: msgID {} piece {} > {} pieces\n", p.number("msgID"), k, n);
                     return;
                 }
                 // create or retrieve a message state entry
@@ -216,6 +216,7 @@ struct mbps
                     dct::print("mbps::receivePub: publication for message {} with name {}\n", mId, p.name());
                     throw error("mbps::receivePub: can't reassemble message as has name size mismatch");
                 }
+               dct::print("receivePub: {} gets msgID {}, piece {} of {} pieces\n", m_uniqId, p.number("msgID"), k, n);
 
                 if (k == 1) mS.pubInfo = p; // make a copy of the first segment of the message so app can extract info
                 //reassemble message
@@ -285,15 +286,14 @@ struct mbps
 
     /*
      * Publish the passed in message by building mbpsPubs to carry the message
-     * content and passing to m_pb to publish
-     *
+     * content and passing to m_pb to publish method.
      * An application calls this method and passes a vector of pairs (msgParms) that
      * is used to fill in any needed tag values and an optional message body.
      * (May use m_pb.paramNames() to make sure all the parameter tags have been set.)
      *
      * The message may need to be broken into content-sized segments.
-     * Publications for all segments have the same message ID and timestamp.
-     * mId uniquely identifies using uint32_t hash of (origin, timestamp, message)
+     * Publications for all segments have the same message ID:
+     * mId uniquely identifies using uint32_t hash of (origin, creation time, message)
      * where <origin> is a tag value or combination of tag values the application
      * uses as unique identifiers (e.g., role/roleId)
      *
@@ -337,15 +337,16 @@ struct mbps
         crypto_generichash(h.data(), h.size(), emsg.data(), emsg.size(), NULL, 0);
         uint32_t mId = h[0] | h[1] << 8 | h[2] << 16 | h[3] << 24;
         mp.emplace_back("msgID", mId);
+        if (m_msgs.contains(mId)) throw error("mbps::publishPaced: duplicate message id"); // this should never happen since uses tms
         if (ch) m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
 
        // add sCnt value initialized for a single segment (Publication) message
-        size_t n = 0;
-        mp.emplace_back("sCnt", n); // just to get name size
-
-        if (size == 0) {    //handle empty message body - no Pub content
+        size_t n = 0; // a single pub message has n=0
+        mp.emplace_back("sCnt", n);
+        // check if msg size fits in a single pub
+        if (size == 0 || pubSpace_ - m_pb.name(mp).size() > size) {
             try {   // try...catch for errors in building the pub
-                doPublish(m_pb.pub({}, mp), hasCH);
+                doPublish(m_pb.pub(msg, mp), hasCH);
                 return mId;
             } catch (const std::exception& e) {
                 std::cerr << "mbps::publish: " << e.what() << std::endl;
@@ -355,18 +356,23 @@ struct mbps
             }
         }
 
-        // determine name size in order to determine the space left for content
-        auto contentSp = pubSpace_ - (m_pb.name(mp).size() + 4);   // add bytes in case multiple segments
-        if (contentSp < 10) {
+        // muliti-pub message: determine name size in order to determine the space left for content
+        auto contentSp = m_msgs[mId].contentSz =  pubSpace_ - (m_pb.name(mp).size() + 2);   // add bytes for multiple segment sCnt
+        if (contentSp < 8) {
             dct::print("mbps::publish Publication name only leaves {} bytes for content\n", contentSp);
             return 0;
         }
-
-        // determine number of message segments to carry msg: sCnt forces n < 256,
+        // determine number of message segments to carry msg: sCnt forces n < 256,   
         n = (size + (contentSp - 1)) / contentSp;
-        if(n > MaxSegs) throw error("publishMsg: message too large");
-        auto sCnt = n > 1? n + 256 : 0;
+        if (n > MaxSegs) throw error("publishMsg: message too large");
+        if (n == 1)  throw error("publishMsg: multi-pub section got a single pub message"); //should never get 1 here
+        auto sCnt = n + 256;
         mp.back().second = sCnt;    //sCnt is last argument on the list
+        if (pubSpace_ - m_pb.name(mp).size() != contentSp) {    // XXX this is just for testing and should be removed
+            dct::print("mbps::publish unexpected change in name size from {}", contentSp);
+            contentSp = pubSpace_ - m_pb.name(mp).size();   // recalculate
+            dct::print(" to {}\n", contentSp);
+        }
 
         try {   // try...catch for errors in building the pub
             if (n >1) startMsgsBatch(); // will hold all the segments until finished before goes to network
@@ -453,15 +459,16 @@ struct mbps
         if (ch) m_msgConfCb[mId] = std::move(ch);    //set mesg confirmation callback
 
         // determine max content for publications of this message
-        mp.emplace_back("sCnt", 0u); // just to get a name size for this message
-       m_msgs[mId].contentSz = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
-        if (m_msgs[mId].contentSz < 10) {
+        size_t n = 0; // a single pub message has n=0
+        mp.emplace_back("sCnt", n);  // just to get a name size for this message
+        m_msgs[mId].contentSz = pubSpace_ - (m_pb.name(mp).size() + 2);   // add 2 bytes in case multiple segments
+        if (m_msgs[mId].contentSz < 8) {
             dct::print("mbps::publish Publication name only leaves {} bytes for content\n", m_msgs[mId].contentSz);
             return 0;
         }
 
         // determine number of message segments to carry msg: sCnt forces n < 256,
-        size_t n = (size + (m_msgs[mId].contentSz - 1)) / m_msgs[mId].contentSz;
+        n = (size + (m_msgs[mId].contentSz - 1)) / m_msgs[mId].contentSz;
         if(n > MaxSegs) throw error("publishMsg: message too large");
         auto sCnt = n > 1? n + 256 : 0;
 

@@ -7,7 +7,8 @@
  * This version is a self-contained 'header-only' library.
  *
  * This distributor publishes its current virtual clock at start up
- * and during the rounds of a clock synchronization session.
+ * and during the rounds of a clock synchronization session that
+ * converge on a domain-wide virtual clock.
  *
  * Since clock values should only be distributed through a single hop
  * to avoid indeterminate additional delays, adjustments are made to its syncps.

@@ -139,7 +139,8 @@ static inline certItem getSigningPair(const thumbPrint& itp, std::chrono::micros
             sm.ref().updateSigningKey(k, c);
             auto now = std::chrono::system_clock::now() + a;
             if ( rCert(c).validUntil() <= now || rCert(c).validAfter() >= now) {
-                dct::print("getSigningPair called with invalid (by validity time) identity cert");
+                dct::print("getSigningPair called with invalid (by validity time) identity cert:\n\tvalidUntil {}, validAfter {}, vclk {}\n",
+                            rCert(c).validUntil(), rCert(c).validAfter(), now);
                 exit(0);
             }
             // signing cert must not outlive the identity that signs it

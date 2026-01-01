@@ -15,7 +15,7 @@ CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=address,undefined
 #CXXFLAGS += -ferror-limit=4
 DEPS = $(HDRS)
-BINS = app1 app2 app3 app4
+BINS = app1 app2 app3 app4 app5
 JUNK = 
 
 # OS dependent definitions
@@ -37,7 +37,7 @@ LIBS += -lsodium
 endif
 
 #all: $(BINS)
-all: app1 app2 app3 app4
+all: app1 app2 app3 app4 app5
 
 .PHONY: clean distclean tags
 
@@ -51,6 +51,9 @@ app3: app3.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 app4: app4.cpp $(DEPS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
+
+app5: app5.cpp $(DEPS)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
 
 clean:

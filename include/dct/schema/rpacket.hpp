@@ -318,7 +318,7 @@ struct rData : tlvParser {
 // so it can include its ordering operators
 struct iso8601 : std::array<uint8_t,15> {
     iso8601(std::chrono::system_clock::time_point tp) {
-        auto s = dct::format("{:%G%m%dT%H%M%S}", fmt::gmtime(tp));
+        auto s = dct::format("{:%Y%m%dT%H%M%S}", fmt::gmtime(tp));
         std::copy(s.begin(), s.begin()+this->size(), this->begin());
     }
     auto toTP() const {
@@ -384,9 +384,13 @@ struct rCert : rData {
             return false;
         }
         if (std::memcmp(si+68, now.data(), now.size()) < 0) {
-            print("validNow: {} expired {}\n", name(), validUntil());
+            print("validNow: {} expired; sclk= {} vclk= {} \n", name(), std::chrono::system_clock::now(), std::chrono::system_clock::now()+a);
             return false;
         }
+   /*     if (validUntil() <= std::chrono::system_clock::now() + a) {
+            dct::print ("validUntil = {} and now = {} (vclk={})\n", validUntil(), now.toTP(), std::chrono::system_clock::now() + a);
+            return false;
+        } */
         return true;
         //return std::memcmp(si+68, now.data(), now.size()) >= 0 && std::memcmp(now.data(), si+49, now.size()) >= 0;
     }
