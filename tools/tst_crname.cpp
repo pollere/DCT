@@ -35,15 +35,14 @@ int main(int argc, const char* argv[]) {
         exit(1);
     }
     //try {
-        const auto n = crName(argv[1]);
+        const auto n = crName(argv[1]) / 0 / 200 / tdv_clock{}.now();
         const int ncomp = n.nBlks();
         print("{} : {:x}\n", (rName)n, fmt::join(n.v_," "));
         //print("{} {} {:x}\n", n.m_off, n.size(), fmt::join(n.m_blk," "));
 
-        crName t{};
-        print("{} : {:x}\n", (rName)(t = appendToName(n, "foo/bar/baz")), fmt::join(t.v_," "));
-        print("{} : {:x}\n", (rName)(t = appendToName(n, "/foo//bar/baz/")), fmt::join(t.v_," "));
-        print("{} : {:x}\n", (rName)(t = appendToName(n, "one")), fmt::join(t.v_," "));
+        {crName t{n}; print("{} : {:x}\n", (t = appendToName(t, "foo/bar/baz")), fmt::join(t.v_," "));}
+        {crName t{n}; print("{} : {:x}\n", (t = appendToName(t, "/foo//bar/baz/")), fmt::join(t.v_," "));}
+        {crName t{n}; print("{} : {:x}\n", (t = appendToName(t, "one")), fmt::join(t.v_," "));}
 
         print("crName components forwards\n");
         for (int i = 0; i < ncomp; ++i) print(" {} <{},{}> {}\n", i, n[i].typ(), n[i].size(), n[i].toSv());

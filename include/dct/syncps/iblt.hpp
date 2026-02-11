@@ -61,8 +61,27 @@ namespace dct {
 /**
  * @brief Invertible Bloom Lookup Table (Invertible Bloom Filter)
  */
-template<typename HashVal>
+template<typename HashVal = uint32_t>
 struct IBLT {
+    typedef HashVal value_type;
+
+    // finds the largest prime less than the arg at compile time
+    static constexpr int isPrime(size_t n) {
+        for (size_t i = 2; i < n; ++i) if ((n % i) == 0) return 0;
+        return 1;
+    }
+    static constexpr size_t maxPrime(size_t n) {
+        if (n < 6) return 0;
+        auto k = n/6 - 1;
+        for (auto s = k*6; n > s; --n) if (isPrime(n)) return n;
+        for (; k > 0; --k) {
+            int p = 6*k + 5;
+            if (isPrime(p)) return p;
+            p -= 4;
+            if (isPrime(p)) return p;
+        }
+        return 0;
+    }
     /*
      * Optimal number of hashes is 3 or 4. 3 results in less computation and
      * fewer cache misses so this code uses 3 hashes. The following
@@ -71,17 +90,8 @@ struct IBLT {
      */
     static constexpr size_t N_HASH{3};
     static constexpr size_t N_HASHCHECK{0x53a1df9a}; // random bit string with half the bits set
-    static constexpr size_t stsize = 47; // sub-table size (should be prime)
-    static constexpr size_t nEntries = stsize * N_HASH;
-    static constexpr murmurHash3 mh3{};
-    // limits on the iblt size due to packet MTU constraints
-    static_assert(nEntries * 9 < 1300, "encoded iblt bigger than maxPubSize");
 
-    template<typename V>
-    static inline HashVal hashobj(const V& v) noexcept { return mh3(N_HASHCHECK, v.data(), v.size()); }
-    static inline HashVal hashobj(const uint8_t* d, size_t s) noexcept { return mh3(N_HASHCHECK, d, s); }
-
-    struct HashTableEntry {
+    struct HTE {
         int32_t count;
         HashVal keySum;
         HashVal keyCheck;
@@ -91,18 +101,57 @@ struct IBLT {
         }
         bool isEmpty() const { return count == 0 && keySum == 0 && keyCheck == 0; }
     };
+    static constexpr size_t encHTEsize = sizeof(HTE) - 3; // avg encoded entry size
+    using HashTable = std::vector<HTE>;
 
-    using HashTable = std::array<HashTableEntry,nEntries>;
+    size_t nitems_{};
+    const size_t stsize_;   // = maxPrime(MTU/(N_HASH*encHTEsize));
+    const size_t nEntries_; // = stsize_ * N_HASH;
     HashTable hashTable_{};
-    int nitems_{};
 
-    constexpr auto size() const { return nitems_; }
+    constexpr IBLT(size_t mtu = 1300) : stsize_{maxPrime(mtu/(N_HASH*encHTEsize))},
+                       nEntries_{stsize_ * N_HASH}, hashTable_(nEntries_) { }
+
+    static constexpr murmurHash3 mh3{};
+
+    static constexpr HashVal hashobj(const uint8_t* d, size_t s) noexcept { return mh3(N_HASHCHECK, d, s); }
+    template<typename V>
+    static constexpr HashVal hashobj(const V& v) noexcept { return hashobj(v.data(), v.size()); }
+
+    constexpr auto size() const noexcept { return nitems_; }
+    constexpr auto items() const noexcept {
+        ssize_t i{};
+        for (const auto& e : hashTable_) i += (e.count < 0? -e.count : e.count);
+        return i / N_HASH;
+    }
+
+    /**
+     * The hash table is split into N_HASH interleaved sub-tables with a
+     * different hash for each (the interleaved tables provide slightly
+     * better cache hit rates for small table sizes). Since the tables
+     * are <<2^20 entries, a single 64-bit hash is computed and different
+     * parts of it are used for per-table indices. Each entry is added/deleted
+     * from all subtables.
+     *
+     * XXX hash index should be computed via Lemire's multiplicative method. See:
+     *  https://github.com/lemire/fastmod/blob/master/include/fastmod.h
+     *  https://arxiv.org/abs/1902.01961
+     *  https://github.com/lemire/fastmod
+     *  https://lemire.me/blog/2019/02/08/faster-remainders-when-the-divisor-is-a-constant-beating-compilers-and-libdivide/
+     */
+    auto hash(HashVal key) const noexcept {
+        HashVal h = mh3(key);
+        HashVal h0 = (h % stsize_) * N_HASH;
+        HashVal h1 = ((h >> 11) % stsize_) * N_HASH + 1;
+        HashVal h2 = ((h >> 21) % stsize_) * N_HASH + 2;
+        return std::array{h0, h1, h2};
+    }
 
     static constexpr int INSERT = 1;
     static constexpr int ERASE = -1;
 
     constexpr void update1(int plusOrMinus, HashVal key, size_t idx) {
-        HashTableEntry& entry = hashTable_.at(idx);
+        auto& entry = hashTable_.at(idx);
         if (entry.count >= std::numeric_limits<decltype(entry.count)>::max())
             throw std::runtime_error("too many items in iblt hash bucket");
         entry.count += plusOrMinus;
@@ -240,8 +289,8 @@ struct IBLT {
             // extract entry
             nitems_ += b;
             //print(" ht[{}] = {} of {}\n", i, b, nitems_);
-            if (i >= nEntries) print("compressed IBLT too large {} {}\n", i, nEntries);
-            if (i >= nEntries) throw std::runtime_error("compressed IBLT too large");
+            if (i >= nEntries_) print("compressed IBLT too large {} {}\n", i, nEntries_);
+            if (i >= nEntries_) throw std::runtime_error("compressed IBLT too large");
             hashTable_[i].count = b;
             hashTable_[i].keySum   = r[0] | (r[1] << 8) | (r[2] << 16) | (r[3] << 24);
             hashTable_[i].keyCheck = r[4] | (r[5] << 8) | (r[6] << 16) | (r[7] << 24);
@@ -249,29 +298,6 @@ struct IBLT {
             r += 8;
         }
         nitems_ /= N_HASH;
-    }
-
-    /**
-     * The hash table is split into N_HASH interleaved sub-tables with a
-     * different hash for each (the interleaved tables provide slightly
-     * better cache hit rates for small table sizes). Since the tables
-     * are <<2^20 entries, a single 64-bit hash is computed and different
-     * parts of it are used for per-table indices. Each entry is added/deleted
-     * from all subtables.
-     *
-     * XXX hash index should be computed via Lemire's multiplicative method. See:
-     *  https://github.com/lemire/fastmod/blob/master/include/fastmod.h
-     *  https://arxiv.org/abs/1902.01961
-     *  https://github.com/lemire/fastmod
-     *  https://lemire.me/blog/2019/02/08/faster-remainders-when-the-divisor-is-a-constant-beating-compilers-and-libdivide/
-     */
-    auto hash(size_t key) const noexcept
-    {
-        auto h = mh3(key);
-        auto h0 = (h % stsize) * N_HASH;
-        auto h1 = ((h >> 8) % stsize) * N_HASH + 1;
-        auto h2 = ((h >> 16) % stsize) * N_HASH + 2;
-        return std::tuple{h0, h1, h2};
     }
 
     /** validity checking for 'key' on peel or delete
@@ -303,18 +329,53 @@ struct IBLT {
     }
 
     /**
-     * @brief "peel" entries from an iblt
+     * @brief (destructively) "peel" entries from an iblt
      *
      * Typically called on a difference of two IBLTs: ownIBLT - rcvdIBLT
-     * and returns a pair{have, need} where 'have' and 'need' are sets.
+     * and returns a tuple {sts, have, need} where 'have' and 'need' are sets.
      * Entries listed in "have" are in ownIBLT but not in rcvdIBLT
      * Entries listed in "need"  are in rcvdIBLT but not in ownIBLT
+     * 'sts' is the state of the peeled iblt:
+     *   0 = fully peeled and empty
+     *   1 = not empty
+     *  -1 = invalid format
      */
+    auto peel2() noexcept {
+        std::set<HashVal> have{};
+        std::set<HashVal> need{};
+        int sts{1};
+
+        bool progress;
+        do {
+            progress = false;
+            bool empty{true};
+            for (const auto& e: hashTable_) {
+                if (e.isEmpty()) continue;
+                empty = false;
+                if (! e.isPure()) continue;
+
+                if (badPeers(e.keySum)) {
+                    std::cerr << "error - invalid iblt: badPeers for entry:" << e.keySum << "\n";
+                    progress = false;
+                    sts = -1;
+                    break;
+                }
+                if (e.count > 0) have.insert(e.keySum); else need.insert(e.keySum);
+                update(-e.count, e.keySum);
+                progress = true;
+            }
+            if (empty) {
+                sts = 0;
+                break;
+            }
+        } while (progress);
+        return std::tuple{sts, have, need};
+    }
     auto peel() const noexcept {
         std::set<HashVal> have{};
         std::set<HashVal> need{};
         bool peeledSomething;
-        IBLT peeled{*this};
+        IBLT<HashVal> peeled{*this};
 
         do {
             peeledSomething = false;
@@ -335,13 +396,13 @@ struct IBLT {
         return std::pair{have, need};
     }
 
-    IBLT operator-(const IBLT& other) const {
+    IBLT<HashVal> operator-(const IBLT<HashVal>& other) const {
         if (other.size() == 0) return *this;
 
-        IBLT result(*this);
-        for (size_t i = 0; i < nEntries; i++) {
-            HashTableEntry& e1 = result.hashTable_.at(i);
-            const HashTableEntry& e2 = other.hashTable_.at(i);
+        IBLT<HashVal> result(*this);
+        for (size_t i = 0; i < nEntries_; i++) {
+            auto& e1 = result.hashTable_.at(i);
+            const auto& e2 = other.hashTable_.at(i);
             e1.count -= e2.count;
             e1.keySum ^= e2.keySum;
             e1.keyCheck ^= e2.keyCheck;
@@ -349,13 +410,13 @@ struct IBLT {
         return result;
     }
 
-    IBLT operator+(const IBLT& other) const {
+    IBLT<HashVal> operator+(const IBLT<HashVal>& other) const {
         if (other.size() == 0) return *this;
 
-        IBLT result(*this);
-        for (size_t i = 0; i < nEntries; i++) {
-            HashTableEntry& e1 = result.hashTable_.at(i);
-            const HashTableEntry& e2 = other.hashTable_.at(i);
+        IBLT<HashVal> result(*this);
+        for (size_t i = 0; i < nEntries_; i++) {
+            auto& e1 = result.hashTable_.at(i);
+            const auto& e2 = other.hashTable_.at(i);
             e1.count += e2.count;
             e1.keySum ^= e2.keySum;
             e1.keyCheck ^= e2.keyCheck;
@@ -376,7 +437,7 @@ static inline bool operator!=(const IBLT<T>& iblt1, const IBLT<T>& iblt2) { retu
 
 #if 0
 template<typename T>
-static inline std::ostream& operator<<(std::ostream& out, const IBLT<T>::HashTableEntry& hte) {
+static inline std::ostream& operator<<(std::ostream& out, const IBLT<T>::HTE& hte) {
     out << std::dec << std::setw(5) << hte.count << std::hex << std::setw(9)
         << hte.keySum << std::setw(9) << hte.keyCheck;
     return out;
@@ -389,7 +450,7 @@ static inline std::string prtPeer(const IBLT<T>& iblt, size_t idx, size_t rep) {
 
     std::ostringstream rslt{};
     rslt << " @" << std::hex << rep;
-    auto hte = iblt.hashTable_.at(rep);
+    const auto& hte = iblt.hashTable_.at(rep);
     if (hte.isEmpty()) {
         rslt << "!";
     } else if (iblt.hashTable_.at(idx).keySum != hte.keySum) {
@@ -400,7 +461,7 @@ static inline std::string prtPeer(const IBLT<T>& iblt, size_t idx, size_t rep) {
 
 template<typename T>
 static inline std::string prtPeers(const IBLT<T>& iblt, size_t idx) {
-    auto hte = iblt.hashTable_.at(idx);
+    const auto& hte = iblt.hashTable_.at(idx);
     // can only get the peers of 'pure' entries
     if (! hte.isPure()) return "";
     const auto [hash0, hash1, hash2] = iblt.hash(hte.keySum);
@@ -419,5 +480,15 @@ static inline std::ostream& operator<<(std::ostream& out, const IBLT<T>& iblt) {
 }
 
 }  // namespace dct
+
+template<typename T>
+struct dct::formatter<dct::IBLT<T>> {
+    template <typename FormatContext>
+    auto format(const dct::IBLT<T>& ib, T k, FormatContext& ctx) const -> decltype(ctx.out()) {
+        auto h = ib.hash(k);
+        return format_to(ctx.out(), "{:x} ({},{},{})", k, ib.hashTable_.at(h[0]).count,
+                ib.hashTable_.at(h[1]).count, ib.hashTable_.at(h[2]).count);
+    }
+};  
 
 #endif  // SYNCPS_IBLT_HPP

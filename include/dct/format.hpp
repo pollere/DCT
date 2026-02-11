@@ -46,6 +46,7 @@ inline void print(std::format_string<T...> fmt, T&&... args) {
 // Download fmt from https://fmt.dev/latest/index.html or https://github.com/fmtlib/fmt
 
 #define FMT_HEADER_ONLY
+#include <stdlib.h>
 #include "fmt/format.h"
 #include "fmt/ostream.h"
 #include "fmt/ranges.h"

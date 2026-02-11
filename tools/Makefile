@@ -110,6 +110,10 @@ tst_rpacket: tst_rpacket.cpp
 	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM
 
+tst_sync: tst_sync.cpp 
+	$(CXX) $(CXXFLAGS) -Wall -Wextra -o $@ $< $(LDFLAGS) $(LIBS)
+	#rm -rf $@.dSYM
+
 tst_transport: tst_transport.cpp 
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LIBS)
 	#rm -rf $@.dSYM

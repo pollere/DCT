@@ -256,7 +256,8 @@ class DirectFace {
         for (const auto& [ih, pe] : pst_) {
             if (!pe.timer_ || !p.isPrefix(pe.s_.name())) continue;
             auto e = pe.timer_->expiry();
-            if (!pe.used_ && pe.fromNet_ && (!net || e > net->timer_->expiry())) net = &pe;
+            //if (!pe.used_ && pe.fromNet_ && (!net || e > net->timer_->expiry())) net = &pe;
+            if (pe.used_ < 10 && pe.fromNet_ && (!net || e > net->timer_->expiry())) net = &pe;
         }
         if (!net) return rName{};
         return (net)->s_.name();

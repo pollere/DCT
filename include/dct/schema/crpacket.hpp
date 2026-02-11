@@ -28,13 +28,15 @@
 #include <bit>
 #include <cassert>
 #include <cstring>
-//#include <ranges> ...waiting for clang to catch up
+#include <ranges>
 
 #include "rand32.hpp"
 #include "rpacket.hpp"
 
 namespace dct {
 
+using namespace std::literals::chrono_literals;
+using std::operator""sv;
 
 // build a 'complete' raw TLV - vector containing TLV's data together with an rPacket view of it.
 
@@ -290,8 +292,10 @@ static inline crName operator/(crName p, tlvParser t) { return p.append(t.asSpan
 
 static inline crName operator/(crName p, std::string_view s) { p.append(tlv::Generic, s).done(); return p; }
 
-static inline crName operator/(crName p, uint64_t n) { p.append(tlv::SequenceNum, n).done(); return p; }
-
+static inline crName operator/(crName p, std::integral auto n) {
+    p.append(tlv::SequenceNum, uint64_t(n)).done();
+    return p;
+}
 static inline crName operator/(crName p, std::chrono::microseconds t) {
        p.append(tlv::Timestamp, t.count()).done(); return p;
 }
@@ -307,15 +311,7 @@ static inline crName operator/(crName p, tdv_clock::time_point t) {
 // this routine appends a multi-component name (e.g., "foo/bar/baz"). '/' is always a
 // component separator. Leading and trailing slashes and empty components are ignored.
 static inline crName appendToName(crName p, std::string_view nm) {
-    //for (const auto comp: std::ranges::lazy_split_view(nm, "/")) if (comp) p /= comp;
-    // without ranges we do it the hard way...
-    size_t pos{};
-    size_t l;
-    while ((l = nm.find('/', pos)) != std::string_view::npos) {
-        if (l - pos > 0) p = p / nm.substr(pos, l - pos);
-        pos = ++l;
-    }
-    if (pos < nm.size() - 1) p = p / nm.substr(pos);
+    for (const auto comp: std::views::split(nm, "/"sv)) if (comp) p = p / std::string_view{comp.data(),comp.size()};
     return p;
 }
 

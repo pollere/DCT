@@ -670,7 +670,7 @@ struct SyncPS {
 
     /**
      * @brief construct and send a cAdd appropriate for responding to cstate 'csName'
-     * returns false if nothing was sent
+     * returns number of pubs sent.
      *
      * The cAdd's name is the same as csName except the final component is replaced
      * with a murmurhash3 32 bit hash of csName which serves as both a compact
@@ -686,18 +686,21 @@ struct SyncPS {
         auto ht = std::chrono::system_clock::now() + pubHoldtime_;   // set hold time for sent pubs
         // send all the newPubs that will fit into the cAdd
         crData cAdd{crName{csName.first(-1)}.append(tlv::csID, mhashView(csName)).done(), tlv::ContentType_CAdd};
+        int shipped{};
         for (ssize_t sz = mtu() - cAdd.ssize() - pktSigmgr_.sigSpace(); const auto& p : pv) {
            if (sz < p.ssize()) continue;
            sz -= p.ssize();
            sv.emplace_back(p);
            pubs_.at(hashPub(p)).hold_ = ht;
+           ++shipped;
         }
-        if (sv.empty()) return false;
-        cAdd.content(sv);
-        if (! pktSigmgr_.sign(cAdd)) return false;
-        face_.send(std::move(cAdd));
-        //print("{:%M:%S} syncps::shipCAdd sent {}\n", std::chrono::system_clock::now(), cAdd.name());
-        return true;
+        if (shipped > 0) {
+            cAdd.content(sv);
+            if (! pktSigmgr_.sign(cAdd)) return 0;
+            face_.send(std::move(cAdd));
+            //print("{:%M:%S} syncps::shipCAdd sent {}\n", std::chrono::system_clock::now(), cAdd.name());
+        }
+        return shipped;
     }
 
     // For effective meshing, need to send non-local pubs while avoiding broadcast storms
@@ -760,7 +763,29 @@ struct SyncPS {
         netCState_ = true;
         auto iblt{name2iblt(name)};
         handleDeliveryCb(iblt);
-        const auto& [have, need] = (pubs_.iblt() - iblt).peel();
+        const auto [sts, have, need] = (pubs_.iblt() - iblt).peel2();
+        if (sts < 0) return false; // ignore mis-formed iblts
+        if (sts > 0 && have.size() == 0) {
+            // Can't peel the iblt difference so don't know what to send but have to send
+            // to reduce difference so that peeling works and peer(s) get into sync.
+            // Send local pubs that haven't be sent recently in container order.
+            // at the end. 
+            auto now = std::chrono::system_clock::now();
+            //print("syncps peel {} failed @ {}\n", collName_, now);
+            // send local pubs that haven't been sent recently
+            PubVec pv{};
+            for (const auto& [h, e] : pubs_) {
+                if (e.local() && now - e.hold_ > 2s) pv.push_back(e.i_);
+                if (pv.size() > 5) break;
+            }
+            int shipped{};
+            if (pv.size() > 0) {
+                shipped = shipCAdd(name, pv);
+                //print("syncps blind shipped {} of {}\n", shipped, pv.size());
+            }
+            if (need.size() > 0) sendNeed(now);
+            return shipped > 0;
+        }
         if (need.size() == 0 && have.size() == 0 ) return false;    // cState same as local collection
 
         // separate haves into local originated and other-originated
@@ -799,10 +824,10 @@ struct SyncPS {
             return false;
          }
 
-        bool shipped = shipCAdd(name, pv); // try to ship all the local origin pubs that will fit in a cAdd packet
+        int shipped = shipCAdd(name, pv); // try to ship all the local origin pubs that will fit in a cAdd packet
         if (!need.size()) sendCStateSoon(2*distDelay_);       // delay for recipients to send "ack" cStates or if shipCAdd failed
         else sendNeed(now);
-        return shipped;
+        return shipped > 0;
     }
 
     /*
@@ -824,7 +849,7 @@ struct SyncPS {
         }
         if (! orderPub_(pv))    return false;   //order priority returns all pubs to send in pv - puts older pubs first
 
-        if (! shipCAdd(name, pv))   return false;   // if can't send anything delay in case of holds, etc
+        if (shipCAdd(name, pv) < 1)   return false;   // if can't send anything delay in case of holds, etc
 
         sendCStateSoon(2*distDelay_); // delay long enough for recipients to send cStates reflecting the Pubs in the shipped cAdd
                                                           // and to remove hold times on the Pubs that were just sent
