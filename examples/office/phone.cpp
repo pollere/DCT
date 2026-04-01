@@ -135,6 +135,7 @@ int main(int argc, char* argv[])
     // Connect and pass in the handler
     try {
         cm.connect([&cm]{
+            dct::print("{}:{} is connected\n", role, id);
             // subscribe to status messages from all functions, any room
             for (const auto& f : std::array{"light"s, "door"s, "temp"s, "screen"s}) {
                 cm.subscribe(f + "/status", statusRecv);

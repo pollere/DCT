@@ -102,6 +102,7 @@ int main(int argc, char* argv[])
     // Connect and pass in the handler
     try {
         cm.connect( [&cm,acc]() {
+            dct::print("{}:{} is connected\n", role, id);
             /* main task for this entity is to wait for messages from subscriptions */
             //subscribe to command topic for all my accessory functions
             for(auto i=0u; i < acc.size(); i++) {

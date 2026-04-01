@@ -489,7 +489,16 @@ struct SyncPS {
      * @param pub the object to publish
      */
     PubHash publish(crData&& pub) {
-        if (pub.size() > maxPubSize_) return 0;
+        if (pub.size() > maxPubSize_) {
+            // XXX the schema cert may be larger than the max pub size but it's in every
+            // peer's bootstrap so it's not sent on the wire. Allow it in the active pubs
+            // so its cert distributor confirmation callback will happen when a peer sends
+            // a cstate containing it.
+            if (pub.contentType() != uint8_t(tlv::ContentType_Key) || pub.name()[1].toSv() != "schema") {
+                print("syncps::publish: pub {} size {} > {}\n", pub.name(), pub.size(), maxPubSize_);
+                return 0;
+            }
+        }
         auto h = addToActive(std::move(pub), true);
         //print("{:%M:%S} publish {} {:x} d {} r {}\n", std::chrono::system_clock::now(), pub.name(), h, delivering_, registering_);
         if (h == 0) return h;   // already in actives
@@ -527,6 +536,7 @@ struct SyncPS {
                 //print("syncps::publish w cb instant cb for {}\n", pub.name());
                 cb((pubs_.find(h))->second.i_,true);
             }
+            //print("syncps::publish w cb {} in collection\n", pub.name());
             return h;     // if already in collection and is local assume it has already set cb
         }
         h = publish(std::move(pub));
@@ -536,6 +546,8 @@ struct SyncPS {
             auto cd = getLifetime_(pub);
             if (cd < cStateLifetime_) cd = cStateLifetime_;
             oneTime(cd, [this, h]{ doDeliveryCb(h, false); });
+        } else {
+            //print("syncps::publish w cb {} failed\n", pub.name());
         }
         return h;
     }
@@ -688,10 +700,12 @@ struct SyncPS {
         crData cAdd{crName{csName.first(-1)}.append(tlv::csID, mhashView(csName)).done(), tlv::ContentType_CAdd};
         int shipped{};
         for (ssize_t sz = mtu() - cAdd.ssize() - pktSigmgr_.sigSpace(); const auto& p : pv) {
-           if (sz < p.ssize()) continue;
+           if (p.ssize() <= 0) continue;
+           auto h = hashPub(p);
+           if (! pubs_.contains(h) || sz < p.ssize()) continue;
            sz -= p.ssize();
            sv.emplace_back(p);
-           pubs_.at(hashPub(p)).hold_ = ht;
+           pubs_.at(h).hold_ = ht;
            ++shipped;
         }
         if (shipped > 0) {
@@ -916,7 +930,7 @@ struct SyncPS {
         // if this responds to a cState on pendOthers_,
         auto ci = cAdd.name().lastBlk().toNumber();
         // remove any pending response for this csId
-        if ( auto it = pendOthers_.find(ci) != pendOthers_.end()) pendOthers_.erase(it);
+        if ( auto it = pendOthers_.find(ci); it != pendOthers_.end()) pendOthers_.erase(it);
         // sets the hold time on its Pubs to keep from resending too soon
          decltype(std::chrono::system_clock::now()) ht{};
          // if (!pendOthers_.empty())

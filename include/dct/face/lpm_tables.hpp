@@ -31,6 +31,7 @@
 #include <set>
 #include <type_traits>
 #include <unordered_set>
+#include <iterator>
 
 #include "api.hpp"
 #include "lpm.hpp"
@@ -81,7 +82,7 @@ struct DST : std::unordered_set<size_t> {
         // if too many entries, remove a random one
         if (shash_.size() >= 256) {
             auto it = shash_.begin();
-            for (int b = h & 0xff; b-- > 0; it++) { }
+            std::advance(it, (h & 0xff) % shash_.size());
             shash_.erase(it);
         }
         shash_.emplace(h);
