@@ -58,6 +58,7 @@ static std::chrono::microseconds MaxMsgHold = std::chrono::seconds(1);  // max t
 struct mbps;
 
 using  mbpsPub = DCTmodel::sPub;
+using logMsg = crName;
 // Used to pass message information to app that is not in message body
 struct mbpsMsg : mbpsPub {
     using mbpsPub::mbpsPub;
@@ -68,6 +69,7 @@ struct mbpsMsg : mbpsPub {
 // (defined in library as a string and a value that is a legal parmeter type)
 using msgParms = std::vector<parItem>;
 using msgHndlr = std::function<void(mbps&, const mbpsMsg&, const std::span<const uint8_t>&)>;
+using logHndlr = std::function<void(logMsg&, const std::span<const uint8_t>&)>;
 using connectCb = std::function<void()>;
 using confHndlr = std::function<void(const bool, const uint32_t)>;
 using paceHndlr = std::function<void(mbps&, const bool, const uint32_t)>;
@@ -126,6 +128,30 @@ struct mbps
      * the app can extract what it needs to operate.
      */
     auto attribute(std::string_view v) const { return m_pb.pubVal("#chainInfo", v); }
+
+    // logging methods that can be used by applications
+    void setLogging() { m_pb.setLogging(); }
+    void logEvent(std::string s, std::span<const uint8_t> content = {}) {
+        m_pb.logEvent(s, content);
+     }
+     void receiveLog(const mbpsPub& p, const logHndlr& lh) {
+         auto lmsg = crName(p.name());
+         lh(lmsg, p.content().toSpan());
+     }
+     mbps& subscribeLogs(std::string_view topic, const logHndlr& lh)    {
+         m_pb.subscribeLogs(topic, [this,lh](auto p) {receiveLog(p, lh);});
+         return *this;
+     }
+     mbps& subscribeLogs(const logHndlr&lh) {
+         m_pb.subscribeLogs([this,lh](auto p) {receiveLog(p, lh);});
+         return *this;
+     }
+     // to log mbps events
+     void logMbpsEvent(std::string s, std::span<const uint8_t> content = {}) {
+      m_pb.logEvent("mpbs/" + s, content);
+   }
+
+
 
     /*
      * Kicks off the set up necessary for an application to publish or receive

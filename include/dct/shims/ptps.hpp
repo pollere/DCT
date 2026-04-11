@@ -76,7 +76,7 @@ struct DCTmodelPT final : DCTmodel  {
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.contains(tp);}
     void addRelayed(const thumbPrint tp, const dctCert& c) { m_rlyCerts[tp] = true;  addCert(c); }  // if c valid, add to certstore
     const auto& keysColl() { return m_gkSync; }
-    auto& certColl() { return m_ckd.m_sync; }
+    auto& certColl() { return m_ckd.sync_; }
     const auto& msgsColl() { return m_sync; }
 
     // ensure a publication is *structurally* valid on the outgoing DeftT
@@ -125,7 +125,7 @@ struct DCTmodelPT final : DCTmodel  {
         m_pubDist = m_pgkd == NULL ? m_psgkd != NULL :  true;
         // if there's distributor for publication group keys need
         // to pass those to the relay via the appropriate syncps.
-        if (m_pubDist) m_gkSync = (m_pgkd == NULL)?  &(m_psgkd->m_sync) : &(m_pgkd->m_sync);
+        if (m_pubDist) m_gkSync = (m_pgkd == NULL)?  &(m_psgkd->sync_) : &(m_pgkd->sync_);
 
         // changes the cert store's callback so adding a valid cert will relay the signing cert chain
         cs_.addCb_ = [this, &ckd=m_ckd] (const dctCert& cert) {

@@ -31,6 +31,14 @@
 
  * As soon as the syncps is registered, pubs are received into its collection(s) but pubs don't invoke
  * a subscription callback until one is registered (in setup)
+ *
+ * TDVC approach is similar to the asynchronous diffusion of Q. Li and D. Rus, "Global Clock Synchronization in Sensor Networks"
+ * in IEEE Transactions on Computers, vol. 55, no. 2, February 2006, pp 214-226. The paper uses averages and single
+ * samples whileTDVC's complexity is increased due to its use of multiple samples (default = 3) of clock differences
+ * sent, the use of mode/median to filter outliers rather than averages and weighting clock samples by the number of
+ * neighbors in agreement. The former means that receiving TDVC distributors need to ensure they are using
+ * samples from the same virtual clock at the sender (not mixing pre- and post-adjustment virtual clocks).
+ * Tie-breakers can be necessary.
  * 
  * Copyright (C) 2020-5 Pollere LLC
  *
@@ -51,27 +59,13 @@
  *  dist_tdvc.hpp is not intended as production code.
  */
 
-#include <algorithm>
-#include <cstring> // for memcmp
-#include <functional>
-#include <utility>
-
-#include <dct/schema/capability.hpp>
-#include <dct/schema/certstore.hpp>
-#include <dct/schema/tlv_encoder.hpp>
-#include <dct/schema/tlv_parser.hpp>
-#include <dct/sigmgrs/sigmgr_by_type.hpp>
-#include <dct/syncps/syncps.hpp>
-#include <dct/utility.hpp>
-#include "dct/rand.hpp"
-
-using namespace std::literals::chrono_literals;
+#include "dist.hpp"
 
 namespace dct {
 
 // calSp should be (slightly) less than the amount of time it could take for a member's clock to drift beyond MaxTol
 
-struct DistTDVC {
+struct DistTDVC final : Dist  {
     int64_t calSp{300};  // number of seconds between status publications (also their lifetime) fractions of this used for probe clocks, pings
     uint8_t TolRnds{4};  // at end of calibration, number of rounds to publish my clock values without receiving an out of tolerance
                                       // sample from a neighbor - keeps from prematurely updating local clock
@@ -83,14 +77,12 @@ struct DistTDVC {
     tdv_clock::duration ClkXTm = 40*MinNhdDly;    // time span for exchanging clock samples during a calibrate round
                                                                     // needs to be at least > #sets * nhd dly
     tdv_clock::duration ClkLt = 4*MinNhdDly;
-    pTimer m_probe{std::make_shared<Timer>(getDefaultIoContext())};
+    pTimer probe_{std::make_shared<Timer>(getDefaultIoContext())};
     tdv_clock::duration vcQuant{MinNhdDly}; // quantization for vc adjustments
 
-    using connectedCb = std::function<void(bool)>;
     using relayValueCb = std::function<void(thumbPrint, int64_t, size_t, size_t)>;
-    using logEvCb = std::function<void(crName&&, std::span<const uint8_t>)>;
     using spCb = std::function<void()>;
-    using expireCb = std::function<void(const rCert&)>;
+    using expireSpCb = std::function<void(const rCert&)>;
 
     /*
      * DistTDVC Publications contain the value of their local system clock in their timestamp
@@ -112,126 +104,93 @@ struct DistTDVC {
              dct::tdv_clock::duration adjust = std::chrono::microseconds(0);  // calibration in-progress adjustment to vc
       };
 
-     std::vector<uint32_t> m_rtts;
+     std::vector<uint32_t> rtts_;
      // saves time of pings sent or heard by the expected responder's Id TP
-     std::unordered_map<thumbPrint,uint64_t> m_pings{};
-
-    const crName m_prefix;        // prefix for pubs in this distributor's collection
-    SigMgrAny m_tdvcSM{sigMgrByType("EdDSA")};   // to sign/validate Publications and PDUs
-    SyncPS m_sync;
-    const certStore& cs_;
-    connectedCb m_connCb{[](auto) {}};
-    logEvCb logsCb_{[](crName&&, std::span<const uint8_t>){}};  // default logs callback
-    relayValueCb m_relayCb{[](auto,auto,auto,auto){}};  //only for relays/ptps: called when a new clock value received from neighbor
+     std::unordered_map<thumbPrint,uint64_t> pings_{};
+    relayValueCb relayCb_{[](auto,auto,auto,auto){}};  //only for relays/ptps: called when a new clock value received from neighbor
     size_t sentClks_{};        // number of clock values sent this publishing round
-    bool m_started{false};      // true once another member has been heard from in this collection and delay calculated
+    bool started_{false};      // true once another member has been heard from in this collection and delay calculated
     tdv_clock::duration nhdRtt_{MinNhdDly}; // rough estimate of transit + process rtt between neighbors in my 'hood
     tdv_clock::duration txDly_{0ms}; // excess delay (greater than one way delay minus quant) should be removed
 
-    std::map<thumbPrint,cdiff> m_clkDiffs{};
+    std::map<thumbPrint,cdiff> clkDiffs_{};
     vcVars vs_;
-    thumbPrint m_tp{};
 
-    tdv_clock::duration m_statusLifetime{std::chrono::seconds(calSp)};
-    tdv_clock::duration m_clkLifetime{ClkLt}; // for clk pubs
+    tdv_clock::duration statusLifetime_{std::chrono::seconds(calSp)};
+    tdv_clock::duration clkLifetime_{ClkLt}; // for clk pubs
 
-    int64_t m_tolVal{MaxTol};        // largest clock difference tolerated in calibration integer microseconds
-    tdv_clock::duration m_computeDly{ClkXTm};   //time to accumulate clock samples for each "round"
-    tdv_clock::duration m_pingInt{10*MinNhdDly};  // interval between pings is initially short
-    dct::rand rand{};
-    bool m_init{true};
-    bool m_pinging{false};
+    int64_t tolVal_{MaxTol};        // largest clock difference tolerated in calibration integer microseconds
+    tdv_clock::duration computeDly_{ClkXTm};   //time to accumulate clock samples for each "round"
+    tdv_clock::duration pingInt_{10*MinNhdDly};  // interval between pings is initially short
+    bool init_{true};
+    bool pinging_{false};
     bool waitSP_{false};
     spCb newSPcb_;
-    expireCb expcb_;
-    Cap::capChk m_relayChk;   // method to return true if the identity chain has the relay (RLY) capability
-    Cap::capChk m_priClkChk;   // method to indicate if the identity chain has the priority clock (PCLK) capability
-    IsExpiredCb m_defExpired;
-    GetCreationCb m_defCreationTm;
+    expireSpCb expspcb_;
+    Cap::capChk priClkChk_;   // method to indicate if the identity chain has the priority clock (PCLK) capability
+    IsExpiredCb defExpired_;
+    GetCreationCb defCreationTm_;
 
 
-    DistTDVC(DirectFace& face, const Name& pPre, const Name& dPre,  const certStore& cs, const spCb newSPcb, const expireCb expCb) :
-             m_prefix{pPre},
-             m_sync(face, dPre, m_tdvcSM.ref(), m_tdvcSM.ref()),
-             cs_{cs},
-             newSPcb_{newSPcb},
-             expcb_{expCb},
-             m_relayChk{Cap::checker("RLY", pPre, cs)}
+    DistTDVC(DirectFace& face, const Name& pPre, const Name& dPre,  const certStore& cs, const spCb&& newSPcb, const expireSpCb&& expCb) :
+            Dist(face, pPre, dPre, cs)
      {
-        m_sync.autoStart(false); // shouldn't start until cert distributor is done initializing
-         m_sync.noOthers();       // won't send publications of others (clock sync is between neighbors)
-        m_sync.signerHoldtime(0ms);  // don't hold publications for signing cert (can interfere with timing)
-         // if the syncps set its cStateLifetime longer, means we are on a low rate network
-         m_sync.cStateLifetime(6763ms);
+        dtype_.assign("tdvc");
+        newSPcb_ = std::move(newSPcb);
+        expspcb_ = std::move(expCb);
+        sync_.noOthers();       // won't send publications of others (clock sync is between neighbors)
+        sync_.signerHoldtime(0ms);  // don't hold publications for signing cert (can interfere with timing)
         // the clock samples have short lifetimes as they are not ever forwarded but longer guard bands
-         m_sync.pubHoldtime(6*nhdRtt_);  // setting post-publication holdtime to be longer than active time ensures "send once"
-         m_sync.getLifetimeCb([this](const auto& p) ->tdv_clock::duration {
+        sync_.pubHoldtime(6*nhdRtt_);  // setting post-publication holdtime to be longer than active time ensures "send once"
+        sync_.getLifetimeCb([this](const auto& p) ->tdv_clock::duration {
              auto n = p.name();
-             if (crPrefix(m_prefix/"sts").isPrefix(n)) return m_statusLifetime;
-             else return m_clkLifetime;   // clk lifetime
+             if (crPrefix(prefix_/"sts").isPrefix(n)) return statusLifetime_;
+             else return clkLifetime_;   // clk lifetime
          });
          // have to manipulate this since clocks may be very different when not calibrated
          // but need to put some bound on this to prevent replay attacks, so set a MaxTDdiff
          // should help force new members that are outside of this to move toward domain's vc
          // because others will ignore its clk pubs and just send their own, but could also create
-         // problems so commented out here for the initial work
-         m_defCreationTm = m_sync.getCreation_;
-         m_sync.getCreationCb([this](const auto& p) ->tdv_clock::time_point {
-             if (crPrefix(m_prefix/"sts").isPrefix(p.name()))  return m_sync.tdvcNow(); // don't want to miss status messages
-             // if (!m_init && m_sync.tdvcNow() - p.name().last().toTimestamp() > MaxTDdiff) return m_defCreationTm;
-             return m_sync.tdvcNow();   // for very different clocks, just use arrival time
-         });
+         // problems so commented out here for the initial work       
          // note: don't need to alter isExpired as it is only used for arrivals in onCAdd but default
          // calculates the "age" of the pub based on now-creationTime using timestamp for latter.
          // no content field for a tdvc Publication - all info is in the name
-         // get our identity thumbprint, set up our public and private signing keys.
-         auto tp = cs_.Chains()[0];
-         updateSigningKey(cs_.key(tp), cs_[tp]);
+         defCreationTm_ = sync_.getCreation_;
+         sync_.getCreationCb([this](const auto& p) ->tdv_clock::time_point {
+             if (crPrefix(prefix_/"sts").isPrefix(p.name()))  return sync_.tdvcNow(); // don't want to miss status messages
+             // if (!init_ && sync_.tdvcNow() - p.name().last().toTimestamp() > MaxTDdiff) return m_defCreationTm;
+             return sync_.tdvcNow();   // for very different clocks, just use arrival time
+         });
       }
 
-    auto isRelay(const thumbPrint& tp) { return m_relayChk(tp).first; }    // identity 'tp' has RLY capability?
-    void setRelayCb(relayValueCb& rvcb) { m_relayCb = std::move(rvcb); }
-    auto isStarted() { return m_started; }
+    void setRelayCb(relayValueCb& rvcb) { relayCb_ = std::move(rvcb); }
+    auto isStarted() { return started_; }
     auto getSetSize() { return SetSz; }
     auto getNhdDly() { return nhdRtt_; }   // these three might change due to measurements
-    auto getComputeDly() { return m_computeDly; }
+    auto getComputeDly() { return computeDly_; }
 
     /*
      * Called to process a new local signing key.
      *  use new key immediately to sign - update the signature managers
      */
-    void updateSigningKey(const keyVal sk, const rData& pubCert) {
-        if (cs_.Chains().size() == 0) throw runtime_error("dist_tdvc::updateSigningKey: no signing chain");
-        // check if passed in pubCert same as the thumbPrint of the new first signing chain
-        if (cs_.Chains()[0] != pubCert.computeTP())
-            throw runtime_error("dist_tdvc:updateSigningKey gets new key not at chains[0]");
-        m_tp = cs_.Chains()[0];
-        // sigmgr needs to get the new signing keys and public key lookup callbacks
-        m_tdvcSM.updateSigningKey(sk, pubCert);
-        m_tdvcSM.setKeyCb([&cs=cs_](rData d) -> keyRef { return cs.signingKey(d); });
+    void updateSigningKey(const keyVal sk, const rData& pubCert) override {
+        Dist::updateSigningKey(sk, pubCert);    // common distributor code
+
+        // specific to tdvc
         if (waitSP_) {  // had to request a new SP due to TDVC change
-                   dct::print("distTDVC:updateSigningKey: {} received new SP\n", cs_[m_tp].name().nthBlk(2).toSv());
+                   dct::print("distTDVC:updateSigningKey: {} received new SP\n", cs_[tp_].name().nthBlk(2).toSv());
             waitSP_ = false;
-            if (!m_started && isRelay(m_tp)) calibrateClock();
+            if (!started_ && isRelay(tp_)) calibrateClock();
             else endFin("cal");
         }
-        else if (!m_init) probeClock();  //send one with new sc
-    }
-
-    void initDone() {
-        if (vs_.state) return;    //started calibrating again
-        if (m_init) {
-            m_init = false;
-            m_sync.cStateLifetime(6763ms);
-            m_connCb(true);
-        }
+        else if (!init_) probeClock();  //send one with new sc
     }
 
     /*
      * want those in neighborhood to use same tolerances, but need to
      * check for places where the actual neighborhood delay is larger
      * than the default
-     * compute m_nhdDy and tolerance from the measurement distributions
+     * compute nhdDy_ and tolerance from the measurement distributions
      * using a present minimum value and rounding everything to 1ms
      * have to reschedule self
      *
@@ -240,12 +199,12 @@ struct DistTDVC {
      * sync-related delays might use neighborhood delay values
      */
     void calculateDlys() {
-        if (m_rtts.empty()) {   // if no rtts, try again after a delay
-            if (m_pinging) m_sync.oneTime(m_computeDly, [this](){ calculateDlys(); }); // (re)starting pinging will schedule
+        if (rtts_.empty()) {   // if no rtts, try again after a delay
+            if (pinging_) sync_.oneTime(computeDly_, [this](){ calculateDlys(); }); // (re)starting pinging will schedule
             return;
         }
-        auto k = m_rtts.size();
-        auto s = m_rtts;
+        auto k = rtts_.size();
+        auto s = rtts_;
         std::sort(s.begin(), s.end());
         // use min or near-min for RTT estimate.
         auto d = std::chrono::milliseconds( std::lround((double)(s[k/10])/5000.)*5);
@@ -255,51 +214,51 @@ struct DistTDVC {
             if (d/2 > vcQuant)
                 txDly_ = d/2 - vcQuant; //  Divide by 2 as estimate of excess one-way delay, remove quant
             else txDly_ = 0ms;
-            m_tolVal = s[0.75*k];
+            tolVal_ = s[0.75*k];
             auto q = nhdRtt_.count();
-            m_tolVal = std::ceil((double)(m_tolVal)/q) * q;
-            m_clkLifetime = 4*nhdRtt_; // or near max rtt for clock pub lifetime?
-            m_computeDly = 12*SetSz*nhdRtt_; // needs to be > SetSz * nhdRtt_
-            m_sync.pubHoldtime(6*nhdRtt_);
+            tolVal_ = std::ceil((double)(tolVal_)/q) * q;
+            clkLifetime_ = 4*nhdRtt_; // or near max rtt for clock pub lifetime?
+            computeDly_ = 12*SetSz*nhdRtt_; // needs to be > SetSz * nhdRtt_
+            sync_.pubHoldtime(6*nhdRtt_);
         }
-        if (m_init && vs_.state==0) calibrateClock(); // runs calibrateClock to start up
+        if (init_ && vs_.state==0) calibrateClock(); // runs calibrateClock to start up
         //clean up and reschedule
-        auto l = m_clkDiffs.size() > vs_.nbrs ? m_clkDiffs.size() : vs_.nbrs;
+        auto l = clkDiffs_.size() > vs_.nbrs ? clkDiffs_.size() : vs_.nbrs;
         if (k > SetSz*l) {  // remove older rtt samples
             l = k > 1000 ? 500 : k/2;   // can pick a much larger number, just keeping from growing without bounds
-            m_rtts.erase(m_rtts.begin(), m_rtts.end() - l);
+            rtts_.erase(rtts_.begin(), rtts_.end() - l);
         }
-        m_pingInt = std::chrono::seconds(calSp/2);    // after first delay calculation, go to a longer interval
-        m_sync.oneTime(std::chrono::seconds(calSp), [this](){ calculateDlys(); });   //reschedule
+        pingInt_ = std::chrono::seconds(calSp/2);    // after first delay calculation, go to a longer interval
+        sync_.oneTime(std::chrono::seconds(calSp), [this](){ calculateDlys(); });   //reschedule
    //     dct::print("calculateDlys: {} has nhdDly={}, computed d={}({}), clkLifetm={}, pubHold={}, clkDiffs={}\n",
-   //                me, nhdRtt_, d, s[k/4], m_clkLifetime, 6*nhdRtt_, m_clkDiffs.size());
-        std::erase_if(m_clkDiffs,  [](const auto& it) { return it.second.lives == false; }); // erase those I didn't hear from
-        if (m_pings.empty()) return;
+   //                me, nhdRtt_, d, s[k/4], clkLifetime_, 6*nhdRtt_, clkDiffs_.size());
+        std::erase_if(clkDiffs_,  [](const auto& it) { return it.second.lives == false; }); // erase those I didn't hear from
+        if (pings_.empty()) return;
         // remove any unanswered pings that are deemed "too old"
         auto t = tp2d(std::chrono::system_clock::now()).count() - 2*s[k-1];
-        std::erase_if(m_pings, [t](const auto& it) { return it.second < t; });
+        std::erase_if(pings_, [t](const auto& it) { return it.second < t; });
      }
 
 using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
 static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks>(t.time_since_epoch()); };
 
      void publishPing() {
-         if (m_clkDiffs.size() == 0) {
-             m_pinging = false; // no members to ping, return to not pinging state
+         if (clkDiffs_.size() == 0) {
+             pinging_ = false; // no members to ping, return to not pinging state
              return;
          }
-        //dct::print("publishPing: {} has {} neighbors, {} rtt samples\n", cs_[m_tp].name().nthBlk(2).toSv(), m_clkDiffs.size(), m_rtts.size());
-         auto r = rand( m_clkDiffs.size() );    // randomly select a member to ping
+        //dct::print("publishPing: {} has {} neighbors, {} rtt samples\n", cs_[tp_].name().nthBlk(2).toSv(), clkDiffs_.size(), rtts_.size());
+         auto r = rand_( clkDiffs_.size() );    // randomly select a member to ping
          //schedule my next ping - in init state, publish more pings to get more rtt samples
-         m_sync.oneTime(m_pingInt + std::chrono::milliseconds(rand(1,9)), [this](){ publishPing(); });
+         sync_.oneTime(pingInt_ + std::chrono::milliseconds(rand_(1,9)), [this](){ publishPing(); });
          dct::thumbPrint trgt;
-         for (const auto& [key, value] : m_clkDiffs)  if (r-- == 0) { trgt = key; break; }
-         m_pings[trgt] = tp2d(std::chrono::system_clock::now()).count(); // save sending time
-         auto myId = cs_[m_tp].name().nthBlk(2).toSv(); //XXXX add before vc field for debugging
-         crData p(m_prefix/"png"/trgt/myId/m_sync.tdvcNow());
+         for (const auto& [key, value] : clkDiffs_)  if (r-- == 0) { trgt = key; break; }
+         pings_[trgt] = tp2d(std::chrono::system_clock::now()).count(); // save sending time
+         auto myId = cs_[tp_].name().nthBlk(2).toSv(); //XXXX add before vc field for debugging
+         crData p(prefix_/"png"/trgt/myId/sync_.tdvcNow());
          p.content(std::vector<uint8_t>{});
-         m_pinging = true;
-         try { m_sync.signThenPublish(std::move(p)); }
+         pinging_ = true;
+         try { sync_.signThenPublish(std::move(p)); }
         catch (const std::exception& e) { std::cerr << "dist_tdvc::publishPing: " << e.what() << std::endl; }
      }
 
@@ -314,71 +273,71 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
             return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size()) == 0; };
 
         auto n = p.name();
-        if (n.nextAt(m_prefix.size()).toSv() == "png") {   // subcollection
-            auto myId = cs_[m_tp].signer();   // thumbprint of identity cert
+        if (n.nextAt(prefix_.size()).toSv() == "png") {   // subcollection
+            auto myId = cs_[tp_].signer();   // thumbprint of identity cert
             auto tps = n.nextBlk().toSpan();    // responder's Id as span
-            dct::thumbPrint tpId{};     // have to convert from span so can use to acces cs_, m_pings below
+            dct::thumbPrint tpId{};     // have to convert from span so can use to acces cs_, pings_ below
             std::copy(tps.begin(), tps.end(), tpId.begin());
             if (! cs_.contains(tpId)) return;   // don't have the sender's chain so won't hear its eco
             if (equal(tps, std::span(myId))) {    // if the png is for me to echo, respond
-                auto me = cs_[m_tp].name().nthBlk(2).toSv(); //XXX add before vc field for debugging
-                crData p(m_prefix/"eco"/me/m_sync.tdvcNow());
+                auto me = cs_[tp_].name().nthBlk(2).toSv(); //XXX add before vc field for debugging
+                crData p(prefix_/"eco"/me/sync_.tdvcNow());
                 p.content(std::vector<uint8_t>{});
-                try { m_sync.signThenPublish(std::move(p)); }
+                try { sync_.signThenPublish(std::move(p)); }
                 catch (const std::exception& e) { std::cerr << "dist_tdvc::receivePngEco: " << e.what() << std::endl; }
             } else {
-                m_pings[tpId] = tp2d(std::chrono::system_clock::now()).count(); // save time heard ping
+                pings_[tpId] = tp2d(std::chrono::system_clock::now()).count(); // save time heard ping
             }
             return;
         }
         // got an eco since only subscribed to png and eco subcollections
         const auto& tpId = cs_[p.signer()].signer();
-        if (!m_pings.contains(tpId)) return;
-        if (tp2d(std::chrono::system_clock::now()).count() >= m_pings[tpId]) // check if time adjusted since ping was sent
-            m_rtts.push_back(tp2d(std::chrono::system_clock::now()).count() - m_pings[tpId]);
-        m_pings.erase(tpId);    // clear)
+        if (!pings_.contains(tpId)) return;
+        if (tp2d(std::chrono::system_clock::now()).count() >= pings_[tpId]) // check if time adjusted since ping was sent
+            rtts_.push_back(tp2d(std::chrono::system_clock::now()).count() - pings_[tpId]);
+        pings_.erase(tpId);    // clear)
      }
 
     void publishStatus() {
-        auto myId = cs_[m_tp].name()[2].toSv(); //XXX can add before vc field for debugging
-        crData p(m_prefix/"sts"/vs_.nbrs/myId/m_sync.tdvcNow());
+        auto myId = cs_[tp_].name()[2].toSv(); //XXX can add before vc field for debugging
+        crData p(prefix_/"sts"/vs_.nbrs/myId/sync_.tdvcNow());
         p.content(std::vector<uint8_t>{});
-        try { m_sync.signThenPublish(std::move(p)); }
+        try { sync_.signThenPublish(std::move(p)); }
         catch (const std::exception& e) { std::cerr << "dist_tdvc::publishStatus: " << e.what() << std::endl; }
-        m_sync.oneTime(m_statusLifetime, [this](){ publishStatus(); }); // schedule next one
+        sync_.oneTime(statusLifetime_, [this](){ publishStatus(); }); // schedule next one
     }
 
     /*
-     * publish my virtual clock value with: name <m_prefix><round><neighborhoodsize><myId><timestamp>
+     * publish my virtual clock value with: name <prefix_><round><neighborhoodsize><myId><timestamp>
      * space the samples by small number of random ms but perhaps f(distDly) for long delay networks
      * clock values have a short lifetime on order of a distribution delay
      */
     void publishClock() {
-        auto vc = m_sync.tdvcNow() - vs_.adjust;  //subtract since pass in negative of vs_.adjust when finished calibrating
-        auto myId = cs_[m_tp].name().nthBlk(2).toSv(); //can add before vc field for debugging
-        crData p(m_prefix/"clk"/uint64_t(vs_.state)/vs_.nbrs/myId/vc);
+        auto vc = sync_.tdvcNow() - vs_.adjust;  //subtract since pass in negative of vs_.adjust when finished calibrating
+        auto myId = cs_[tp_].name().nthBlk(2).toSv(); //can add before vc field for debugging
+        crData p(prefix_/"clk"/uint64_t(vs_.state)/vs_.nbrs/myId/vc);
         p.content(std::vector<uint8_t>{});
-        try { m_sync.signThenPublish(std::move(p)); }
+        try { sync_.signThenPublish(std::move(p)); }
         catch (const std::exception& e) { std::cerr << "dist_tdvc::publishClock: " << e.what() << std::endl; }
         // if not all in set have been published, reschedule
         // when all have been published, schedule the computeOffset for many distDlys later - must wait long enough
         if (++sentClks_ < SetSz) {
-            if (vs_.state) m_sync.oneTime(m_computeDly/SetSz + std::chrono::milliseconds(rand(10)),  [this](){ publishClock(); });
-            else m_sync.oneTime(2*m_computeDly/SetSz + std::chrono::milliseconds(rand(10)),  [this](){ publishClock(); });
+            if (vs_.state) sync_.oneTime(computeDly_/SetSz + std::chrono::milliseconds(rand_(10)),  [this](){ publishClock(); });
+            else sync_.oneTime(2*computeDly_/SetSz + std::chrono::milliseconds(rand_(10)),  [this](){ publishClock(); });
         } else {
             sentClks_ = 0;
-            if (vs_.state == 0 || isRelay(m_tp)) return; // sending probe clocks or I'm a relay, so don't do computeOffset
+            if (vs_.state == 0 || isRelay(tp_)) return; // sending probe clocks or I'm a relay, so don't do computeOffset
             //XXX delaying for longer on first compute(s) in case clocks are far apart, don't want to converge early
-            if (m_init) m_sync.oneTime(std::chrono::milliseconds(2*600+rand(100)), [this](){ computeOffset(); });
-            else m_sync.oneTime(m_computeDly, [this](){ computeOffset(); });
+            if (init_) sync_.oneTime(std::chrono::milliseconds(2*600+rand_(100)), [this](){ computeOffset(); });
+            else sync_.oneTime(computeDly_, [this](){ computeOffset(); });
         }
     }
 
     // log distributor publishes to logs collection; use dctwatch and postprocess
-    void publishLog(std::string s, std::span<const uint8_t> content = {}) {
+    void logEvent(std::string s, std::span<const uint8_t> content = {}) override final {
         // name portion for tdvc calibrate log publication with role and role-id and # nbrs, no content
         // XXX role and role-id only works for examples - consider using more of cert name to be more general
-        logsCb_( crName("tdvc")  / s / cs_[m_tp].name()[1] / cs_[m_tp].name()[2] / vs_.nbrs, content);
+        logsCb_( crName("tdvc")  / s / cs_[tp_].name()[1] / cs_[tp_].name()[2] / vs_.nbrs, content);
     }
 
     /*
@@ -386,27 +345,27 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      */
     void calibrateClock() {      
         if (vs_.state>0 || waitSP_) return;   // already calibrating or waiting for a new SP
-        if (!m_started) {
+        if (!started_) {
             // check if the tdvc has already been adjusted due to other deftts of relay
             // need to check signing cert (skipping Identity cert since should have been caught
             // already but can add that test - see finishCalibration method below
-            if (isRelay(m_tp) && m_sync.tdvcAdjust() != std::chrono::microseconds(0)) {
+            if (isRelay(tp_) && sync_.tdvcAdjust() != std::chrono::microseconds(0)) {
                 auto sc = (rCert) (cs_.get(cs_.Chains()[0]));  // check if invalidates current signing cert
-                  if ( !(sc.validNow(m_sync.tdvcAdjust())) ) {   // cert valid methods use system clock with passed in adjustment
-                      waitSP_ = true;   // when waitSP_ is set and !m_started, calibrateClock() will be called from updateSigningKey()
+                  if ( !(sc.validNow(sync_.tdvcAdjust())) ) {   // cert valid methods use system clock with passed in adjustment
+                      waitSP_ = true;   // when waitSP_ is set and !started_, calibrateClock() will be called from updateSigningKey()
                       newSPcb_();    // when new SP is created and validated, tdvc's updateSigningKey() will be called
                       return;
                   } else {
-                      expcb_(sc);  // vc was adjusted so signing cert expire may happen sooner/later which can be a problem if other members expire my sc
+                      expspcb_(sc);  // vc was adjusted so signing cert expire may happen sooner/later which can be a problem if other members expire my sc
                   }
             }
-            m_started = true;
+            started_ = true;
         }
-        m_probe->cancel();      // cancel pending send of clock probe
-        for (auto& m : m_clkDiffs) m.second.nhSz = 0;   //clear last round
+        probe_->cancel();      // cancel pending send of clock probe
+        for (auto& m : clkDiffs_) m.second.nhSz = 0;   //clear last round
         vs_.state = 2; //cleared when calibration finishes
         vs_.tolRnds = 0;
-        publishLog("ccs");  //calibrateClock start
+        logEvent("ccs");  //calibrateClock start
         if (sentClks_ > 0) sentClks_ = 0; // implies in process of sending probe clocks and a publish has been scheduled
         else publishClock();     //publish a set of clock values and  schedule a computeOffset upon completion
     }
@@ -422,26 +381,26 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
 
        /*
      * Called when a new status Publication is received in the tdvc collection
-     * status pub names <m_prefix><sts><#nbrs><timestamp> (currently inserts myId before vc for testing)
+     * status pub names <prefix_><sts><#nbrs><timestamp> (currently inserts myId before vc for testing)
      * Status pubs have a longish lifetime
      */
     void receiveStsValue(const rPub& p) {
         auto tpId = cs_[p.signer()].signer();   // thumbprint of identity cert
-        if (!m_clkDiffs.contains(tpId)) m_clkDiffs[tpId].nhSz = 0;  // make an entry for ping to use
-        m_clkDiffs[tpId].lives = true; // note that tpId has been heard from
-        if (!m_pinging) {   // can start pinging since have neighbor(s)
-            m_sync.oneTime(std::chrono::milliseconds(rand(5)), [this](){ publishPing(); });
-            m_sync.oneTime(m_computeDly, [this](){ calculateDlys(); });
-            m_pinging = true;
+        if (!clkDiffs_.contains(tpId)) clkDiffs_[tpId].nhSz = 0;  // make an entry for ping to use
+        clkDiffs_[tpId].lives = true; // note that tpId has been heard from
+        if (!pinging_) {   // can start pinging since have neighbor(s)
+            sync_.oneTime(std::chrono::milliseconds(rand_(5)), [this](){ publishPing(); });
+            sync_.oneTime(computeDly_, [this](){ calculateDlys(); });
+            pinging_ = true;
          }
      }
 
     /*
      * Called when a new clk Publication is received in the tdvc collection
-     * clock pub names <m_prefix><clk><round><#nbrs><timestamp> (XXXcurrently inserts myId before vc for testing)
+     * clock pub names <prefix_><clk><round><#nbrs><timestamp> (XXXcurrently inserts myId before vc for testing)
      */
     void receiveClkValue(const rPub& p) {
-        if (!m_started) return; // will start from calibrateClock (called after receiveSts and calculateDlys)
+        if (!started_) return; // will start from calibrateClock (called after receiveSts and calculateDlys)
        /* process the sample
          * compute difference between local virtual clock estimate and timestamp in us, signed value
          * add the current offset estimate (used for multiple rounds) which is estimate of how far ahead my vc is of domain vc
@@ -450,37 +409,37 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
         */
         const auto& tp = p.signer();    // thumbprint of p's signing cert
         auto n = p.name();
-        n.nextAt(m_prefix.size()).toSv();   // skip over subcollection clk
+        n.nextAt(prefix_.size()).toSv();   // skip over subcollection clk
         auto st = n.nextBlk().toNumber();
         auto nhd = n.nextBlk().toNumber();
         auto tpId = cs_[tp].signer();   // thumbprint of identity cert
         auto rts = n.lastBlk().toTimestamp(); // received pub timestamp as a timepoint
-        auto cd = m_sync.tdvcNow() - vs_.adjust - rts - txDly_;
+        auto cd = sync_.tdvcNow() - vs_.adjust - rts - txDly_;
         /*
          * In state 0 clock, send nothing to another state 0 member
          * A member in state 1 will need my values to finish, so publish if not already doing so
         // A member not in state 0 or 1 will start me calibrating (if not change in vc, nothing happens to my vc)
         */
         if (vs_.state == 0) {
-            if (st > 1 || std::abs(cd.count()) > m_tolVal) {
-                if (isRelay(m_tp)) m_relayCb(tpId, cd.count(), nhd, st);    // causes relay to start calibrating again
+            if (st > 1 || std::abs(cd.count()) > tolVal_) {
+                if (isRelay(tp_))relayCb_(tpId, cd.count(), nhd, st);    // causes relay to start calibrating again
                 else calibrateClock();
             } else if (st == 1 && sentClks_ == 0) publishClock(); // not already sending
            return;
         }
 
-        if (isRelay(m_tp)) {    // relay deftts share all values
-            m_relayCb(tpId, cd.count(), nhd, st);
+        if (isRelay(tp_)) {    // relay deftts share all values
+            relayCb_(tpId, cd.count(), nhd, st);
             return;
         }
 
-        if (!m_clkDiffs.contains(tpId) || st != m_clkDiffs[tpId].st || m_clkDiffs[tpId].nhSz == 0 ) {
+        if (!clkDiffs_.contains(tpId) || st != clkDiffs_[tpId].st || clkDiffs_[tpId].nhSz == 0 ) {
             // new or not the same as last state received from this tpId or entry was from status not clock pub
-            m_clkDiffs[tpId].st = st;
-            m_clkDiffs[tpId].v = cd.count();
-        } else if ( cd.count() < m_clkDiffs[tpId].v) m_clkDiffs[tpId].v = cd.count();
-        m_clkDiffs[tpId].nhSz = nhd;            // use received value
-        m_clkDiffs[tpId].lives = true;
+            clkDiffs_[tpId].st = st;
+            clkDiffs_[tpId].v = cd.count();
+        } else if ( cd.count() < clkDiffs_[tpId].v) clkDiffs_[tpId].v = cd.count();
+        clkDiffs_[tpId].nhSz = nhd;            // use received value
+        clkDiffs_[tpId].lives = true;
     }
 
     // in state 0, periodically announce my clock to neighborhood: out-of-tolerance restarts calibration
@@ -488,7 +447,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
         if (vs_.state > 0) return;    // not in calibrated state
         sentClks_ = SetSz - 1; // this will only send one probe clock instead of setSz
         publishClock();
-        m_probe = m_sync.schedule(std::chrono::seconds(calSp/4+ rand(13)), [this](){ probeClock(); });
+        probe_ = sync_.schedule(std::chrono::seconds(calSp/4+ rand_(13)), [this](){ probeClock(); });
     }
 
      /*
@@ -501,36 +460,37 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
       * at a delay and check in initDone() to see if calibration restarted (vs_.state > 0)
       */
      void endFin(std::string s, std::span<const uint8_t> content = {}) {
-          publishLog(s, content);  // log when finishCalibration, changed or not
+          logEvent(s, content);  // log when finishCalibration, changed or not
           vs_.adjust = zeroUs;
           probeClock();
-          if (s == "oob") return;   // not done if in m_init
+          if (s == "oob") return;   // not done if in init_
           // delay calling initDone in case there are "ripple" effects from domains that aren't all on one mcast net
-          if (m_init) m_sync.oneTime(4*m_computeDly, [this](){ initDone(); });
+          // at timeout, first checks vs_state to see if started calibrating again
+          if (init_) sync_.oneTime(4*computeDly_, [this](){  if (vs_.state) return; initDone(); });
      }
 
      void finishCalibration(auto a, uint8_t n=1) {
-          for (auto& m : m_clkDiffs) m.second.nhSz = 0;   //clear last round
+          for (auto& m : clkDiffs_) m.second.nhSz = 0;   //clear last round
           vs_.tolRnds = 0;
           vs_.state = 0;
           sentClks_ = 0;
-          if (isRelay(m_tp)) vs_.nbrs = n;
+          if (isRelay(tp_)) vs_.nbrs = n;
           if (a == zeroUs) { endFin("cal"); return; }   // local vc didn't change
 
           try {
               auto sc = (rCert) (cs_.get(cs_.Chains()[0]));  // check for continued validity of signing cert
               auto ic = (rCert)  (cs_.get(sc.signer()));        //      and identity cert
-              if ( ic.validNow(m_sync.tdvcAdjust()+a) ) {   // cert valid methods use system clock with passed in adjustment
-                  m_sync.tdvcAdjust(a); // okay to apply adustment to the virtual clock
-                  if ( !(sc.validNow(m_sync.tdvcAdjust())) ) {  // check if invalidates current signing cert
+              if ( ic.validNow(sync_.tdvcAdjust()+a) ) {   // cert valid methods use system clock with passed in adjustment
+                  sync_.tdvcAdjust(a); // okay to apply adustment to the virtual clock
+                  if ( !(sc.validNow(sync_.tdvcAdjust())) ) {  // check if invalidates current signing cert
                       waitSP_ = true;   // when waitSP_ is set, endFin() will be called from updateSigningKey()
                       newSPcb_();    // when new SP is created and validated, tdvc's updateSigningKey() will be called
                   } else {
-                      expcb_(sc);  // vc was adjusted so signing cert expire may happen sooner/later which can be a problem if other members expire my sc
+                      expspcb_(sc);  // vc was adjusted so signing cert expire may happen sooner/later which can be a problem if other members expire my sc
                       endFin("cal");
                   }
                } else {
-                  std::string s = dct::format("Ignoring out-of-bounds vc adjustment: adjustment {} to {} would invalidate identity cert", a, m_sync.tdvcNow() );
+                  std::string s = dct::format("Ignoring out-of-bounds vc adjustment: adjustment {} to {} would invalidate identity cert", a, sync_.tdvcNow() );
                   std::vector<uint8_t> c(s.begin(), s.end());
                   endFin("oob", c);  // ignoring out-of-bounds clock adjustment - can't invalidate identity cert
               }
@@ -654,10 +614,10 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      }
 
      void computeOffset() {
-         if (isRelay(m_tp))  return;    //  relay computes centrally
-         if (doOffset(m_clkDiffs, vs_) == true) finishCalibration(-vs_.adjust);
+         if (isRelay(tp_))  return;    //  relay computes centrally
+         if (doOffset(clkDiffs_, vs_) == true) finishCalibration(-vs_.adjust);
          else if (vs_.nbrs > 1) publishClock();   // start next round
-         else m_sync.oneTime(m_computeDly,  [this](){ publishClock(); }); //no neighbors communicating - delay for others to join
+         else sync_.oneTime(computeDly_,  [this](){ publishClock(); }); //no neighbors communicating - delay for others to join
       }
 
     /*
@@ -670,14 +630,14 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      *
      * Calls its syncps's start() before returning to start participating in collection
      */
-    void setup(connectedCb&& ccb) {
-        m_connCb = std::move(ccb);
-        m_sync.start();     // distributors "before" me have initialized (cert distributor)
-        publishLog("ivc"); // to get initial clock
-        m_sync.subscribe(m_prefix/"clk", [this](const auto& p){ receiveClkValue(p); });
-        m_sync.subscribe(m_prefix/"sts", [this](const auto& p){ receiveStsValue(p); });
-        m_sync.subscribe(m_prefix/"png", [this](const auto& p){ receivePngEco(p); });
-        m_sync.subscribe(m_prefix/"eco", [this](const auto& p){ receivePngEco(p); });
+    void setup(connectedCb&& ccb) override final {
+        connCb_ = std::move(ccb);
+        sync_.start();     // distributors "before" me have initialized (cert distributor)
+        logEvent("ivc"); // log initial clock
+        sync_.subscribe(prefix_/"clk", [this](const auto& p){ receiveClkValue(p); });
+        sync_.subscribe(prefix_/"sts", [this](const auto& p){ receiveStsValue(p); });
+        sync_.subscribe(prefix_/"png", [this](const auto& p){ receivePngEco(p); });
+        sync_.subscribe(prefix_/"eco", [this](const auto& p){ receivePngEco(p); });
         publishStatus();    // lets others know I'm in the tdvc collection
     }    
 };   // DistTDVC

@@ -2,7 +2,9 @@
 
 These directories are included to illustrate how DCT can be used and to perhaps spark new ideas. Real solutions use similar approaches.
 
-- hmIot: The README in this directory may be useful in understanding how DCT's modules can be used.
+- hmIot: The README in this directory may be useful in understanding how DCT's modules can be used
+
+- log: documentation and exampes of using the **logs** distributor
 
 - office: another example, originally developed for a tutorial at the 2021 ACM ICN conference
 

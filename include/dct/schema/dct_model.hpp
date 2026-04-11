@@ -37,6 +37,7 @@
 #include "dct/utility.hpp"
 #include "validate_bootstrap.hpp"
 #include "validate_pub.hpp"
+#include "dct/distributors/dist.hpp"
 #include "dct/distributors/dist_cert.hpp"
 #include "dct/distributors/dist_logs.hpp"
 #include "dct/distributors/dist_tdvc.hpp"
@@ -48,6 +49,7 @@ using namespace std::literals;
 
 namespace dct {
 
+using connectedCb = std::function<void(bool)>;
 // format for logging events - may want to add src if including in name is not sufficiently rigorous
 using logEvCb = std::function<void(crName&&, std::span<const uint8_t>)>;
 
@@ -94,6 +96,19 @@ struct DCTmodel {
     // of the schema cert thumbprint to make them trust-zone specific.
     auto pduPrefix() const { return crName()/std::span(bs_.schemaTP_).first(8); }
     auto maxInfoSize() const { return m_sync.maxInfoSize_; }
+
+    void setLogging() { logging_ = true; }
+    auto& subscribeLogs(std::string_view topic, SubCb&& cb) {
+        lgd_->subscribeLogs(topic, std::move(cb));
+        return *this;
+    }
+    auto& subscribeLogs(SubCb&& cb) {
+        lgd_->subscribeLogs( std::move(cb));
+        return *this;
+    }
+    void logEvent(std::string_view topic, std::span<const uint8_t> content = {}) {
+        logsCb_( topic , content);
+   }
 
     const auto& certs() const { return cs_; }
 
@@ -192,12 +207,12 @@ struct DCTmodel {
                 setupPubValidator(tp);
                 // let all attached collections know there is a new signer in case have pending Publications
                 // start with PDU key collection, then Pub key collection, then msgs collection
-                if (m_virtClk) m_vcd->m_sync.newSigner(tp);
-                if (logging_) lgd_->m_sync.newSigner(tp);
-                if (m_gkd)   m_gkd->m_sync.newSigner(tp);
-                else if (m_sgkd) m_sgkd->m_sync.newSigner(tp);
-                if (m_pgkd)   m_pgkd->m_sync.newSigner(tp);
-                else if (m_psgkd) m_psgkd->m_sync.newSigner(tp);
+                if (m_virtClk) m_vcd->sync_.newSigner(tp);
+                if (logging_) lgd_->sync_.newSigner(tp);
+                if (m_gkd)   m_gkd->sync_.newSigner(tp);
+                else if (m_sgkd) m_sgkd->sync_.newSigner(tp);
+                if (m_pgkd)   m_pgkd->sync_.newSigner(tp);
+                else if (m_psgkd) m_psgkd->sync_.newSigner(tp);
                 m_sync.newSigner(tp);
                 return; // done since signing cert validation completes the chain
             }
@@ -300,7 +315,7 @@ struct DCTmodel {
             psm_{getPduSigMgr(bs_)},
             syncSm_{msm_.ref(), bs_, pv_},
             m_sync{face_, pduPrefix()/"msgs", pduSigMgr(), syncSm_},
-            m_ckd{face_, pubPrefix(), pduPrefix()/"cert", [this](auto cert){ addCert(cert);}}
+            m_ckd{face_, pubPrefix(), pduPrefix()/"cert", cs_, [this](auto cert){ addCert(cert);}}
     {
         // sync session for msgs pubs is started after distributor(s) have completed their setup
         m_sync.autoStart(false);
@@ -308,22 +323,21 @@ struct DCTmodel {
         if (m_virtClk)  // check if using trust domain virtual clock
             m_vcd = new DistTDVC(face_, pubPrefix(), pduPrefix()/"tdvc", certs(),  [this, signIdCb](){getNewSP(signIdCb);},
                                 [this, signIdCb](const rCert& c){ expireTmSP(c, signIdCb); });
-        if (logging_)   // check if logging enabled
-            lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
+
         if(psm_.ref().encryptsContent()) {
             if (matchesAny(bs_, pubPrefix()/"CAP"/"KM"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                 throw schema_error("Encrypted CAdd PDUs require that some entity(s) have KeyMaker capability");
             }
             if (! psm_.ref().subscriberGroup()) {
-                m_gkd = new DistGKey(face_, pubPrefix(), pduPrefix()/"keys"/"pdus",
-                             [this](auto gk, auto gkt){ psm_.ref().addKey(gk, gkt);}, certs());
+                m_gkd = new DistGKey(face_, pubPrefix(), pduPrefix()/"keys"/"pdus", certs(),
+                             [this](auto k, auto, auto ct){ psm_.ref().addKey(k, ct);});
             } else {
                 if (matchesAny(bs_, pubPrefix()/"CAP"/"SG"/"_"/"KEY"/"_"/"dct"/"_") < 0) {
                     // schema doesn't contain an SG member so PP won't work XXXX should extract name of group from schema
                     throw schema_error("PPSIGNED/PPAEAD require that some entity(s) have Subscriber capability");
                 }
-                m_sgkd = new DistSGKey(face_, pubPrefix(), pduPrefix()/"keys"/"pdus",
-                             [this](auto gpk, auto gsk, auto ct){ psm_.ref().addKey(gpk, gsk, ct);}, certs());
+                m_sgkd = new DistSGKey(face_, pubPrefix(), pduPrefix()/"keys"/"pdus", certs(),
+                             [this](auto s, auto p, auto ct){ psm_.ref().addKey(p, s, ct);});
             }
         }
         //encryption methods for pubs in msgs collection MUST be signed versions
@@ -338,11 +352,11 @@ struct DCTmodel {
                     throw schema_error("PPSIGNED requires that some entity(s) have Subscriber capability");
                 }
                 // XXXX instead of msgs could be name of subscriber group
-                m_psgkd = new DistSGKey(face_, pubPrefix(), pduPrefix()/"keys"/"msgs",
-                             [this](auto gpk, auto gsk, auto ct){ msm_.ref().addKey(gpk, gsk, ct);}, certs());
+                m_psgkd = new DistSGKey(face_, pubPrefix(), pduPrefix()/"keys"/"msgs", certs(),
+                             [this](auto s, auto p, auto ct){ msm_.ref().addKey(p, s, ct);});
             } else {
-                m_pgkd = new DistGKey(face_, pubPrefix(), pduPrefix()/"keys"/"msgs",
-                             [this](auto gk, auto gkt){ msm_.ref().addKey(gk, gkt);}, certs());
+                m_pgkd = new DistGKey(face_, pubPrefix(), pduPrefix()/"keys"/"msgs", certs(),
+                             [this](auto k, auto, auto ct){ msm_.ref().addKey(k, ct);});
             }
         }
 
@@ -429,12 +443,16 @@ struct DCTmodel {
     auto defaults(const std::vector<parItem>& pvec) { return bld_.defaults(pvec); }
 
     // set start callback for shims that have a separate connect/start like mbps
+    // if logging_ is set, it gets set up here
     // Note: this can get much simpler when distributors derive from a common class
     void start(connectedCb&& cb) {
         auto pdu_dist = m_gkd == NULL? m_sgkd != NULL :  true;
         auto pub_dist = m_pgkd == NULL ? m_psgkd != NULL :  true;
-        if (logging_) // logs callback - if not set uses  default no-op
+        if (logging_)  {    // check if logging enabled
+            lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
+            // logs callback - if not set uses  default no-op
             logsCb_ = [lgd=lgd_] (crName&& ln, std::span<const uint8_t> c) mutable { lgd->publishLog(std::move(ln), c); };
+        }
 
         if (!pdu_dist && !pub_dist) {
             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
@@ -442,7 +460,7 @@ struct DCTmodel {
                 if (logging_) {
                     lgd_->setup([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
-                               else { // set logs callback for distributors
+                               else { // set logs callback for distributors using logging
                                    if (m_virtClk) m_vcd->logsCb_ = logsCb_;
                                }
                      });
@@ -461,6 +479,7 @@ struct DCTmodel {
                            lgd_->setup([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
+                                   m_gkd->logsCb_ = logsCb_;
                                    if (m_virtClk) m_vcd->logsCb_ = logsCb_;
                                }
                            });
@@ -486,7 +505,10 @@ struct DCTmodel {
                        if (logging_) {    // log distributor should always return true but go ahead and continue without logging
                            lgd_->setup([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
-                               else  if (m_virtClk) m_vcd->logsCb_ = logsCb_; // set logs callback for distributors
+                               else { // set logs callback for distributors
+                                   m_pgkd->logsCb_ = logsCb_;
+                                   if (m_virtClk) m_vcd->logsCb_ = logsCb_;
+                               }
                            });
                        }
                        if (m_virtClk) {
@@ -514,6 +536,8 @@ struct DCTmodel {
                            lgd_->setup([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
+                                   m_gkd->logsCb_ = logsCb_;
+                                   m_pgkd->logsCb_ = logsCb_;
                                    if (m_virtClk) m_vcd->logsCb_ = logsCb_;
                                }
                            });

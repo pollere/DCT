@@ -4,7 +4,7 @@
 // certificate that is signed and validatable.
 
 // trust anchor name associated with this domain
-_domain:    "iot2"
+_domain:    "logEx"
 
 // MBPS Publication definition
 // target, topic, topicArgs are set using application parameters
@@ -35,6 +35,7 @@ signCert:    _domain/_role/_roleId/"sgn"/_certinfo
 
 opSign: signCert & { _role: "operator" } <= opCert
 devSign: signCert & { _role: "device" } <= devCert
+logSign: signCert & { _role: "logger" } <= logCert
 
 // There are different signing chains for opCert & devCerts.
 // "key makers" (authorized by the KM capability, kmCap) are
@@ -52,6 +53,7 @@ devSign: signCert & { _role: "device" } <= devCert
 
 opCert:  roleCert <= domainCert
 devCert: roleCert <= domainCert | kmCap | kmpCap
+logCert:  roleCert <= domainCert
 
 // capability certs (capabilities granted to roles)
 capCert: _domain/"CAP"/capId/capArg/_certinfo

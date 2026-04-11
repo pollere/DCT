@@ -10,7 +10,7 @@
  * its signing chain as dctCert Publications.  On receiving a new
  * Publication, callback to addCertCb.
  *
- * Copyright (C) 2020-2 Pollere LLC
+ * Copyright (C) 2020-6 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -26,92 +26,90 @@
  *  along with this program; if not, see <https://www.gnu.org/licenses/>.
  *  You may contact Pollere LLC at info@pollere.net.
  *
- *  keydist_cert.hpp is not intended as production code.
+ *  dist_cert.hpp is not intended as production code.
  */
 
-#include <functional>
 #include <unordered_set>
-
 #include "dct/schema/dct_cert.hpp"
-#include "dct/sigmgrs/sigmgr_by_type.hpp"
-#include "dct/syncps/syncps.hpp"
+#include "dist.hpp"
 
 namespace dct {
 
-using addCertCb = std::function<void(const rData)>;
-using connectedCb = std::function<void(bool)>;
-
 /*
  * Key distributor for certs.
- * Parent certstore sets the pduPrefix used for its SyncPubSub (would   with domain and
- * probably include "cert") and sets the pubprefix used for subscription in start().
+ * Parent sets the pduPrefix used for its sync
+ * and sets the pubprefix used for subscription in start().
  * Also passes in a call back for each new received signing cert.
  *
- * DistCert's m_sync uses the RFC7693 signature manager for cAdds.
+ * DistCert's sync_ uses the RFC7693 signature manager for cAdd PDUs.
  * Its pubs use a SigMgrNull since the Certificates are fully signed Publications
- * and signature validation happens in the parent certstore.
+ * and signature validation happens in the parent certstore and cert exchange
+ * happens in bootstrapping. This is unique among distributors
  */
 
-struct DistCert
-{    
-    crName m_pubPrefix;  //prefix for subscribe()
-    SigMgrAny m_syncSigMgr{sigMgrByType("RFC7693")}; // to sign/validate SyncData packets
-    SigMgrAny m_certSigMgr{sigMgrByType("NULL")};   // to sign/validate Publications
-    SyncPS m_sync;
-    connectedCb m_connCb{[](bool){}};   // called when initial cert exchange done
-    std::unordered_set<size_t> m_initialPubs{};
-    bool m_havePeer{false};
-    bool m_initDone{false};
+ using addCertCb = std::function<void(const rData)>;
 
-    DistCert(DirectFace& face, const Name& pPre, const Name& wPre, addCertCb&& addCb) :
-        m_pubPrefix{pPre}, m_sync(face, wPre, m_syncSigMgr.ref(), m_certSigMgr.ref())
+struct DistCert : Dist
+{
+    std::unordered_set<size_t> initialPubs_{};
+    bool havePeer_{false};
+
+    DistCert(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs, addCertCb&& addCb) :
+        Dist(face, pPre, dPre, cs, "RFC7693", "NULL")
     {
-        m_sync.cStateLifetime(4789ms);
-        m_sync.getCreationCb([this](const auto& p) { return m_sync.tdvcFromSys(rCert(p).validAfter()); });
-        m_sync.getLifetimeCb([](const auto& p) {
+        dtype_.assign("cert");
+        sync_.autoStart(true);  // override base class default
+        sync_.cStateLifetime(4789ms);
+        sync_.getCreationCb([this](const auto& p) { return sync_.tdvcFromSys(rCert(p).validAfter()); });
+        sync_.getLifetimeCb([](const auto& p) {
                 auto c = rCert(p);
                 return std::chrono::duration_cast<tdv_clock::duration>(c.validUntil() - c.validAfter());
             });
         // Unlike most pubs, certs can go into the collection before they're valid since the validity period is
         // checked when they're used but they expire at the end of their validity period. 
-        m_sync.isExpiredCb([](const auto& p) { return rCert(p).expired(); });
-        m_sync.subscribe(m_pubPrefix, std::move(addCb));
+        sync_.isExpiredCb([](const auto& p) { return rCert(p).expired(); });
+        sync_.subscribe(prefix_, std::move(addCb));
     }
 
     /*
      * The dct model calls when it is started.
      * Passed a callback to use when the publication of the signing chain is confirmed.
-     * This approach just keeps trying to publish all the keys in m_skv but the application
-     * can set a timeout to exit if m_connCb isn't called after a suitable delay
+     * This approach just keeps trying to publish the certs but the application
+     * can set a timeout to exit if connCb_ isn't called after a suitable delay
+     * connCb is called when initial cert exchange done
      */
-    void setup(connectedCb&& connCb) { m_connCb = std::move(connCb); }
+    void setup(connectedCb&& connCb) override final {
+        connCb_ = std::move(connCb);
+     }
 
     /*
      * Called when an initial cert exchange has completed (some peer(s) have our cert
      * chain and we have theirs).
      */
-    void initDone() {
-        m_sync.pubLifetime_ = 2s;
-        m_initDone = true;
-        m_connCb(true);
+    void initDone() override final {
+        if (init_) {
+            init_ = false;
+            connCb_(true);
+            sync_.pubLifetime_ = 2s;
+        }
     }
 
     /*
      * Certstore has validated and accepted a peer's cert.
      */
     void publishCert(const rData c) {
-        m_havePeer = true;
-        m_sync.publish(c);
-        if (! m_initDone && m_initialPubs.empty()) initDone();
+        havePeer_ = true;
+        sync_.publish(c);
+        if (init_ && initialPubs_.empty()) initDone();
     }
 
-    // adding for ptps - relayed certs only so don't set m_havePeer
+    // adding for ptps - relayed certs only so don't set havePeer_
     void publishRlyCert(const rData c) {
-        m_sync.publish(c);
+        sync_.publish(c);
     }
     // confirm publication of this cert - used after bootstrap so doesn't set havePeer
     void publishConfCert(const rData c, DelivCb cb) {
-        m_sync.publish(c, std::move(cb));
+        sync_.publish(c, std::move(cb));
     }
 
     /*
@@ -122,29 +120,29 @@ struct DistCert
      *
      * Bootstrap publications are done with a confirmation callback and, when
      * all of them have been confirmed as received by peer(s), the outbound
-     * half of initialization is done (indicated by 'm_initialPubs.empty()').
+     * half of initialization is done (indicated by 'initialPubs_.empty()').
      * The inbound half of initialization finishes when the certstore has
      * received and validated the entire signing chain of at least one peer
-     * (indicated by 'm_havePeer = true'). When both halves are done, future
+     * (indicated by 'havePeer_ = true'). When both halves are done, future
      * pubs are done without confirmation, cState timeout is much less
      * aggressive, and the 'connect' callback is called to move to the next
      * phase of operation.
      */
     void initialPub(const rData c) {
-        if (! m_initDone) {
+        if (init_) {
             auto h = std::hash<tlvParser>{}(c);
-            m_initialPubs.emplace(h);
-            m_sync.pubLifetime_ = m_sync.getLifetime_(c);
-            m_sync.publish(c, [this, h](const auto& /*d*/, bool /*acked*/) {
+            initialPubs_.emplace(h);
+            sync_.pubLifetime_ = sync_.getLifetime_(c);
+            sync_.publish(c, [this, h](const auto& /*d*/, bool /*acked*/) {
                         // when all the initial pubs have been acked and we have
                         // at least one peer's signing chain, initialization is done.
-                        m_initialPubs.erase(h);
-                        if (m_havePeer && m_initialPubs.empty())
+                        initialPubs_.erase(h);
+                        if (havePeer_ && initialPubs_.empty())
                             initDone();
                     });
             return;
         }
-        m_sync.publish(c);
+        sync_.publish(c);
     }
 };
 

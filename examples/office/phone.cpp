@@ -54,7 +54,7 @@ static struct option opts[] = {
 static void usage(const char* cname) { dct::print("- {} usage: id [-w ms] [loc] function args\n", cname); }
 
 /* Globals */
-static std::chrono::microseconds pubWait = std::chrono::seconds(5);
+static std::chrono::microseconds pubWait = std::chrono::seconds(1);
 
 // instance attributes from signing chain
 static std::string role{};
@@ -123,7 +123,7 @@ int main(int argc, char* argv[])
     // cert chain, and the current signing secret key plus public cert (see util/identity_access.hpp)
    //Create the mbps DeftT
     mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();},
-        [itp=dct::idTag()](std::chrono::microseconds a){return getSigningPair(itp, a);});
+        [](std::chrono::microseconds a){return getSigningPair(dct::idTag(), a);});
     role = cm.attribute("_role");
     id = cm.attribute("_roleId");
     room = cm.attribute("_roomId");
@@ -143,7 +143,6 @@ int main(int argc, char* argv[])
             dct::print("{} {}'s phone sending to {}\n", role, id, loc);
             cmdPubr(cm);
         });
-        cm.run();
     } catch (const std::exception& e) {
         std::cerr << "{} got exception: " << e.what() << std::endl;
         exit(1);
@@ -154,4 +153,5 @@ int main(int argc, char* argv[])
         std::cerr << "default exception";
         exit(1);
     }
+    cm.run();
 }

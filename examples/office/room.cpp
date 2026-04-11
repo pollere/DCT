@@ -86,7 +86,7 @@ int main(int argc, char* argv[])
     // cert chain, and the get signing secret key plus public cert (see util/identity_access.hpp)
    //Create the mbps DeftT
     mbps cm(rootCert, []{return schemaCert();}, []{return identityChain();},
-        [itp=dct::idTag()](std::chrono::microseconds a){return getSigningPair(itp, a);});
+        [](std::chrono::microseconds a){return getSigningPair(dct::idTag(), a);});
 
     cm.m_pb.pubLifetime(500ms); // want fresh status information
     role = cm.attribute("_role");

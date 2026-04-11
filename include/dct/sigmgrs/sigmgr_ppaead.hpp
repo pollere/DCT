@@ -164,7 +164,7 @@ struct SigMgrPPAEAD final : SigMgr {
     inline size_t eKeySize(auto i) const { return (m_keyList.size() > 0 && m_keyList[i].ek.size() > 0); }
 
     /* update the subscriber group key pair
-     * a publisher needs the latest private key
+     * a publisher needs the latest public key
      * a member of SG will also get the secret key to add to its keyList
      * (keyList keeps no more than two keys)
      */

@@ -1,22 +1,9 @@
 /*
- * app2.cpp: command-line application to exercise mbps.hpp
+ * exApp.cpp: command-line application to illustrate application-level use of logging
  *
- * This is an application using the mbps shim. Message body is packaged
- * in int8_t vectors are passed between application and mbps. Parameters
- * are passed to mpbs in an vector of pairs (msgParms) along with an optional
- * callback if message qos is desired (confirmation that the message has been published).
- * Parameters are passed from mbps to the application in a mbpsMsg structure that
- * contains an unordered_map where values are indexed by the tags (components of Names)
- * that are defined in the trust schema for this particular application.
+ * This application is derived from examples/hmIot/app2.cpp
  *
- * app2 models an asymmetric, request/response style protocol between controlling
- * agent(s) ("operator" role in the schema) and controlled agent(s) ("device" role
- * in the schema). If the identity bundle gives the app an 'operator' role, it
- * periodically publishes a message and prints all the responses it receives.
- * If the app is given a 'device' role, it waits for a message then sets its
- * simulated state based on the message an announces its current state.
- *
- * Copyright (C) 2020-22 Pollere LLC
+ * Copyright (C) 2020-62 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -103,7 +90,6 @@ static void msgPubr(mbps &cm) {
     std::string s = dct::format("Msg #{} from {}:{}-{}", ++Cnt, role, myId, myPID);
     std::vector<uint8_t> toSend(s.begin(), s.end());
     msgParms mp;
-    // if (role == "operator")       while (toSend.size() < 3*cm.maxContent())  toSend.emplace_back(5);
 
     std::string a = (std::rand() & 2)? "unlock" : "lock"; // randomly toggle requested state
     if(role == "operator") {
@@ -157,6 +143,7 @@ void msgRecv(mbps &cm, const mbpsMsg& mt, const std::span<const uint8_t>& msgPay
     auto dt = (tp2d(cm.tdvcNow()) - tp2d(mtm)).count() / 1000.;
     auto now = tp2d(std::chrono::system_clock::now());
     nRcv++;
+    cm.logEvent("exApp/rcv/" + myPID);
 
     // actions can be conditional upon msgArgs and msgPayload
 
@@ -247,7 +234,7 @@ int main(int argc, char* argv[])
     // DeftT modules through the shim but this may not be needed in a deployed application
     role = cm.attribute("_role");
     myId = cm.attribute("_roleId");
-    //cm.setLogging(); // if logging, set here - must be before connect()
+    cm.setLogging(); // if logging, set here - must be before connect()
 
     // Connect and pass in the handler
     try {
@@ -255,6 +242,7 @@ int main(int argc, char* argv[])
          cm.connect([&cm]{
             auto now = std::chrono::system_clock::now();
             dct::print("{:%M:%S} {}:{}:{} is connected (vc: {})\n", ticks(now.time_since_epoch()), role, myId, myPID, cm.tdvcNow());
+            cm.logEvent("exApp/connect/" + myPID);
             if (role == "operator") {
                 //cm.subscribe(msgRecv);  // single callback for all messages
                 cm.subscribe(capability + "/event/", msgRecv);  // if multiple capabilities, do for each

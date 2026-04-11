@@ -34,8 +34,8 @@ mgrCmd: ctrlr & { topic: "command", loc: "confRm"|"hall" } <=  mgrSign
 grdCmd: #pub & { topic: "command", loc: "all" } & ({ func: "light", args: "on"|"off" } |
         { func: "door", args: "lock"|"unlock" } | { func: "temp", args: "ooo" }) <= grdSign
 
-roleCert:   _domain/_role/_roleId/_keyinfo
-signCert:   _domain/_role/_roleId/"sgn"/_keyinfo
+roleCert:   _domain/_role/_roleId/_certinfo
+signCert:   _domain/_role/_roleId/"sgn"/_certinfo
 
 empSign:    signCert & { _role: "employee" } <= personCert
 mgrSign:    signCert & { _role: "manager" } <= personCert
@@ -45,10 +45,10 @@ cntrlrSign: signCert & { _role: "controller" } <= cntrlrCert
 personCert: roleCert <= roomCert
 cntrlrCert: roleCert & { _role: "controller" } <= kmCap | kmpCap | roomCert
 
-roomCert: _domain/"room"/_roomId/_keyinfo <= configCert
+roomCert: _domain/"room"/_roomId/_certinfo <= configCert
 
 // capability certs format (for capabilities granted to roles)
-capCert: _domain/"CAP"/capId/capArg/_keyinfo
+capCert: _domain/"CAP"/capId/capArg/_certinfo
 
 // AEAD privacy requires key maker(s)
 // KM (KeyMaker) allows the holder to become a key maker. There
@@ -60,8 +60,8 @@ capCert: _domain/"CAP"/capId/capArg/_keyinfo
 kmCap:   capCert & { capId: "KM", capArg: _ }  <= roomCert
 kmpCap:   capCert & { capId: "KMP", capArg: _ }  <= roomCert | kmCap
 
-configCert: _domain/"config"/_configId/_keyinfo <= domCert
-domCert:    _domain/_keyinfo
+configCert: _domain/"config"/_configId/_certinfo <= domCert
+domCert:    _domain/_certinfo
 
 // information about signing chain
 #chainInfo: /_role/_roleId/_roomId <= signCert
@@ -74,5 +74,5 @@ domCert:    _domain/_keyinfo
 #pduValidator: "EdDSA"
 
 // The final components are KEY,keyID, issuerID and version 
-_keyinfo: "KEY"/_/"dct"/_
+_certinfo: "KEY"/_/"dct"/_
 

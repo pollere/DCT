@@ -4,16 +4,18 @@
 # set "-n xxx" for a number of runs other than 10 (default)
 # or "-n 0" for run forever
 
-members=(gate bob frontdoor backdoor patio sidedoor window1 window2) # alice)
+members=(gate bob frontdoor)
 
 #get rid of any leftovers
-killall app2
+#killall exApp logApp
 # DCT_DEFAULT_IF=en0
 # export DCT_DEFAULT_IF
 DCT_MULTICAST_ADDR=ff01::1234
 export DCT_MULTICAST_ADDR
+echo -n "logger started"
+./logApp ids/lgr.bundle &
 for mbr in ${members[@]}; do
-  ./app2 -n 3 id2/$mbr.bundle &
+  ./exApp -n 3 ids/$mbr.bundle &
   echo -n " $mbr"
   echo
 #  sleep .1 
