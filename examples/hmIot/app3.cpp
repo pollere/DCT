@@ -126,8 +126,8 @@ static void msgPubr(mbps &cm) {
             dct::print("\t{}:{} tried to publish msg #{} with unpermitted structure\n", role, myId, Cnt);
         }
     } else {
-         auto now = std::chrono::system_clock::now();
-        dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
+        auto now = std::chrono::system_clock::now();
+        //dct::print("{:%M:%S} {}:{}-{} #{} publishing to shim\n", tp2d(now), role, myId, myPID, Cnt - 1);
         try {
             cm.publish(std::move(mp), toSend);  //no callback to skip message confirmation
         } catch (const std::exception&) {

@@ -87,6 +87,8 @@ struct DCTmodel {
     void tdvcReset() noexcept { return face_.tdvcReset(); }
     auto tdvcToSys(tdv_clock::time_point tp) const noexcept { return face_.tdvcToSys(tp); }
 
+    const auto& certs() const { return cs_; }
+
     SigMgr& pduSigMgr() { return psm_.ref(); }
     SigMgr& msgSigMgr() { return msm_.ref(); }  // sigmgr for publications that carry application msgs
     SigMgr& certSigMgr() { return csm_.ref(); }
@@ -97,7 +99,17 @@ struct DCTmodel {
     auto pduPrefix() const { return crName()/std::span(bs_.schemaTP_).first(8); }
     auto maxInfoSize() const { return m_sync.maxInfoSize_; }
 
-    void setLogging() { logging_ = true; }
+    // XXX assume this can be set after initialization of distributors and go through list of active
+    //              distributors to set their logs callback
+    void setLogging() {
+        logging_ = true;
+        if (!lgd_)  {    // check if logger has been created yet:w
+            lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
+            // logs callback - if not set uses  default no-op
+            logsCb_ = [lgd=lgd_] (crName&& ln, std::span<const uint8_t> c) mutable { lgd->publishLog(std::move(ln), c); };
+        }
+     }
+
     auto& subscribeLogs(std::string_view topic, SubCb&& cb) {
         lgd_->subscribeLogs(topic, std::move(cb));
         return *this;
@@ -109,8 +121,6 @@ struct DCTmodel {
     void logEvent(std::string_view topic, std::span<const uint8_t> content = {}) {
         logsCb_( topic , content);
    }
-
-    const auto& certs() const { return cs_; }
 
     bool isSigningCert(const dctCert& cert) const {
         // signing certs are the first item each signing chain so go through
@@ -370,7 +380,7 @@ struct DCTmodel {
 
         for (const auto& [tp, cert] : cs_) m_ckd.initialPub(cert);
 
-        // pub and pdu sigmgrs each need its signing key setup and its validator needs
+        // pub and pdu sigmgrs each need their signing keys and their validators need
         // a callback to return a public key given a cert thumbprint.
         const auto& tp = cs_.Chains()[0]; // thumbprint of signing cert
         msgSigMgr().updateSigningKey(cs_.key(tp), cs_[tp]);
@@ -448,17 +458,13 @@ struct DCTmodel {
     void start(connectedCb&& cb) {
         auto pdu_dist = m_gkd == NULL? m_sgkd != NULL :  true;
         auto pub_dist = m_pgkd == NULL ? m_psgkd != NULL :  true;
-        if (logging_)  {    // check if logging enabled
-            lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
-            // logs callback - if not set uses  default no-op
-            logsCb_ = [lgd=lgd_] (crName&& ln, std::span<const uint8_t> c) mutable { lgd->publishLog(std::move(ln), c); };
-        }
+        if (logging_)  setLogging();    // if logging enabled, set up log distributor and callback
 
         if (!pdu_dist && !pub_dist) {
-            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+            m_ckd.start([this, cb=std::move(cb)](bool c) mutable {
                 if (!c) { cb(false); return; }
                 if (logging_) {
-                    lgd_->setup([this,cb=std::move(cb)](bool c) {
+                    lgd_->start([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors using logging
                                    if (m_virtClk) m_vcd->logsCb_ = logsCb_;
@@ -466,17 +472,17 @@ struct DCTmodel {
                      });
                 }
                 if (!m_virtClk) { cb(c); if (c) m_sync.start(); }
-                else m_vcd->setup([this,cb=std::move(cb)](bool c){ cb(c); if (c) { vcInit_ = true; m_sync.start(); }});
+                else m_vcd->start([this,cb=std::move(cb)](bool c){ cb(c); if (c) { vcInit_ = true; m_sync.start(); }});
             });
             return;
         }
 
         // complete pdu key distribution before pub key distribution
         if ( pdu_dist && !pub_dist ) {
-            m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+            m_ckd.start([this, cb=std::move(cb)](bool c) mutable {
                        if (!c) { cb(false); return; }
                        if (logging_) {    // log distributor should always return true but go ahead and continue without logging
-                           lgd_->setup([this,cb=std::move(cb)](bool c) {
+                           lgd_->start([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
                                    m_gkd->logsCb_ = logsCb_;
@@ -485,25 +491,25 @@ struct DCTmodel {
                            });
                        }
                        if (m_virtClk) {
-                           m_vcd->setup([this,cb=std::move(cb)](bool c){
+                           m_vcd->start([this,cb=std::move(cb)](bool c){
                                     if (!c) { cb(false); return; }
                                     vcInit_ = true;    // first vc calibration finished
                                     if (m_gkd)  // check if pdu distributor returns false
-                                        m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                        m_gkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                     else    // must be m_psgkd
-                                        m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                        m_sgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 });
                        } else {    //no tdvc distributor
-                           if (m_gkd) m_gkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                           else m_sgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); }); // must be m_sgkd
+                           if (m_gkd) m_gkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                           else m_sgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); }); // must be m_sgkd
                        }
              });
             return;
         } else  if ( !pdu_dist && pub_dist) {
-             m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+             m_ckd.start([this, cb=std::move(cb)](bool c) mutable {
                        if (!c) { cb(false); return; }
                        if (logging_) {    // log distributor should always return true but go ahead and continue without logging
-                           lgd_->setup([this,cb=std::move(cb)](bool c) {
+                           lgd_->start([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
                                    m_pgkd->logsCb_ = logsCb_;
@@ -512,28 +518,28 @@ struct DCTmodel {
                            });
                        }
                        if (m_virtClk) {
-                            m_vcd->setup([this,cb=std::move(cb)](bool c){
+                            m_vcd->start([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }
                                  vcInit_ = true;    // first vc calibration finished
                                 if (m_pgkd)   // check if pdu distributor returns false
-                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_pgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 else    // must be m_psgkd
-                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_psgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                            });
                        } else {    //no tdvc distributor
                             if (m_pgkd) {
-                                m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                m_pgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                             } else { // must be m_psgkd
-                                m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                m_psgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                             }
                         }
-                    }); // end of ckd setup
+                    }); // end of ckd start
             return;
         } else {    //both pdus and msgs have a distributor
-           m_ckd.setup([this, cb=std::move(cb)](bool c) mutable {
+           m_ckd.start([this, cb=std::move(cb)](bool c) mutable {
                     if (!c) { cb(false); return; }
                     if (logging_) {    // log distributor should always return true but go ahead and continue without logging
-                           lgd_->setup([this,cb=std::move(cb)](bool c) {
+                           lgd_->start([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
                                    m_gkd->logsCb_ = logsCb_;
@@ -543,43 +549,43 @@ struct DCTmodel {
                            });
                     }
                     if (m_virtClk) {
-                        m_vcd->setup([this,cb=std::move(cb)](bool c){
+                        m_vcd->start([this,cb=std::move(cb)](bool c){
                          if (!c) { cb(false); return; }
                          vcInit_ = true;    // first vc calibration finished
                          if (m_gkd) {    // check if gk distributor returns false
-                            m_gkd->setup([this,cb=std::move(cb)](bool c){
+                            m_gkd->start([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false
                                 if (m_pgkd)
-                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_pgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 else    // must be m_psgkd
-                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_psgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                            });
                         } else { // must be m_sgkd
-                           m_sgkd->setup([this,cb=std::move(cb)](bool c){
+                           m_sgkd->start([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false
                                 if (m_pgkd)
-                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_pgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 else    // must be m_psgkd
-                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_psgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                            });
                         }
                       });
                     } else { // no tdvc
                         if (m_gkd) {
-                            m_gkd->setup([this,cb=std::move(cb)](bool c){
+                            m_gkd->start([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false
                                 if (m_pgkd)
-                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_pgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 else    // must be m_psgkd
-                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_psgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                            });
                         } else { // must be m_sgkd
-                           m_sgkd->setup([this,cb=std::move(cb)](bool c){
+                           m_sgkd->start([this,cb=std::move(cb)](bool c){
                                 if (!c) { cb(false); return; }  // check if pdu distributor returns false
                                 if (m_pgkd)
-                                    m_pgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_pgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 else    // must be m_psgkd
-                                    m_psgkd->setup([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
+                                    m_psgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                            });
                         }
                     }

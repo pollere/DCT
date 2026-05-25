@@ -948,7 +948,7 @@ struct SyncPS {
                 // For now we skip this pub and try to continue but getting a real cAdd valid()
                 // method needs to happen ASAP. Once it does, this 'if' will go away since a cAdd
                 // will never be passed up to here if any of its Data's are not valid.
-                //print("doesn't pass basic structure test {}\n", d.name());
+               //print("pub doesn't pass basic structure test {}\n", d.name());
                 continue;
             }
             auto h = hashPub(d);
@@ -978,12 +978,12 @@ struct SyncPS {
             // collection then deliver it to the longest match subscription.
             auto ph = addToActive(crData(d), false);
             if (ph == 0) {
-                // print("addToActive failed: {}\n", d.name());
+                 //print("addToActive failed: {}\n", d.name());
                 continue;
             }
             ++ap;
             if (auto s = subscriptions_.findLM(d.name()); subscriptions_.found(s)) deliver(d, s->second);
-            // else print("syncps::onCAdd: no subscription for {}\n", d.name());
+             //else print("syncps::onCAdd: no subscription for {}\n", d.name());
         }
         delivering_ = false;
         if (ap == 0) {  // nothing I need in this cAdd, no change to local cState

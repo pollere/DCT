@@ -88,7 +88,7 @@ struct SigMgrPPAEAD final : SigMgr {
     static constexpr uint32_t sigSize = nonceSize + macSize;
 
     struct kpInfo { //holds information about a key pair for a subscription group
-        keyVal sk;  //signing key (only if have subscriber capability)
+        keyVal sk;  //signing key (only set if have subscriber capability)
         keyVal pk;  //public key (publishers and subscribers receive)
         keyVal ek;  //encryption key used by this publisher
         keyVal iv;  //initial vector associated with this ek
@@ -174,7 +174,6 @@ struct SigMgrPPAEAD final : SigMgr {
             m_keyList.pop_back();
         }
         auto kpi = kpInfo(sk,pk,ts);
-        kpi.pk.assign(pk.begin(), pk.end());
         m_decryptIndex = m_keyList.size(); //set to 0 if new key pair, otherwise set to 1 (the previous kp)
         //add to front of key pair vector; encryption key isn't computed until first use
         m_keyList.insert(m_keyList.begin(), kpi);

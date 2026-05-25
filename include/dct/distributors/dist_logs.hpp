@@ -41,16 +41,22 @@ using namespace std::literals::chrono_literals;
 
 namespace dct {
 
-struct DistLogs : Dist {
+    /*
+     * DistLogs Publications contain the prefix_ followed by passed in log message and timestamp
+     */
 
-    // setting logLifetime small can remove resends if just post-processing dctwatch. Needs to be longer for a subscriber
+struct DistLogs : Dist {
+    // setting logLifetime small (~5ms) can remove resends if just post-processing dctwatch.
+    // Needs to be longer for a subscriber
     DistLogs(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs) :
-        Dist(face, pPre, dPre, cs)  { sync_.pubLifetime(tdv_clock::duration(300ms)); dtype_.assign("logs"); }
+        Dist("logs", face, pPre, dPre, cs) {
+        sync_.pubLifetime(tdv_clock::duration(300ms));  // reset for derived distributor if not its default
+         }
 
     /*
-     * can add subscribe calls to setup for testing or for members that process logs
+     * can add subscribe calls to start for testing or for members that process logs
     */
-    void setup(connectedCb&& ccb) override final {
+    void start(connectedCb&& ccb) {
         connCb_ = std::move(ccb);
         if (!sync_.autoStart_) sync_.start();     // all distributors "before" me have initialized
         // sync_.subscribe(prefix_, [](const auto& p){ dct::print("dist_logs got {}\n", p.name()); }); // testing
@@ -62,6 +68,10 @@ struct DistLogs : Dist {
     // XXX batch until a PDU is full or timer goes off ?
     void publishLog(crName&& logNm, std::span<const uint8_t> c) {
         crData p(prefix_/std::move(logNm)/sync_.tdvcNow());
+        if (p.name().size() + c.size() > sync_.maxInfoSize()) {
+            dct::print("DistLogs::publishLog passed too large pub {}\n", p.name());
+            return;
+        }
         p.content(c);
         try {
             if (sync_.signThenPublish(std::move(p)) == 0)

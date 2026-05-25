@@ -32,15 +32,13 @@
  * but its use of different key types makes that more fiddly than seems currently warranted (and
  * the possibility that it would not be more efficient than just adding separate signing).
  *
- * Once the ndn::Data are changed to rData in sign(), the plan is to sign the encrypted packet
- * through the nonce and mac.
  *
  * References:
  * https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/ietf_xchacha20-poly1305_construction
  * https://doc.libsodium.org/key_exchange
  * https://doc.libsodium.org/advanced/ed25519-curve25519
  * Encrypts message with key and nonce. Returns resulting ciphertext
- * whose lenth is equal to the message length. Also computes a tag that
+ * whose length is equal to the message length. Also computes a tag that
  * authenticates the ciphertext plus the ad of adlen and puts the tag
  * into mac of length of crypto_aead_xchacha20poly1305_IETF_ABYTES bytes
  * Following this, the message is signed by the publisher (as in sigmgr_eddsa.hpp)
@@ -158,7 +156,6 @@ struct SigMgrPPSIGN final : SigMgr {
             m_keyList.pop_back();
         }
         auto kpi = kpInfo(sk,pk,ts);
-        kpi.pk.assign(pk.begin(), pk.end());
         m_decryptIndex = m_keyList.size(); //set to 0 if new key pair, otherwise set to 1 (the previous kp)
         //add to front of key pair vector; encryption key isn't computed until first use
         m_keyList.insert(m_keyList.begin(), kpi);

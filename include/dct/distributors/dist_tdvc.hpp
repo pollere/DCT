@@ -30,7 +30,7 @@
  * The PDU prefix the distributor's sync uses is <TDid>/tdvc>, the "tdvc" collection
 
  * As soon as the syncps is registered, pubs are received into its collection(s) but pubs don't invoke
- * a subscription callback until one is registered (in setup)
+ * a subscription callback until one is registered (in start)
  *
  * TDVC approach is similar to the asynchronous diffusion of Q. Li and D. Rus, "Global Clock Synchronization in Sensor Networks"
  * in IEEE Transactions on Computers, vol. 55, no. 2, February 2006, pp 214-226. The paper uses averages and single
@@ -131,15 +131,10 @@ struct DistTDVC final : Dist  {
     IsExpiredCb defExpired_;
     GetCreationCb defCreationTm_;
 
-
     DistTDVC(DirectFace& face, const Name& pPre, const Name& dPre,  const certStore& cs, const spCb&& newSPcb, const expireSpCb&& expCb) :
-            Dist(face, pPre, dPre, cs)
-     {
-        dtype_.assign("tdvc");
-        newSPcb_ = std::move(newSPcb);
-        expspcb_ = std::move(expCb);
+            Dist("tdvc", face, pPre, dPre, cs), newSPcb_{newSPcb}, expspcb_{expCb} {
         sync_.noOthers();       // won't send publications of others (clock sync is between neighbors)
-        sync_.signerHoldtime(0ms);  // don't hold publications for signing cert (can interfere with timing)
+        sync_.signerHoldtime(0ms);  // don't hold publications for missing signing cert (can interfere with timing)
         // the clock samples have short lifetimes as they are not ever forwarded but longer guard bands
         sync_.pubHoldtime(6*nhdRtt_);  // setting post-publication holdtime to be longer than active time ensures "send once"
         sync_.getLifetimeCb([this](const auto& p) ->tdv_clock::duration {
@@ -147,11 +142,12 @@ struct DistTDVC final : Dist  {
              if (crPrefix(prefix_/"sts").isPrefix(n)) return statusLifetime_;
              else return clkLifetime_;   // clk lifetime
          });
+        sync_.pubLifetime(clkLifetime_);
          // have to manipulate this since clocks may be very different when not calibrated
          // but need to put some bound on this to prevent replay attacks, so set a MaxTDdiff
          // should help force new members that are outside of this to move toward domain's vc
          // because others will ignore its clk pubs and just send their own, but could also create
-         // problems so commented out here for the initial work       
+         // problems so commented out here for the initial work
          // note: don't need to alter isExpired as it is only used for arrivals in onCAdd but default
          // calculates the "age" of the pub based on now-creationTime using timestamp for latter.
          // no content field for a tdvc Publication - all info is in the name
@@ -161,7 +157,7 @@ struct DistTDVC final : Dist  {
              // if (!init_ && sync_.tdvcNow() - p.name().last().toTimestamp() > MaxTDdiff) return m_defCreationTm;
              return sync_.tdvcNow();   // for very different clocks, just use arrival time
          });
-      }
+         }
 
     void setRelayCb(relayValueCb& rvcb) { relayCb_ = std::move(rvcb); }
     auto isStarted() { return started_; }
@@ -173,7 +169,7 @@ struct DistTDVC final : Dist  {
      * Called to process a new local signing key.
      *  use new key immediately to sign - update the signature managers
      */
-    void updateSigningKey(const keyVal sk, const rData& pubCert) override {
+    void updateSigningKey(const keyVal sk, const rData& pubCert) {
         Dist::updateSigningKey(sk, pubCert);    // common distributor code
 
         // specific to tdvc
@@ -334,7 +330,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
     }
 
     // log distributor publishes to logs collection; use dctwatch and postprocess
-    void logEvent(std::string s, std::span<const uint8_t> content = {}) override final {
+    void logEvent(std::string s, std::span<const uint8_t> content = {}) {
         // name portion for tdvc calibrate log publication with role and role-id and # nbrs, no content
         // XXX role and role-id only works for examples - consider using more of cert name to be more general
         logsCb_( crName("tdvc")  / s / cs_[tp_].name()[1] / cs_[tp_].name()[2] / vs_.nbrs, content);
@@ -621,7 +617,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
       }
 
     /*
-     * setup() is called from a connect() function in dct_model, typically
+     * start() is called from a connect() function in dct_model, typically
      * after some initial signing certs have been exchanged so it's known
      * there are active peers. It is passed a callback, 'ccb', to be
      * invoked when an updated trust domain virtual clock has been computed
@@ -630,7 +626,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      *
      * Calls its syncps's start() before returning to start participating in collection
      */
-    void setup(connectedCb&& ccb) override final {
+    void start(connectedCb&& ccb) {
         connCb_ = std::move(ccb);
         sync_.start();     // distributors "before" me have initialized (cert distributor)
         logEvent("ivc"); // log initial clock

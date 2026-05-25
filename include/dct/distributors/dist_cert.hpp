@@ -55,9 +55,7 @@ struct DistCert : Dist
     bool havePeer_{false};
 
     DistCert(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs, addCertCb&& addCb) :
-        Dist(face, pPre, dPre, cs, "RFC7693", "NULL")
-    {
-        dtype_.assign("cert");
+        Dist("cert", face, pPre, dPre, cs, "RFC7693", "NULL") {
         sync_.autoStart(true);  // override base class default
         sync_.cStateLifetime(4789ms);
         sync_.getCreationCb([this](const auto& p) { return sync_.tdvcFromSys(rCert(p).validAfter()); });
@@ -66,10 +64,10 @@ struct DistCert : Dist
                 return std::chrono::duration_cast<tdv_clock::duration>(c.validUntil() - c.validAfter());
             });
         // Unlike most pubs, certs can go into the collection before they're valid since the validity period is
-        // checked when they're used but they expire at the end of their validity period. 
+        // checked when they're used but they expire at the end of their validity period.
         sync_.isExpiredCb([](const auto& p) { return rCert(p).expired(); });
         sync_.subscribe(prefix_, std::move(addCb));
-    }
+        }
 
     /*
      * The dct model calls when it is started.
@@ -78,20 +76,15 @@ struct DistCert : Dist
      * can set a timeout to exit if connCb_ isn't called after a suitable delay
      * connCb is called when initial cert exchange done
      */
-    void setup(connectedCb&& connCb) override final {
-        connCb_ = std::move(connCb);
-     }
+    void start(connectedCb&& connCb) { connCb_ = std::move(connCb); }
 
     /*
      * Called when an initial cert exchange has completed (some peer(s) have our cert
      * chain and we have theirs).
      */
-    void initDone() override final {
-        if (init_) {
-            init_ = false;
-            connCb_(true);
-            sync_.pubLifetime_ = 2s;
-        }
+    void initDone() {
+        sync_.pubLifetime_ = 2s;
+        Dist::initDone();
     }
 
     /*

@@ -139,16 +139,16 @@ struct SigMgrSchema final : SigMgr {
         SigMgr(pubsm.type(), pubsm.sigSize()), pubsm_{pubsm}, bs_{bs}, pv_{pv} { }
 
     bool validate(rData data) override final {
-        // cryptographically validate 'data'
+        // cryptographically validate 'data' - generally want to silently discard
         if (! pubsm_.get().validate(data)) {
-            print("SigMgrSchema::validate: invalid sig {}\n", data.name());
+            // print("SigMgrSchema::validate: invalid sig {}\n", data.name());
             return false;
         }
         // structurally validate 'data'
         try {
             const auto& pubval = pv_.at(data.signer()); // can throw when checking pubs from cAdds where don't yet have certs
             auto valid = pubval.matchTmplt(bs_, data.name());
-            if (!valid) print("SigMgrSchema::validate: invalid structure {}\n", data.name());
+            // if (!valid) print("SigMgrSchema::validate: invalid structure {}\n", data.name());
             return valid;
         } catch (std::exception& e) { /* print("SigMgrSchema::validate: structure validation err: {}\n", e.what());*/ }
         return false;

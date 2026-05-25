@@ -151,8 +151,6 @@ struct mbps
       m_pb.logEvent("mpbs/" + s, content);
    }
 
-
-
     /*
      * Kicks off the set up necessary for an application to publish or receive
      * publications. DefTT is considered "connected" once communications are
