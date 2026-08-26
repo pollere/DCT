@@ -48,12 +48,20 @@
 #include <functional>
 #include <utility>
 
-#include "dist_key.hpp"
+#ifndef KEM
+#define KEM 0
+#endif
+#if KEM>0
+#include "dist_kem.hpp" // for KEM style key distributor with xwing option
+#else
+#include "dist_key.hpp" // for original key distributor that keeps a member list
+#endif
 
 namespace dct {
 
 struct DistSGKey :
     DistKey<crypto_kx_SECRETKEYBYTES, crypto_kx_SECRETKEYBYTES + crypto_box_SEALBYTES, crypto_kx_PUBLICKEYBYTES> {
+ //   DistKey<crypto_kx_SECRETKEYBYTES, crypto_kx_SECRETKEYBYTES + crypto_box_SEALBYTES, crypto_kx_PUBLICKEYBYTES> {
     /*
      * DistSGKey Publications contain the creation time of the group key pair (an 8 byte
      * uint64_t), the pair public key (kxpkKeySz) and a list containing the pair secret key
@@ -67,15 +75,14 @@ struct DistSGKey :
     capValCB sgMbr_;    //to check signing chain for SG capability for the sgColl_ subscriber group
     // sDecKey_ from base class holds sk converted to X is used by subr to open sealed box with
     //  subscriber group secret key
-    // curPK_ from base class is current subscribergroup public key: made and kept by keymaker
-    bool subr_{false};         // set if this identity has the subscriber capability
+    // grpPK_ from base class is current subscribergroup public key: made and kept by keymaker
 
     DistSGKey(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs, addKeyCb&& keyCb,
-              tdv_clock::duration reKeyInterval = 3600s,
-              tdv_clock::duration reKeyRandomize = 10s,
-              tdv_clock::duration expirationGB = 60s) :
-              DistKey("kysbr", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval, reKeyRandomize, expirationGB) {
-        sgColl_ = sync_.collName_.last().toSv(); // should be either msgs or pdus       
+              tdv_clock::duration reKeyInterval = 3600s) :
+          //    DistKey("kysbr", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval, expirationGB) {
+              DistKey("kysbr", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval) {
+        sgColl_ = sync_.collName_.last().toSv(); // should be either msgs or pdus
+        pubOnlyPossible_ = true;    // SG may have subscribe only members
         // compute space for content for the key list Publication. Other Pubs are smaller, so use worst-case
         maxContent_ = sync_.maxInfoSize() - (prefix_.size() + 2 +3 + 9 + 2 + 2 + 2*(4+2));
         if (maxContent_ < ssize_t(6 + pkSize_  + sizeof(thumbPrint) + encSKSz_))
@@ -90,64 +97,54 @@ struct DistSGKey :
          * XXX eventually might use a specific subcollection */
         auto sgId = Cap::getval("SG", prefix_, cs_);
         sgMbr_ = [this,sgId](const thumbPrint& tp) { return sgId(tp).toSv() == sgColl_; };
-        if ((subr_ = sgMbr_(tp_))) {
-            // member has subscriber group capability, convert the new key to form needed for group key encrypt/decrypt
-            convertSK(cs_.key(tp_), cs_[tp_]);
-        } else initOnAssert_ = true;   // publisher only member
+        subscriber_ = sgMbr_(tp_);
+        if (subscriber_)  convertSK(cs_.key(tp_), cs_[tp_]);  // member has subscriber group capability, convert the new key to form needed for group key encrypt/decrypt
     }
+
+    // methods for  _kem
 
     // called on (new) signing cert after update to see if this is a subscriber and thus will need to decrypt group secret key
-    bool getsSK() {
-        if (!(subr_ = sgMbr_(tp_))) return false;  // this identity is publish only, done updating signing pair
-        if( subr_ && !sgMbr_(tp_) )
-            std::runtime_error("DistSGKey::updateSigningKey subscriber group capability change indicates bad signing chain");
+    bool setSubscriber() override {
+        if( subscriber_ != sgMbr_(tp_) )
+            std::runtime_error("DistSGKey::isSubscriber subscriber group capability change indicates bad signing chain");
+        if (!(subscriber_ = sgMbr_(tp_))) return false;  // this identity is publish only
         return true;
     }
+    // specific to this distributor: tp identity is disqualified from getting group secret key if not in subscriber group
+     bool isSubscriber(thumbPrint& tp) override  {return sgMbr_(tp);}
 
-    /*
-     * Called when a new Publication is received in the Key Record topic
-     * If have subr capability, look for the group key record with *my* key thumbprint
-     * Using first 4 bytes of thumbPrints as identifiers. In the unlikely event that the first and last
-     * thumbPrint identifiers are the same, doesn't really matter since we look through for our full
-     * thumbPrint and just return if don't find it
-     * kr names <klPrefix_><epoch><low tpId><high tpId><timestamp>
-     */
+    // make a new key pair for subscriber group distributor
+    void getNewKey() override {
+        grpPK_.resize(pkSize_);
+        grpSK_.resize(skSize_);
+        crypto_kx_keypair(grpPK_.data(), grpSK_.data());    // set key pair: X25519
+    }
 
-    bool mReqNeeded() { return (!mrPending_ && subr_); }
-    bool pkOnly(keyVal& pk, uint64_t ct) {
-        if (subr_) return false;
+    // only needed for _key
+    #if KEM < 1
+    // called on (new) signing cert after update to see if this is a subscriber and thus will need to decrypt group secret key
+
+    bool pkOnly(keyVal& pk, uint64_t ct) override {
+        if (subscriber_) return false;
         // not a subscriber, set public key to received value, secret key to size 0 and finish
-        curKeyCT_ = ct;
-        curPK_ = pk;
-        curKey_.resize(0);
-        newKeyCb_(curKey_, curPK_, curKeyCT_); //use addKeyCb to set new sg public key in pub privacy sigmgr
+        grpKeyVT_ = ct;
+        grpPK_ = pk;
+        grpSK_.resize(0);
+        newKeyCb_(grpSK_, grpPK_, grpKeyVT_); //use addKeyCb to set new sg public key in pub privacy sigmgr
         if (init_) initDone();
         return true;
     }
 
-    /*** Following methods are used by the keymaker to distribute and maintain the group key records ***/
-    /* Override base distkey methods since this distributor also sends a public key */
+    bool mReqNeeded() override { return (!mrPending_ && subscriber_); }
 
-    // make a new key pair for subscriber group distributor
-    void getNewKey() {
-        curPK_.resize(pkSize_);
-        curKey_.resize(skSize_);
-        crypto_kx_keypair(curPK_.data(), curKey_.data());    // set key pair: X25519
-    }
-
-     void publishKeyList(const thumbPrint& tpl, const thumbPrint& tph, std::span<const keyRec> esk) {
+     void publishKeyList(const thumbPrint& tpl, const thumbPrint& tph, std::span<const keyRec> esk) override {
         tlvEncoder krEnc{};    //tlv encoded content
-        krEnc.addNumber(36, curKeyCT_);
-        krEnc.addArray(150, curPK_);
+        krEnc.addNumber(36, grpKeyVT_);
+        krEnc.addArray(150, grpPK_);
        krEnc.addArray(130, esk.begin(), esk.size());
-        publishKeyRange(tpl, tph, krEnc.vec());
+       publishKeyRange(tpl, tph, krEnc.vec());
     }
-
-    // specific to this distributor: tp identity is disqualified from getting group secret key if not in subscriber group
-     bool noSKey(thumbPrint& tp) {
-          if(! sgMbr_(tp)) return true;  //this signing cert doesn't have SG capability
-          return false;
-     }
+#endif
 };
 }   // namespace dct
 

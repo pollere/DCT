@@ -17,14 +17,14 @@
  * where <pubprefix> is passed in as the topic for all publications and
  * subtopic km is used by the key maker election,
  * subtopic mr is used by members of the group to request a copy of the encryption key, and
- * subtopic gk is used by the key maker to publish key records where the symmetric key is encrypted
+ * subtopic kl is used by the key maker to publish lists of key records where the symmetric key is encrypted
  *      for each valid member of the group.
  * The PDU prefix the distributor's sync uses is <tp_id>/keys/<msgs || pdus>, in the "keys" collection
  *
  * As soon as its syncps is registered, it will receive pubs into its collection(s) but the pubs don't invoke
  * a subscription callback until one is registered (in start)
- * 
- * Copyright (C) 2020-3 Pollere LLC
+ *
+ * Copyright (C) 2020-6 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -43,13 +43,30 @@
  *  dist_gkey is not intended as production code.
  */
 
+ // Following allows use of different options via compile flags.
+// Eventually, need to use schema to select, this is just in-progress
+// Use KEM = 0 to get the orignal DIstKey with a member list and KEM=1 to get new KEM version
+// in KEM DistKey use PQC=0 for X25519 only and PQC=1 for xwing
+
+#ifndef KEM
+#define KEM 0
+#endif
+#if KEM>0
+#include "dist_kem.hpp"
+#else
 #include "dist_key.hpp"
+#endif
 
 namespace dct {
 
 struct DistGKey :
     DistKey<crypto_aead_xchacha20poly1305_IETF_KEYBYTES,
+    #if PQC >0
+            crypto_kem_xwing_CIPHERTEXTBYTES> {
+    #else
             crypto_aead_xchacha20poly1305_IETF_KEYBYTES + crypto_box_SEALBYTES> {
+     #endif
+
     /*
      * DistGKey Publications contain the creation time of the symmetric key and a list of
      * pairs containing that symmetric key individually encrypted for each peer. Each
@@ -59,9 +76,9 @@ struct DistGKey :
      */
 
     DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs,  addKeyCb&& keyCb,
-             tdv_clock::duration reKeyInterval = 3600s, tdv_clock::duration reKeyRandomize = 10s,
-             tdv_clock::duration expirationGB = 60s) :
-             DistKey("kygrp", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval, reKeyRandomize, expirationGB) {
+             tdv_clock::duration reKeyInterval = 3600s) :
+             DistKey("kygrp", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval) {
+       //      DistKey("kygrp", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval, expirationGB) {
         // compute space for content for the key list Publication. Other Pubs are smaller, so use worst-case
         maxContent_ = sync_.maxInfoSize() - (prefix_.size() + 2 +3 + 9 + 2 + 2 + 2*(4+2));    // all the components of Name
         if (maxContent_ < ssize_t(sizeof(thumbPrint) + DistKey::encSKSz_))

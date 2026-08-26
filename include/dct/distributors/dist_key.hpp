@@ -17,7 +17,7 @@
  * where <pubprefix> is passed in as the topic for all publications and
  * subtopic km is used by the key maker election,
  * subtopic mr is used by members of the group to request a copy of the encryption key, and
- * subtopic gk is used by the key maker to publish key records where the symmetric key is encrypted
+ * subtopic kl is used by the key maker to publish lists of key records where the symmetric key is encrypted
  *      for each valid member of the group.
  * The PDU prefix the distributor's sync uses is <tp_id>/keys/<msgs || pdus>, in the "keys" collection
  *
@@ -78,24 +78,23 @@ struct DistKey : Dist {
     thumbPrint kmtp_{};        // thumbprint of the keymaker
     keyVal pDecKey_{};         // transformed pk used to encrypt group key; use with
     keyVal sDecKey_{};         // transformed sk used to decrypt group key
-    keyVal curKey_{};           // current secret key
-    keyVal curPK_{};            // current public key (not set for symmetric group key sigmgrs)
-    uint64_t curKeyCT_{};      // current key creation time in microsecs
+    keyVal grpSK_{};           // current group secret key
+    keyVal grpPK_{};            // current group public key (not set for symmetric group key sigmgrs)
+    uint64_t grpKeyVT_{};      // current key valid after time in microsecs
     std::map<thumbPrint,xmpk> mbrList_{};
     std::unordered_map<thumbPrint,thumbPrint> mbrIds_{};
     std::unordered_map<thumbPrint,std::chrono::system_clock::time_point> mrResp_;
 
     tdv_clock::duration reKeyInt_{3600s};
-    tdv_clock::duration keyRand_{10s};
     tdv_clock::duration keyLifetime_{3600s+10s};
-    tdv_clock::duration keyExpireGB_{60s};
     tdv_clock::duration mrLifetime_{10s}; // set to ~ few dispersion delays, this is also the lifetime of non-empty gklists
     kmElection* kme_{};
     uint32_t KMepoch_{};        // current election epoch
     bool keyMaker_{false};      // true if this entity is a key maker
     bool msgsDist_ = false;     // true indicates this is a group key distributor for msgs  (not pdus)
     bool mrPending_{false};    //member request pending
-    bool initOnAssert_{false}; // keymaker goes to initDone with a confirmed publication of its assert (useful for publish only groups)
+    bool subscriber_ {true};    // distributor-specific: set if I am in the subscriber group
+    bool pubOnlyPossible_{false}; // where might be publish only members, keymaker goes to initDone with a confirmation of PK
     pTimer mrRefresh_{std::make_shared<Timer>(getDefaultIoContext())};
 
     bool isAssertKL(const rData& p) {
@@ -110,21 +109,19 @@ struct DistKey : Dist {
         if (equal(tpId, tpl) && equal(tpl, tph)) return true;
         return false;
     }
+     virtual bool isSubscriber(thumbPrint&) { return true; }
 
     DistKey(std::string_view dtype, DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs,
-            addKeyCb&& keyCb, tdv_clock::duration reKeyInterval = 3600s, tdv_clock::duration reKeyRandomize = 10s,
-            tdv_clock::duration expirationGB = 60s)
+            addKeyCb&& keyCb, tdv_clock::duration reKeyInterval = 3600s)
         : Dist(dtype, face, pPre, dPre, cs),
           klPrefix_{pPre/"kl"},
           mrPrefix_{pPre/"mr"},
           newKeyCb_{std::move(keyCb)},  //called when a (new) group key arrives or is created
           reKeyInt_{reKeyInterval},
-          keyRand_(reKeyRandomize),
-          keyLifetime_(reKeyInt_ + keyRand_),
-          keyExpireGB_{expirationGB} {
+          keyLifetime_{reKeyInt_ + 30s} {
         if ( sync_.collName_.last().toSv() == "msgs") { msgsDist_ = true; dtype_.append("/msgs"); }
         else dtype_.append("/pdus");
-        sync_.pubLifetime(tdv_clock::duration(reKeyInt_+ keyRand_ + keyExpireGB_));
+        sync_.pubLifetime(tdv_clock::duration(keyLifetime_));
         sync_.getLifetimeCb(
             [this,cand=crPrefix(prefix_/"km"/"cand"),elec=crPrefix(prefix_/"km"/"elec"),mreq=crPrefix(mrPrefix_)]
             (const auto& p) ->tdv_clock::duration {
@@ -206,7 +203,7 @@ struct DistKey : Dist {
     }
 
     // called on (new) signing cert after update for distributor-specific checks if needs to decrypt SK
-    virtual bool getsSK() { return true; }
+    virtual bool setSubscriber() { return true; }
 
     /*
      * Called to process a new local signing key. Passes to the SigMgrs.
@@ -218,7 +215,7 @@ struct DistKey : Dist {
      */
     void updateSigningKey(const keyVal sk, const rData& pubCert) {
         Dist::updateSigningKey(sk, pubCert);    // common distributor code handles update, sets tp_
-        if (!getsSK()) return;
+        if (!setSubscriber()) return;
 
         convertSK(cs_.key(tp_), cs_[tp_]);    // convert signing key pair for group key distributor use
         // this code is common in current key distributors
@@ -278,7 +275,7 @@ struct DistKey : Dist {
             if ((tp_ < tp && epoch == KMepoch_) || (epoch > KMepoch_)) {
                 keyMaker_ = false; // relinquish keymaker status
                 kmtp_ = tp;            // set my keymaker to this one
-                curKeyCT_ = 0;
+                grpKeyVT_ = 0;
                 KMepoch_ = epoch;
                 sync_.unsubscribe(mrPrefix_);
                 publishMembershipReq();
@@ -289,13 +286,13 @@ struct DistKey : Dist {
         /* get here if not the keymaker */
 
         // extract key list and related items from the content
-        decltype(curKeyCT_) newCT{};   //decode the new key's creation time
+        decltype(grpKeyVT_) newCT{};   //decode the new key's creation time
         keyVal newPK;
         std::span<const keyRec> krVec{};  // decode the content of the key record list (empty for assertion key list)
         try {
             auto content = p.content();
             // the first tlv should be type 36 and it should decode to a uint64_t
-            // a new key will have a creation time larger than curKeyCT_
+            // a new key will have a creation time larger than grpKeyVT_
             newCT = content.nextBlk(36).toNumber();
             if constexpr (pkSize_) {
                 // next tlv should be type 150 that decodes to a vector of uint8_t
@@ -307,15 +304,15 @@ struct DistKey : Dist {
 
         // various tests
         if (kmtp_ == tp) {   // from my keymaker
-           if (epoch < KMepoch_ || curKeyCT_ > newCT) return;    // older
-           if (curKeyCT_ == newCT) return; // already have this key from this keymaker
-           curKeyCT_ = 0;   // indicates need the current key from my keymaker
+           if (epoch < KMepoch_ || grpKeyVT_ > newCT) return;    // older
+           if (grpKeyVT_ == newCT) return; // already have this key from this keymaker
+           grpKeyVT_ = 0;   // indicates need the current key from my keymaker
            KMepoch_ = epoch;
         } else if (KMepoch_ == 0 || ((kmtp_ < tp && epoch == KMepoch_) || (epoch > KMepoch_) || !cs_.contains(kmtp_))) {
             // from first keymaker or if this keymaker supersedes previous => change keymaker
              kmtp_ = tp; //  set this klist sender as my keymaker
              KMepoch_ = epoch;
-             curKeyCT_ = 0; // indicates need to get the current key
+             grpKeyVT_ = 0; // indicates need to get the current key
         } else return;  // ignore this KL
 
         // PK and CT are in any KL including assert, so done if this member only needs PK
@@ -327,7 +324,7 @@ struct DistKey : Dist {
                  publishMembershipReq(); // haven't sent MR yet
                  return;
              } else sync_.oneTime(sync_.distDelay_+std::chrono::milliseconds(rand_(2,9)),
-                               [this, nt=newCT](){ if (curKeyCT_ < nt) publishMembershipReq();});
+                               [this, nt=newCT](){ if (grpKeyVT_ < nt) publishMembershipReq();});
          }
         // assert has no SKs
         if (isAssertKL(p)) return;
@@ -343,14 +340,14 @@ struct DistKey : Dist {
         if (tp == kmtp_) {  //signed by my keymaker's signing key
             if (epoch > KMepoch_) {
                 KMepoch_ = epoch;
-                curKeyCT_ = 0;         // will need a new group sk for this epoch
+                grpKeyVT_ = 0;         // will need a new group sk for this epoch
             }
         } else if (cs_.contains(kmtp_)  && cs_[tp].signer() == cs_[kmtp_].signer()) {
             // same keymaker identity, different signing key could be updated key or restart of same keymaker
-            if (curKeyCT_ < newCT){
+            if (grpKeyVT_ < newCT){
                 // new epoch and and signing cert for my KM or my curKeyCT is older than when this packet was sent  or not set yet
                 KMepoch_ = epoch;   // update KM and epoch
-                curKeyCT_ = 0;         // will need a new group key this epoch
+                grpKeyVT_ = 0;         // will need a new group key this epoch
                 kmtp_ = tp;
             } else return;  // this seems to be a kr list from keymaker's past so ignore it
         } else { // from different identity from my KM and/or my KM may be expired
@@ -360,7 +357,7 @@ struct DistKey : Dist {
             if (!cs_.contains(kmtp_) || (kmtp_ < tp && epoch == KMepoch_) || (epoch > KMepoch_)) {
                 KMepoch_ = epoch;   // changing KM
                 kmtp_ = tp;
-                curKeyCT_ = 0; // a new MR is sent (below) if no key for me in this gklist
+                grpKeyVT_ = 0; // a new MR is sent (below) if no key for me in this gklist
             } else return;   // from a KM that is displaced by my KM
        }
 
@@ -373,18 +370,18 @@ struct DistKey : Dist {
         };
 
         try {
-            if (newCT == curKeyCT_) receivedSK();  // duplicate so make sure not sending MRs
-            if(newCT <= curKeyCT_) return; // group key not newer than ours
+            if (newCT == grpKeyVT_) receivedSK();  // duplicate so make sure not sending MRs
+            if(newCT <= grpKeyVT_) return; // group key not newer than ours
 
             // check if I'm in this gk publication's range
             auto tpl = n.nextBlk().toSpan();    // continues from epoch, above
             auto tph = n.nextBlk().toSpan();
             auto tpId = std::span(tp_).first(tpl.size());
             if(less(tpId, tpl) || less(tph, tpId)) {
-                if (curKeyCT_ == 0 && !mrPending_) publishMembershipReq();    // make sure new KM has my MR
+                if (grpKeyVT_ == 0 && !mrPending_) publishMembershipReq();    // make sure new KM has my MR
                 else    // likely that my km has made a new key - delay in case one on the way
                     sync_.oneTime(sync_.distDelay_+std::chrono::milliseconds(rand_(2,9)),
-                               [this, nt=newCT](){ if (curKeyCT_ < nt) publishMembershipReq();});
+                               [this, nt=newCT](){ if (grpKeyVT_ < nt) publishMembershipReq();});
                 return; // no key for me in this gk list
             }
         } catch (std::runtime_error&) { return; } //ignore this publication
@@ -394,7 +391,7 @@ struct DistKey : Dist {
         auto it = std::find_if(krVec.begin(), krVec.end(), [this](auto p){ return p.first == tp_; });
         if (it == krVec.end()) {
             // didn't find our encrypted key in pub (error in kr list name) - make sure current KM has our request
-            if (curKeyCT_ == 0 && !mrPending_) publishMembershipReq();
+            if (grpKeyVT_ == 0 && !mrPending_) publishMembershipReq();
             return;
         }
 
@@ -408,11 +405,11 @@ struct DistKey : Dist {
             return;
         }
 
-        curKeyCT_ = newCT;
-        curKey_.assign(m, m + skSize_);
-        curPK_ = newPK;
+        grpKeyVT_ = newCT;
+        grpSK_.assign(m, m + skSize_);
+        grpPK_ = newPK;
         receivedSK();   //got a new group key, cancel pending member request
-        newKeyCb_(curKey_, curPK_, curKeyCT_);   // call back parent with new key
+        newKeyCb_(grpSK_, grpPK_, grpKeyVT_);   // call back parent with new key
         // am in init state now have key, can exit init. Send a confirming cState in case KM starting, too
         if (init_)  { sync_.sendCState(); initDone();}
     }
@@ -467,7 +464,7 @@ struct DistKey : Dist {
         // check if keymaker candidate and whether election is over
         auto eDone = [this](auto elected, auto epoch) {
                 if (keyMaker_) return;    // this can happen when restarted and  just take over previous role
-                if (mrPending_ || curKeyCT_ > 0) return;  // got assertion kl and/or kl from existing KM
+                if (mrPending_ || grpKeyVT_ > 0) return;  // got assertion kl and/or kl from existing KM
                 keyMaker_ = elected;
                 KMepoch_ = epoch;
                 if (! elected) return;
@@ -477,7 +474,8 @@ struct DistKey : Dist {
         };
         // start election. election durations should be ~10 distDelays
         kme_ = new kmElection(prefix_/"km", cs_, sync_, std::move(eDone), std::move(kmpri), tp_,
-                              std::chrono::duration_cast<std::chrono::milliseconds> (10*sync_.distDelay_));
+                              std::chrono::duration_cast<std::chrono::milliseconds> (10*sync_.distDelay_),
+                              KMepoch_);
     }
 
     /*** Following methods are used by the keymaker to distribute and maintain the group key list ***/
@@ -496,8 +494,8 @@ struct DistKey : Dist {
                 // is an assertion kl, use conf cb before starting to use new key locally
                 // if s =false, means an entire key lifetime has passed and a new key will be made
                  sync_.signThenPublish(std::move(p), [this](const rData&, bool s){ if(s) {
-                        newKeyCb_(curKey_, curPK_, curKeyCT_);
-                        if (init_ && initOnAssert_) initDone(); }
+                        newKeyCb_(grpSK_, grpPK_, grpKeyVT_);
+                        if (init_ && pubOnlyPossible_) initDone(); }
                         });
             } else
                 sync_.signThenPublish(std::move(p));
@@ -519,14 +517,14 @@ struct DistKey : Dist {
     */
     // get and set a new group key for specific key distributor type
     virtual void getNewKey() {
-        curKey_.resize(skSize_); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
-        crypto_aead_xchacha20poly1305_ietf_keygen(curKey_.data());
+        grpSK_.resize(skSize_); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
+        crypto_aead_xchacha20poly1305_ietf_keygen(grpSK_.data());
     }
 
     // key list publication content specific to this key distributor
     virtual void publishKeyList(const thumbPrint& tpl, const thumbPrint& tph, std::span<const keyRec> esk) {
         tlvEncoder krEnc{};    //tlv encoded content
-        krEnc.addNumber(36, curKeyCT_);
+        krEnc.addNumber(36, grpKeyVT_);
         krEnc.addArray(130, esk.begin(), esk.size());
         publishKeyRange(tpl, tph, krEnc.vec());
     }
@@ -542,8 +540,8 @@ struct DistKey : Dist {
 
         //set the key's creation time
         auto vNow = sync_.tdvcNow(); //set the time using the domain virtual clock
-        curKeyCT_ = std::chrono::duration_cast<std::chrono::microseconds>(vNow.time_since_epoch()).count();
-        getNewKey();    // sets new curKey_ (and public if any) for specific type of distributor
+        grpKeyVT_ = std::chrono::duration_cast<std::chrono::microseconds>(vNow.time_since_epoch()).count();
+        getNewKey();    // sets new grpSK_ (and public if any) for specific type of distributor
 
         std::vector<keyRec> keyRecs{}; //empty vector of empty key records
         publishKeyList(tp_, keyRecs);   // assert uses own tp in range
@@ -555,7 +553,7 @@ struct DistKey : Dist {
         // that can only opened by the secret key associated with converted public key in mbrList
         for (const auto& [k,v]: mbrList_) {
             std::array<uint8_t, encSKSz_> esk;
-            crypto_box_seal(esk.data(), curKey_.data(), curKey_.size(), v.data());
+            crypto_box_seal(esk.data(), grpSK_.data(), grpSK_.size(), v.data());
             keyRecs.emplace_back(k, esk);
         }
 
@@ -628,7 +626,7 @@ struct DistKey : Dist {
             if(mbrIds_.contains(cs_[tp].signer())) removeGroupMem(mbrIds_[cs_[tp].signer()]);
             mbrIds_[cs_[tp].signer()] = tp;
         }
-        if(!curKeyCT_)    return;  // haven't made a group key yet
+        if(!grpKeyVT_)    return;  // haven't made a group key yet
 
         // hold for 2 distribution delays before resending a response to an MR from this member
         if (mrResp_.contains(tp)) {
@@ -638,7 +636,7 @@ struct DistKey : Dist {
 
         //publish the group key for this member: if new, first time. If already a member, republish in response to this mr
         std::array<uint8_t, encSKSz_> esk{};
-        crypto_box_seal(esk.data(), curKey_.data(), curKey_.size(), mbrList_[tp].data());
+        crypto_box_seal(esk.data(), grpSK_.data(), grpSK_.size(), mbrList_[tp].data());
         std::vector<keyRec> keyRecs{ {tp, esk} }; // vector with one key record
         // print ("DistKey::addGroupMem: sending key to {}\nNumber of records={} Size of record {},{}\n", cs_[tp].name(), keyRecs.size(), keyRecs[0].first.size(), keyRecs[0].second.size());
         publishKeyList(tp,  keyRecs);   // assert uses own tp in range

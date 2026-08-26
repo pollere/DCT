@@ -36,6 +36,8 @@ Distributors manage Collections (e.g., for certificates and keys) transparently 
 
 The use of *group key distributors* is dependent on the signature manager selected. AEAD, PPAEAD, and PPsigned require group key distributors to manage a key Collection. The distributor library contains a group key distributor for AEAD as well as a group key distributor for publisher privacy. These use the capabilities contained in signing identities to determine eligibility to be a group's key maker and eligibility to subscribe (decrypt) Publications in a publisher privacy collection. Key maker election, key creation (and re-creation), and key distribution are all handled by the distributors and transparent to the application.
 
+The new dist_kem.hpp group key distributor has been structured to be more suitable for PQC. The hybrid public key encryption (HPKE) approach of generating the symmetric key and its encapsulation with the public key can't be used for a group symmetric key, but otherwise the X-wing approach as implemented in libsodium is used with a non-PQ sealed box approach also available.
+
 A trust domain virtual clock distributor provides a way for a trust domain to converge on a virtual clock for use in publications if domain members have widely varying system clocks. A log distributor proviides a way to distribute log messages.
 
 ## Signature managers

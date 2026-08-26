@@ -50,7 +50,8 @@
  * The epoch semantics also allow for keyMaker failure detection
  * and Paxos-like re-election proposals but this has not been implemented yet.
  *
- * All candidates send their initial proposal with an epoch of 0.  If they receive
+ * All candidates send their initial proposal with an epoch set to the value passed
+ * in at the election's creation.  If they receive
  * a proposal with a later epoch, the election has been finalized and they
  * are not the keyMaker.  To support (future) re-election on keyMaker failure,
  * the current epoch is remembered in m_kmEpoch.
@@ -119,12 +120,15 @@ struct kmElection {
     // If peer has a larger priority or thumbprint we can't win the election which
     // we note by negating the value of priority_.
     void handleKMcand(const rData& p) {
-        if (priority_ <= 0) return; // already know election is lost
-        try { 
+        if (priority_ <= 0) return; // lost this or last election, skip newer election,  should get correct epoch when get KMelec
+        try {
+            auto n = p.name();
+            auto e = n.nextAt(preSz_).toNumber();
+            // keymaker in elecDone state, republish elec so a late joiner doesn't elect self
+            if (elecDone_ && priority_ > 0 && e == epoch_) { publishKM("elec"); return; }
             const auto& tp = p.signer();
             int pri = kmpri_(tp);
-            auto n = p.name();
-            if (pri <= 0 || wrongEpoch(n.nextAt(preSz_).toNumber())) return;
+            if (pri <= 0 || wrongEpoch(e)) return;
 
             if (std::cmp_greater(priority_, pri)) return; // candidate loses
             if (std::cmp_greater(pri, priority_) || tp > ourTP_) priority_ = -priority_; // we lose
@@ -156,8 +160,19 @@ struct kmElection {
         epoch_ = epoch;
     }
 
+    void startElection(auto e) {
+        if (e < epoch_) return; // shouldn't happen
+        elecDone_ = false;   // in an election, set to not done
+        epoch_ = e;             // election is happening in this epoch
+        priority_ = kmpri_(ourTP_);
+        sync_.forFromNet([this,cand=crPrefix(prefix_/"km"/"cand")](const auto&p){ if(cand.isPrefix(p.name())) handleKMcand(p); });
+        if (priority_ <= 0) { electionDone(); return; } // we lost the election
+        publishKM("cand");
+        sync_.oneTime(elecDur_, [this]{ electionDone(); });
+     }
+
     kmElection(crName&& pre, const certStore& cs, SyncPS& sy, doneCB&& done, kmpriCB&& kmv, const thumbPrint& tp,
-                millis dur = 100ms)
+                millis dur = 100ms, auto e = 0)
         : prefix_{std::move(pre)}, certs_{cs}, sync_{sy}, done_{std::move(done)}, kmpri_{std::move(kmv)}, ourTP_{tp},
           elecDur_{dur}, preSz_{static_cast<uint16_t>((prefix_/"elec").size())},
           nmBlks_{static_cast<uint16_t>(prefix_.nBlks()+3)} {
@@ -168,7 +183,12 @@ struct kmElection {
         priority_ = kmpri_(ourTP_);
         sync_.subscribe(prefix_/"elec", [this](const auto& p){ handleKMelec(p); });
         sync_.subscribe(prefix_/"cand", [this](auto p){ handleKMcand(p); });
-        if (priority_ <= 0) { electionDone(); return; } // we lost the election
+        if (priority_ <= 0 || e != 0) {  // we lost the election or found it was over in key distributor start()
+            if (priority_ > 0) priority_ = -priority_;
+            epoch_ = e ;
+            done_(false, epoch_);
+            return;
+        }
         publishKM("cand");
         sync_.oneTime(elecDur_, [this]{ electionDone(); });
     }

@@ -485,7 +485,10 @@ struct DCTmodel {
                            lgd_->start([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
-                                   m_gkd->logsCb_ = logsCb_;
+                                   if (m_gkd)
+                                       m_gkd->logsCb_ = logsCb_;
+                                   else // must be m_sgkd
+                                       m_sgkd->logsCb_ = logsCb_;
                                    if (m_virtClk) m_vcd->logsCb_ = logsCb_;
                                }
                            });
@@ -496,7 +499,7 @@ struct DCTmodel {
                                     vcInit_ = true;    // first vc calibration finished
                                     if (m_gkd)  // check if pdu distributor returns false
                                         m_gkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
-                                    else    // must be m_psgkd
+                                    else    // must be m_sgkd
                                         m_sgkd->start([this,cb=std::move(cb)](bool c){ cb(c); m_sync.start(); });
                                 });
                        } else {    //no tdvc distributor
@@ -512,7 +515,10 @@ struct DCTmodel {
                            lgd_->start([this,cb=std::move(cb)](bool c) {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
-                                   m_pgkd->logsCb_ = logsCb_;
+                                   if (m_pgkd)
+                                       m_pgkd->logsCb_ = logsCb_;
+                                   else // must be m_psgkd
+                                       m_psgkd->logsCb_ = logsCb_;
                                    if (m_virtClk) m_vcd->logsCb_ = logsCb_;
                                }
                            });
@@ -543,7 +549,10 @@ struct DCTmodel {
                                if (!c) { dct::print("logs distributor failed to initialize, no logging\n"); logging_ = false; }
                                else { // set logs callback for distributors
                                    m_gkd->logsCb_ = logsCb_;
-                                   m_pgkd->logsCb_ = logsCb_;
+                                   if (m_pgkd)
+                                       m_pgkd->logsCb_ = logsCb_;
+                                   else // must be m_psgkd
+                                       m_psgkd->logsCb_ = logsCb_;
                                    if (m_virtClk) m_vcd->logsCb_ = logsCb_;
                                }
                            });

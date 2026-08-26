@@ -2,7 +2,7 @@
 
 This repository contains Pollere's **evolving** work on tools, libraries, defined-trust transport (DeftT), and proof-of-concept applications for the Defined-trust Communications (DC) framework. DC enables fine-grained non-perimeter-based trust domains and DeftT is a collection-based transport efficient on broadcast media. DeftT provides default deny networking for closed communities with dynamic membership. The DC framework can be used to create self-enforcing closed Limited Domains ("trust domains") that can share network infrastructure with non-community traffic.
 
-DCT grew out of our own work, so reflects the needs of Pollere and clients, but the toolkit may prove useful to others and the repo provides a reference implementation of DeftT. DCT aims to reduce the amount of installed code needed to write secure applications and to enable and enforce defined-trust applications: applications don't "do" security, the transport does.
+DCT grew out of our own work, so reflects the needs of Pollere and clients, but the toolkit may prove useful to others and the repo provides a reference implementation of DeftT. DCT aims to reduce the amount of installed code needed to write secure applications and to enable and enforce defined-trust applications: applications don't "do" communications security, the transport does. The type of security used (e.g., privacy or provenance) can be changed by changing the ruleset for the transport with no changes to the application.
 
 Defined-trust Communications is influenced by a number of relatively recent advances: LangSec,  Set Reconciliation, Trust Schemas, Information-Centric Networking and the deployment of IPv6 with its multicast support. Operational Technologies like IoT and DER are its current focus.  Why "defined-trust"? Langsec ([langsec.org]()) "posits that the only path to trustworthy software that takes untrusted inputs is treating all valid or expected inputs as a formal language, and the respective input-handling routines as a *recognizer* for that language." In a 2016 paper, the Langsec Project authors note that the "robustness principle" of "be liberal in what you accept" should be replaced with "be definite in what you accept" and DCT provides the means to implement such an approach in a communication schema, tools and a run-time library for the DeftT protocol. DC provides a new way to implement and enforce secure communications policies on networks.
 
@@ -53,8 +53,6 @@ The included versec compiler is required to compile new schemas but pre-compiled
 
 DeftT is described in: https://pollere.net/Txtdocs/defTrust.html and in an internet draft: https://datatracker.ietf.org/doc/draft-nichols-iotops-defined-trust-transport/ with overview talk at: https://youtu.be/YSmxis1puuE?t=2170 slides at: http://pollere.net/Pdfdocs/slides-114-iotops-defined-trust-transport-00.pdf
 
-A member-only discussion list for Defined-trust Communications and this codebase, deftrust@lists.pollere.net, can be joined via http://lists.pollere.com/listinfo.cgi/deftrust-pollere.net (or email "help" to deftrust-request@lists.pollere.net).
-
 Some concepts here may be better understood by referencing earlier Pollere work: 
 
 [Lessons Learned Building a Secure Network Measurement Framework using Basic NDN ](http://www.pollere.net/Pdfdocs/icn19-p20.pdf), K. Nichols, Proceedings of ACM ICN '19, September 24-16, Macao, China (available at http://www.pollere.net/publications.html)
@@ -69,4 +67,4 @@ See also GitHub.com/pollere/DNMP-v2 for Pollere's first bespoke transport.
 
 ---
 
-Copyright (C) 2021-2024 Pollere LLC 
+Copyright (C) 2021-2026 Pollere LLC

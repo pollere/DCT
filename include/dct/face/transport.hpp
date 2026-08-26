@@ -91,7 +91,7 @@ struct Transport {
      * The mtu must be large enough to hold a max size cState and a minimum useful cAdd
      * (pubSize + cAdd name, etc + 80B for AEAD, 107B for EdDSA). Test this is syncps
      */
-    virtual constexpr ptrdiff_t mtu() const noexcept = 0;
+    virtual  ptrdiff_t mtu() const noexcept = 0;
     virtual constexpr std::chrono::microseconds tts() const noexcept = 0;
     virtual void connect() = 0;
     virtual void close() = 0;
@@ -131,7 +131,8 @@ struct TransportUdp : Transport {
 
     // values should match ifconfig of interface: using 1500 for interface MTU and 1.2ms tts (10Mbps interface)
     // XXX had to remove "final" because of derived LoRa transport
-    constexpr ptrdiff_t mtu() const noexcept final  { return 1500 - 40 - 8; }
+    // consexpr ptrdiff_t mtu() const noexcept final  { return 1500 - 40 - 8; }
+    ptrdiff_t mtu() const noexcept final  { return (defaultIf() == "lo0"? 16384:1500) - 40 - 8; }
     constexpr std::chrono::microseconds tts() const noexcept final  { return std::chrono::microseconds(1500/(10000/8)); }
 
     TransportUdp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)
@@ -388,7 +389,8 @@ struct TransportTcp : Transport {
     // to data ratio. DCT's encap cost is ~100 bytes (due almost entirely to signing overhead -
     // 64 bytes of signature plus 32 bytes of key locator) so an 8K mtu results in 99% efficiency
     // with 65ms worst-case jitter on a 1Mbps backhaul.
-    constexpr ptrdiff_t mtu() const noexcept final { return max_pkt_size; }
+  //  constexpr ptrdiff_t mtu() const noexcept final { return max_pkt_size; }
+     ptrdiff_t mtu() const noexcept final  { return (defaultIf() == "lo0"? 16384:1500) - 40 - 8; }
     constexpr std::chrono::microseconds tts() const noexcept final  { return std::chrono::microseconds(1500/(1000/8)); }
 
     TransportTcp(asio::io_context& ioc, onRcv&& rcb, onConnect&& ccb)

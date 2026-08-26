@@ -500,7 +500,7 @@ struct SyncPS {
             }
         }
         auto h = addToActive(std::move(pub), true);
-        //print("{:%M:%S} publish {} {:x} d {} r {}\n", std::chrono::system_clock::now(), pub.name(), h, delivering_, registering_);
+        //print("{:%M:%S} publish {} {:x} d {} r {} b{}\n", std::chrono::system_clock::now(), pub.name(), h, delivering_, registering_, batching_);
         if (h == 0) return h;   // already in actives
         ++publications_;
         // if a delivery callback is waiting on this pub, call it
