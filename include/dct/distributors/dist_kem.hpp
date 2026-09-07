@@ -59,7 +59,8 @@ namespace dct {
 
 // for symmetric group key, skSize = crypto_aead_xchacha20poly1305_IETF_KEYBYTES, pkSize=0
 // skSize should be the same as the xwing shared secret size (32 bytes)
-// for xwing encrypted ephemeral secret key: encSKSz = crypto_kem_CIPHERTEXTBYTES
+// for xwing encrypted ephemeral shared secret: encSSSz = crypto_kem_CIPHERTEXTBYTES and
+// for PQC=1 the group SK is encrypted using crypto_secretbox_easy encSKSz = crypto_aead_xchacha20poly1305_IETF_KEYBYTES + crypto_secretbox_MACBYTES
 // sealed box encrypted ephemeral secret key: encSKSz = crypto_aead_xchacha20poly1305_IETF_KEYBYTES + crypto_box_SEALBYTES
 // for subscriber group, pkSize = crypto_kx_PUBLICKEYBYTES
 
@@ -73,6 +74,10 @@ namespace dct {
 #define PQC 0
 #endif
 
+#if PQC>1
+#include "kem_xwing_grpkey.c"
+#endif
+
  static constexpr uint8_t reqLimit = 5;
 
 template <std::size_t skSize, std::size_t encSKSz, std::size_t pkSize = 0>
@@ -81,6 +86,7 @@ struct DistKey : Dist {
     constexpr static auto encSKSz_ = encSKSz;
     constexpr static auto pkSize_ = pkSize;
 #if PQC>0 // xwing ephemeral KP
+    constexpr static auto encSSSz_ = crypto_kem_CIPHERTEXTBYTES; // crypto_kem_mlkem768_CIPHERTEXTBYTES;
     constexpr static auto pkeSize_ = crypto_kem_PUBLICKEYBYTES;
     constexpr static auto skeSize_ = crypto_kem_SECRETKEYBYTES;
 #else // PQC == 0 X25510 ephemeral KP
@@ -373,13 +379,31 @@ struct DistKey : Dist {
      *
      * publication names: <skPrefix_><epoch><keyId><tpId><timestamp> content: encrypted SK
      */
-     #if PQC>0
+     #if PQC==1
+     auto decryptSK(const std::span<const uint8_t>& kd) { // assumes x-wing and content contains ss, nonce, grpSK
+         // retrieve the encrypted ephemeral ss and decrypt
+         std::vector<uint8_t> e{};
+         e.assign(kd.begin(), kd.begin()+encSSSz_);
+         uint8_t ss[crypto_kem_SHAREDSECRETBYTES]; // for decrypted shared secret -should be skSize_
+         if(crypto_kem_dec(ss, e.data(), eSK_.data()) != 0) return -1; // not a good key
+
+         // retrieve the nonce and encrypted grpSK and decrypt with ss
+         std::vector<uint8_t> n;
+         n.assign(kd.begin()+encSSSz_, kd.begin()+encSSSz_+crypto_secretbox_NONCEBYTES);
+         e.assign(kd.begin()+encSSSz_+crypto_secretbox_NONCEBYTES, kd.end());
+         uint8_t m[skSize_];    // libsodium seems fiddly about using the vector data()
+         if(crypto_secretbox_open_easy(m, e.data(), encSKSz_, n.data(), ss) != 0) return -1; // not a good key
+         grpSK_.assign(m, m + skSize_);
+         return 0;
+     }
+     #elif PQC==2
      auto decryptSK(const std::span<const uint8_t>& nk) { // assumes x-wing
         uint8_t ss[crypto_kem_SHAREDSECRETBYTES]; // for decrypted shared secret -should be skSize_
         if(crypto_kem_dec(ss, nk.data(), eSK_.data()) != 0) {
-        print ("DistKey::decryptSK: {} \n\tcouldn't decrypt SK {}\n", cs_[tp_].name(), nk);
+        print ("DistKey::decryptSK: {} \n\tcouldn't decrypt SK {}\n", cs_[tp_].name()[2].toSv(), nk);
          return -1; // not a good key
          }
+     //   if(crypto_kem_xwing_dec_gk(ss, nk.data(), eSK_.data()) != 0) return -1; // not a good key - might want to count failures and take action
         grpSK_.assign(ss, ss + skSize_);
         return 0;
      }
@@ -409,13 +433,15 @@ struct DistKey : Dist {
         if (epoch != KMepoch_)  return;
         if (n.nextBlk().toByte() != keyId_) return;
         if (!equal(n.nextBlk().toSpan(), std::span(tp_).first(TPbytes_))) return;   // not for me
+ #if PQC==1
+        if (p.content().len() != encSSSz_ + crypto_secretbox_NONCEBYTES + encSKSz_) return; //not the right size
+ #else
         if (p.content().len() != encSKSz_) return; // not the right size
+ #endif
 
-        // the content should decode to a vector of uint8_t, the encrypted secret key
-       // const auto& nk = p.content().toVector(); // XXX should this be toVector keyVal?
-   //     print ("DistKey::receiveSecretKey:msgs={} {} got SK\n\tfrom{} \n", msgsDist_, cs_[tp_].name(), cs_[kmtp_].name());
+        // for non PQC the content should decode to a vector of uint8_t, the encrypted secret key
+        // for PQC=1, hold encrypted shared secret, nonce, and encrypted (with ss) secret key
         if (decryptSK(p.content().toSpan()) != 0) return;  // decrypt and save the key; non-zero return indicates decrypt failed
- //       print ("DistKey::receiveSecretKey:msgs={} {} found and decrypted a SK\n\t{}\n", msgsDist_, cs_[tp_].name(), grpSK_);
 
         //got a new group secret key, cancel pending member request
         rkRefresh_->cancel();  // if a request-for-key refresh is scheduled, cancel it
@@ -519,14 +545,38 @@ struct DistKey : Dist {
      * overwrite grpSK_ with the two-way shared secret (or "server key") and only test with two members,
      * one KM and one non-KM. This version works when used that way ONLY. Set PQC and KEM compile
      * flags to use this. Must use loopback at runtime for longer packets.
+     *
+     * PQC set to 1 gives version that uses the shared secret from crypto_kem_enc to encrypt the grpSK
+     * This version puts the encrypted ss, the encrypted grpSK and the nonce used in that encryption into
+     * the content of one pub. This will be large so future versions could split this up
      */
-#if PQC>0
+#if PQC==1
+    auto encKey(const auto& pk, auto& ek) {     // X-wing - encSKSz_ is set when created for dist versions
+         uint8_t ess[encSSSz_];    // encrypted ephemeral (two-way) shared secret
+         uint8_t ss[skSize_];          // ephemeral shared secret
+         if (crypto_kem_enc(ess, ss, pk.data()) != 0) return -1;
+         ek.assign(ess, ess+encSSSz_);    // build the content to send to recipient member in ek vector
+
+         // use ss to encrypt the group secret key
+         uint8_t n[crypto_secretbox_NONCEBYTES];   // set nonce
+         randombytes_buf(n, sizeof(n));
+         ek.insert(ek.end(), n, n+sizeof(n));    // add nonce to ek
+         uint8_t egk[encSKSz_]; // encrypted group key
+         if (crypto_secretbox_easy(egk, grpSK_.data(), skSize_, n, ss) != 0) return -1;
+         ek.insert(ek.end(), egk, egk+encSKSz_);   // add encrypted grpSK to ek
+         return 0;
+     }
+#elif PQC==2
      auto encKey(const auto& pk, auto& ek) {     // X-wing - encSKSz_ is set when created for dist versions
-         uint8_t ct[encSKSz_];    // should be size crypto_kem_CIPHERTEXTBYTES
+         uint8_t ct[encSSSz_];    // should be size crypto_kem_CIPHERTEXTBYTES
          uint8_t ss[skSize_];
          if (crypto_kem_enc(ct, ss, pk.data()) != 0) return -1;
          for (std::size_t i=0; i<skSize_; ++i) grpSK_[i] = ss[i];
-         ek.assign(ct, ct+encSKSz_);
+         /* alternative
+         if (crypto_kem_xwing_enc_gk(ct, ss, pk.data(), grpSeed_.data()) != 0) return -1;
+         for (size_t i=0; i<skSize_; i++) if (ss[i] != grpSK_[i]) { print("encKey: ss!=grpSK_ at {}: {} != {}\n", i, ss[i], grpSK_[i]); return -1; }
+         */
+         ek.assign(ct, ct+encSSSz_);
          return 0;
      }
 #else
@@ -566,7 +616,7 @@ struct DistKey : Dist {
         p.content(ckEnc.vec());
         try {
             // start using key locally when the announcement is in a member's collection (could wait for key request unless pubOnlyPossible_)
-            print("announceKey: {} announces(msgs={}) sk {}\n", cs_[tp_].name().first(3),  msgsDist_, p.name());
+            //print("announceKey: {} announces(msgs={}) sk {}\n", cs_[tp_].name().first(3),  msgsDist_, p.name());
             sync_.signThenPublish(std::move(p), [this](const rData&, bool s){ if(s) installNewKey(); });
        } catch (const std::exception& e) {
             std::cerr << "dist_" << dtype_ << "::announceKey: " << e.what() << std::endl;
@@ -582,10 +632,25 @@ struct DistKey : Dist {
     */
     // set a new group key for specific key distributor type
 
+    #if PQC==2
+    // this is for kem_gk alternative in progress
+    virtual void getNewKey() {
+         uint8_t seed[64];   //set up new group seed corresponding to the new group symmetric key
+         randombytes_buf(seed, 64);
+         for (int i=0; i<64; ++i) grpSeed_.push_back(seed[i]);
+         uint8_t u[32], l[32];  // split for combiner
+         for (int i=0; i<32; ++i) { l[i] = grpSeed_[i]; u[i] = grpSeed_[i+32]; }
+         uint8_t ct[encSKSz_];  // doesn't get used
+         uint8_t ss[crypto_kem_xwing_SHAREDSECRETBYTES];  //should be same as skSize_
+         gk_combiner(ss, l, u, ct, grpPK_.data()); // shared secret is the group symmetric key
+         grpSK_.assign(ss, ss+skSize_);
+    }
+   #else
     virtual void getNewKey() {
         grpSK_.resize(skSize_); // crypto_aead_xchacha20poly1305_IETF_KEYBYTES
         crypto_aead_xchacha20poly1305_ietf_keygen(grpSK_.data());
     }
+  #endif
 
     void makeNewKey() {
         getNewKey();    // sets new grpSK_ (and public if any) for specific type of distributor

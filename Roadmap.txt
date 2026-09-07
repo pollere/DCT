@@ -11,7 +11,7 @@ Roadmap (or hopeful to-do list)
 3. Visibility of parameters that might be changed for different environments
     - collect in a text note
     - collect for ease of setting
-4. Re-election enabled
+x4. Re-election enabled
 5. Update documentation (ugh)
 6. VerSec improvements
 7. Evaluate whether IBLT advances can be useful for syncps

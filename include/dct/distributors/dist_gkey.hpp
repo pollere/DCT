@@ -46,7 +46,8 @@
  // Following allows use of different options via compile flags.
 // Eventually, need to use schema to select, this is just in-progress
 // Use KEM = 0 to get the orignal DIstKey with a member list and KEM=1 to get new KEM version
-// in KEM DistKey use PQC=0 for X25519 only and PQC=1 for xwing
+// in KEM DistKey use PQC=0 for X25519 only and PQC=1 for xwing using ephemeral shared secret and crypto_secretbox_ to
+// encrypt the group secret key. PQC=2 uses ephemeral SK/PK to encrypt group secret key as ss (in progress)
 
 #ifndef KEM
 #define KEM 0
@@ -61,11 +62,11 @@ namespace dct {
 
 struct DistGKey :
     DistKey<crypto_aead_xchacha20poly1305_IETF_KEYBYTES,
-    #if PQC >0
-            crypto_kem_xwing_CIPHERTEXTBYTES> {
-    #else
+#if PQC>0
+           crypto_aead_xchacha20poly1305_IETF_KEYBYTES + crypto_secretbox_MACBYTES> {
+#else
             crypto_aead_xchacha20poly1305_IETF_KEYBYTES + crypto_box_SEALBYTES> {
-     #endif
+ #endif
 
     /*
      * DistGKey Publications contain the creation time of the symmetric key and a list of
@@ -81,9 +82,17 @@ struct DistGKey :
        //      DistKey("kygrp", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval, expirationGB) {
         // compute space for content for the key list Publication. Other Pubs are smaller, so use worst-case
         maxContent_ = sync_.maxInfoSize() - (prefix_.size() + 2 +3 + 9 + 2 + 2 + 2*(4+2));    // all the components of Name
-        if (maxContent_ < ssize_t(sizeof(thumbPrint) + DistKey::encSKSz_))
+        // for PQC=1 encSKSz_+crypto_kem_NONCEBYTES+encSSSz_, for PQC=2 encSSSz_
+#if PQC>0
+        if (maxContent_ < ssize_t(DistKey::pkeSize_))
+            throw ("DistGKey: not enough space in Pub Content to carry PQ ephemeral PK in request");
+        maxKR_ = (maxContent_) / (sizeof(DistKey::pkeSize_));
+#else
+        if (maxContent_ < ssize_t(thumbPrint) + DistKey::encSKSz_))
             throw ("DistGKey: not enough space in Pub Content to carry group key list");
         maxKR_ = (maxContent_) / (sizeof(thumbPrint) + DistKey::encSKSz_);
+#endif
+
         // print ("DistGKey: maxContent is {} max num key records is {}\n", maxContent_, maxKR_);
 
         convertSK(cs_.key(tp_), cs_[tp_]);    // updateSigningKey was called from dist base class
