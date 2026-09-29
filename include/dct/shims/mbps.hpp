@@ -119,9 +119,9 @@ struct mbps
     const auto& pubPrefix() const noexcept { return m_pubpre; }
      auto tdvcNow() { return m_pb.tdvcNow(); }
 
-    auto startMsgsBatch() { return m_pb.m_sync.batchPubs(); }
-    void endMsgsBatch() { m_pb.m_sync.batchDone(0); }   // zero forces sendCAdd attempt
-    auto msgsBatching() { return m_pb.m_sync.batching_; }
+    auto startMsgsBatch() { return m_pb.sync_.batchPubs(); }
+    void endMsgsBatch() { m_pb.sync_.batchDone(0); }   // zero forces sendCAdd attempt
+    auto msgsBatching() { return m_pb.sync_.batching_; }
 
     /* relies on communication schema using mbps conventions of collecting all the signing chain
      * identity information (_role, _roleId, _room, etc.) in pseudo-pub "#chainInfo" so

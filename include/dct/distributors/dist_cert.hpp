@@ -76,7 +76,7 @@ struct DistCert : Dist
      * can set a timeout to exit if connCb_ isn't called after a suitable delay
      * connCb is called when initial cert exchange done
      */
-    void start(connectedCb&& connCb) { connCb_ = std::move(connCb); }
+    void start(connectedCb&& connCb) override { connCb_ = std::move(connCb); }
 
     /*
      * Called when an initial cert exchange has completed (some peer(s) have our cert

@@ -67,17 +67,17 @@ using bytpCb = std::function<void(thumbPrint)>;
   */
 struct DCTmodelPT final : DCTmodel  {
     SigMgrPT ptPubSm_;     // sigmgr for validating but not decrypting pubs
-    SyncPS* m_gkSync{};
+    SyncPS* gkSync_{};
     std::unordered_map<thumbPrint,bool> m_rlyCerts {};
     bool m_pubDist;
     addChnCb m_rlyCertCb{};        //used to relay validated cert chain to shim
-    thumbPrint m_tp{};                  // for testing for capability
+    thumbPrint tp_{};                  // for testing for capability
 
     bool wasRelayed(thumbPrint tp) { return m_rlyCerts.contains(tp);}
     void addRelayed(const thumbPrint tp, const dctCert& c) { m_rlyCerts[tp] = true;  addCert(c); }  // if c valid, add to certstore
-    const auto& keysColl() { return m_gkSync; }
-    auto& certColl() { return m_ckd.sync_; }
-    const auto& msgsColl() { return m_sync; }
+    const auto& keysColl() { return gkSync_; }
+    auto& certColl() { return ckd_.sync_; }
+    const auto& msgsColl() { return sync_; }
 
     // ensure a publication is *structurally* valid on the outgoing DeftT
     bool isValidPub(const Publication& pub) {
@@ -93,20 +93,20 @@ struct DCTmodelPT final : DCTmodel  {
     // used as a way to remove unneeded Pubs, but may be problematic
     bool publishKey(const Publication&& pub) {
         if (m_pubDist /*&& cs_.contains(pub.signer())*/) {
-             m_gkSync->publish(std::move(pub));
+             gkSync_->publish(std::move(pub));
             return true;
         }
         return false;
     }
 
     // domain virtual clock methods
-    void setRlyCbVC(std::function<void(dct::thumbPrint, int64_t, size_t, size_t)> rcb) { if (m_vcd) m_vcd->setRelayCb(rcb); }
-    size_t vcSetSz() { if (m_vcd) return m_vcd->getSetSize(); else return 0; }
-    void vcRound(uint8_t s, std::chrono::microseconds a, size_t n) { if(m_vcd) m_vcd->publishRound(s,a,n);}
-    void vcCalibrate() { if (m_vcd) m_vcd->calibrateClock(); }
-    dct::tdv_clock::duration  vcComputeDly() {  if (m_vcd) return m_vcd->getComputeDly(); else return 0ms; }
-    dct::tdv_clock::duration vcNhdDly() { if(m_vcd) return m_vcd->getNhdDly(); else return 0ms; }
-    void finishCalibrateVC( std::chrono::microseconds adj, uint8_t n) { if (m_vcd) m_vcd->finishCalibration(adj, n); }
+    void setRlyCbVC(std::function<void(dct::thumbPrint, int64_t, size_t, size_t)> rcb) { if (vcd_) vcd_->setRelayCb(rcb); }
+    size_t vcSetSz() { if (vcd_) return vcd_->getSetSize(); else return 0; }
+    void vcRound(uint8_t s, std::chrono::microseconds a, size_t n) { if(vcd_) vcd_->publishRound(s,a,n);}
+    void vcCalibrate() { if (vcd_) vcd_->calibrateClock(); }
+    dct::tdv_clock::duration  vcComputeDly() {  if (vcd_) return vcd_->getComputeDly(); else return 0ms; }
+    dct::tdv_clock::duration vcNhdDly() { if(vcd_) return vcd_->getNhdDly(); else return 0ms; }
+    void finishCalibrateVC( std::chrono::microseconds adj, uint8_t n) { if (vcd_) vcd_->finishCalibration(adj, n); }
 
 
   // create a DCTmodelPT instance using the certs in the bootstrap bundle file 'bootstrap'
@@ -116,19 +116,19 @@ struct DCTmodelPT final : DCTmodel  {
             DCTmodel(rootCb, schemaCb, idChainCb, signIdCb,  addrLoc ),
             ptPubSm_{msm_.ref()}
     {
-        m_sync.tdvcReset(); //VCTEST - resets the vc if dctmodel changed it
-        m_tp = cs_.Chains()[0]; // thumbprint of signing cert
-        // reset  m_sync.pubSigmgr_ to syncPTSm_ to use the pass-through version
+        sync_.tdvcReset(); //VCTEST - resets the vc if dctmodel changed it
+        tp_ = cs_.Chains()[0]; // thumbprint of signing cert
+        // reset  sync_.pubSigmgr_ to syncPTSm_ to use the pass-through version
         syncSm_.setSigMgr(ptPubSm_);
         // callbacks to relay for certs and pub key distributors
         m_rlyCertCb = std::move(rcb);
-        m_pubDist = m_pgkd == NULL ? m_psgkd != NULL :  true;
+        m_pubDist = pgkd_ == NULL ? psgkd_ != NULL :  true;
         // if there's distributor for publication group keys need
         // to pass those to the relay via the appropriate syncps.
-        if (m_pubDist) m_gkSync = (m_pgkd == NULL)?  &(m_psgkd->sync_) : &(m_pgkd->sync_);
+        if (m_pubDist) gkSync_ = (pgkd_ == NULL)?  &(psgkd_->sync_) : &(pgkd_->sync_);
 
         // changes the cert store's callback so adding a valid cert will relay the signing cert chain
-        cs_.addCb_ = [this, &ckd=m_ckd] (const dctCert& cert) {
+        cs_.addCb_ = [this, &ckd=ckd_] (const dctCert& cert) {
                            auto tp = cert.computeTP();
                            if (wasRelayed(tp)) {
                                    ckd.publishRlyCert(cert);
@@ -156,9 +156,9 @@ struct ptps
     bool isConnected() const { return m_connected; }
     const auto& schemaTP() { return m_pb.bs_.schemaTP_; }
 
-    auto startMsgsBatch() { return m_pb.m_sync.batchPubs(); }
-    void endMsgsBatch(size_t n) { m_pb.m_sync.batchDone(n); }
-    auto msgsBatching() { return m_pb.m_sync.batching_; }
+    auto startMsgsBatch() { return m_pb.sync_.batchPubs(); }
+    void endMsgsBatch(size_t n) { m_pb.sync_.batchDone(n); }
+    auto msgsBatching() { return m_pb.sync_.batching_; }
     auto startCertBatch() { return m_pb.certColl().batchPubs(); }
     void endCertBatch(size_t n) { m_pb.certColl().batchDone(n); }
     auto certBatching() { return m_pb.certColl().batching_; }
@@ -169,7 +169,7 @@ struct ptps
 
      // virtual clock
      pTimer m_tdvcTimer{std::make_shared<Timer>(getDefaultIoContext())};
-     bool haveVC() { return m_pb.m_virtClk; }
+     bool haveVC() { return m_pb.virtClk_; }
      void setupVC(std::function<void(dct::thumbPrint, int64_t, size_t, size_t)> rcb) {
          m_pb.setRlyCbVC(std::move(rcb));
      }
@@ -179,15 +179,15 @@ struct ptps
     auto tdvcAdjust() const noexcept { return m_pb.face_.tdvcAdjust(); }
     dct::tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur, int8_t n) noexcept
     {
-        if (m_pb.m_vcd) m_pb.m_vcd->vs_.nbrs = n;
+        if (m_pb.vcd_) m_pb.vcd_->vs_.nbrs = n;
         return m_pb.face_.tdvcAdjust(dur);
     }
-    auto vcIsStarted() { if(m_pb.m_vcd) return m_pb.m_vcd->isStarted(); return false; }
+    auto vcIsStarted() { if(m_pb.vcd_) return m_pb.vcd_->isStarted(); return false; }
     void vcRound(size_t r, std::chrono::microseconds a, uint8_t n) { m_pb.vcRound(r, a, n); }
     auto vcSetSz() { return m_pb.vcSetSz(); }
     dct::tdv_clock::duration vcComputeDly() { return m_pb.vcComputeDly(); }
     dct::tdv_clock::duration vcNhdDly() { return m_pb.vcNhdDly(); }
-    auto vcMgr() { return m_pb.m_vcd; }
+    auto vcMgr() { return m_pb.vcd_; }
 
     ptps(const certCb& rootCb, const certCb& schemaCb, const chainCb& idChainCb, const pairCb& signIdCb,
              std::string_view addrLoc, const chnCb& certHndlr = {}, const pubCb& distCb = {}, const pubCb& failCb={}) :
@@ -246,7 +246,7 @@ struct ptps
                 if (!success)  throw runtime_error("ptps failed to initialize connection");
                 m_connected = true;
                 if (m_pb.m_pubDist) {
-                    m_pb.m_gkSync->subscribe(m_pb.pubPrefix(),  [this](const rData p){ m_gkCb(this, p);});
+                    m_pb.gkSync_->subscribe(m_pb.pubPrefix(),  [this](const rData p){ m_gkCb(this, p);});
                 }
                 m_connectCb();
             });
@@ -423,8 +423,8 @@ struct ptps
      * Intended for use when a DeftT connects
      */
     void passMsgs(const auto & r, bool skip) {
-        if (skip) m_pb.m_sync.forFromNet([r](const auto& p) { r->publish(Publication(p)); });
-       else m_pb.m_sync.forFromNet([r](const auto& p) {  if (r->validPub(p)) r->publish(Publication(p)); });
+        if (skip) m_pb.sync_.forFromNet([r](const auto& p) { r->publish(Publication(p)); });
+       else m_pb.sync_.forFromNet([r](const auto& p) {  if (r->validPub(p)) r->publish(Publication(p)); });
     }
 
     // Can be used by application to schedule a cancelable timer. Note that

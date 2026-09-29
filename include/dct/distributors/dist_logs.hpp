@@ -56,7 +56,7 @@ struct DistLogs : Dist {
     /*
      * can add subscribe calls to start for testing or for members that process logs
     */
-    void start(connectedCb&& ccb) {
+    void start(connectedCb&& ccb) override {
         connCb_ = std::move(ccb);
         if (!sync_.autoStart_) sync_.start();     // all distributors "before" me have initialized
         // sync_.subscribe(prefix_, [](const auto& p){ dct::print("dist_logs got {}\n", p.name()); }); // testing

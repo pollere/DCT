@@ -433,11 +433,11 @@ struct DistKey : Dist {
           if (kmPri_(tp_) <= 0 || KMepoch_ > 0) return true;
           return false;
      }
-    void start(connectedCb&& ccb) {
+    void start(connectedCb&& ccb) override {
         connCb_ = std::move(ccb);
         if (!sync_.autoStart_) sync_.start();  // all distributors "before" me have initialized
 
-        // relay doesn't participate in pub group as it doesn't do encryption or decryption
+        // relay doesn't participate in msgs group as it doesn't do encryption or decryption
         // but needs to pass through the gklists so has a gk distributor active with its own subscription cb
         // which is set by the ptps shim when the interface is "connected"
         if (msgsDist_ && isRelay(tp_)) { initDone(); return; }

@@ -39,8 +39,8 @@
  * neighbors in agreement. The former means that receiving TDVC distributors need to ensure they are using
  * samples from the same virtual clock at the sender (not mixing pre- and post-adjustment virtual clocks).
  * Tie-breakers can be necessary.
- * 
- * Copyright (C) 2020-5 Pollere LLC
+ *
+ * Copyright (C) 2020-6 Pollere LLC
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU Lesser General Public License as
@@ -97,10 +97,10 @@ struct DistTDVC final : Dist  {
      };
 
      struct vcVars {
-             uint8_t state;    // my state: 0 for not calibrating, 1 for locally in tolerance and counting nbrs, 2+ for calibrating
+             uint8_t state{};    // my state: 0 for not calibrating, 1 for locally in tolerance and counting nbrs, 2+ for calibrating
              size_t nbrs = 1;  // number of neighbors (incl. me) that were used in previous round's computation (neighborhood size)
-             size_t tolRnds;
-             int zAdj;           // number of times in a row I've used a zero adjustment
+             size_t tolRnds{};
+             int zAdj{};           // number of times in a row I've used a zero adjustment
              dct::tdv_clock::duration adjust = std::chrono::microseconds(0);  // calibration in-progress adjustment to vc
       };
 
@@ -122,7 +122,6 @@ struct DistTDVC final : Dist  {
     int64_t tolVal_{MaxTol};        // largest clock difference tolerated in calibration integer microseconds
     tdv_clock::duration computeDly_{ClkXTm};   //time to accumulate clock samples for each "round"
     tdv_clock::duration pingInt_{10*MinNhdDly};  // interval between pings is initially short
-    bool init_{true};
     bool pinging_{false};
     bool waitSP_{false};
     spCb newSPcb_;
@@ -174,7 +173,7 @@ struct DistTDVC final : Dist  {
 
         // specific to tdvc
         if (waitSP_) {  // had to request a new SP due to TDVC change
-                   dct::print("distTDVC:updateSigningKey: {} received new SP\n", cs_[tp_].name().nthBlk(2).toSv());
+             //dct::print("distTDVC:updateSigningKey: {} received new SP\n", cs_[tp_].name().nthBlk(2).toSv());
             waitSP_ = false;
             if (!started_ && isRelay(tp_)) calibrateClock();
             else endFin("cal");
@@ -205,7 +204,6 @@ struct DistTDVC final : Dist  {
         // use min or near-min for RTT estimate.
         auto d = std::chrono::milliseconds( std::lround((double)(s[k/10])/5000.)*5);
         if (std::chrono::milliseconds (s[k/10]/1000) > nhdRtt_) {   //need to update default
-           // dct::print("calculateDlys changing values\n\n");
             nhdRtt_ = d;
             if (d/2 > vcQuant)
                 txDly_ = d/2 - vcQuant; //  Divide by 2 as estimate of excess one-way delay, remove quant
@@ -304,7 +302,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
     }
 
     /*
-     * publish my virtual clock value with: name <prefix_><round><neighborhoodsize><myId><timestamp>
+     * publish my virtual clock value with: name <prefix_><"clk"><round><neighborhoodsize><myId><timestamp>
      * space the samples by small number of random ms but perhaps f(distDly) for long delay networks
      * clock values have a short lifetime on order of a distribution delay
      */
@@ -339,7 +337,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
     /*
      * Start a virtual clock calibration session (of one or more rounds)
      */
-    void calibrateClock() {      
+    void calibrateClock() {
         if (vs_.state>0 || waitSP_) return;   // already calibrating or waiting for a new SP
         if (!started_) {
             // check if the tdvc has already been adjusted due to other deftts of relay
@@ -626,7 +624,7 @@ static constexpr auto tp2d = [](auto t){ return std::chrono::duration_cast<ticks
      *
      * Calls its syncps's start() before returning to start participating in collection
      */
-    void start(connectedCb&& ccb) {
+    void start(connectedCb&& ccb) override {
         connCb_ = std::move(ccb);
         sync_.start();     // distributors "before" me have initialized (cert distributor)
         logEvent("ivc"); // log initial clock

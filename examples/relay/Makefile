@@ -8,6 +8,7 @@
 
 INCLUDES = ../../include
 CXXFLAGS = -g -O0 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include
+#CXXFLAGS += -DKEM=1 -DPQC=0
 CXXFLAGS += -fsanitize=address
 #CXXFLAGS += -fsanitize=address,undefined
 #CXXFLAGS = -g -O3 -I. -I$(INCLUDES) -Wall -Wextra -std=c++20 -I/opt/local/include

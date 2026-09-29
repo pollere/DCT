@@ -49,6 +49,20 @@ struct Dist {
     using connectedCb = std::function<void(bool)>;
     using logEvCb = std::function<void(crName&&, std::span<const uint8_t>)>;
 
+    static constexpr uint8_t dtCERT = 0;
+    static constexpr uint8_t dtLOGS = 1;
+    static constexpr uint8_t dtTDVC = 2;
+    static constexpr uint8_t dtKYGRP = 3;
+    static constexpr uint8_t dtKYSBR = 4;
+
+    static inline const std::unordered_map<std::string,uint8_t> dist_name_to_type {
+    {"cert"s,  dtCERT},
+    {"logs"s,    dtLOGS},
+    {"tdvc"s,   dtTDVC},
+    {"kygrp"s, dtKYGRP},
+    {"kusbr"s,    dtKYSBR}
+};
+
     const crName prefix_;        // prefix for pubs in this distributor's collection
     SigMgrAny pduSM_;   // to sign/validate PDUs
     SigMgrAny pubSM_;   // to sign/validate Publications
@@ -91,6 +105,7 @@ struct Dist {
     }
 
     auto type() { return dtype_; }
+    auto finInit() { return !init_; }
     auto isRelay(const thumbPrint& tp) { return relayChk_(tp).first; }    // identity 'tp' has RLY capability?
 
     /*
@@ -129,7 +144,7 @@ struct Dist {
      * Specific distributor may have other set up tasks, including initiating
      * more processes before calling initDone() from some other method
      */
-    void start(connectedCb&& ccb) {
+    virtual void start(connectedCb&& ccb) {
         connCb_ = std::move(ccb);
         if (!sync_.autoStart_) sync_.start();     // all distributors "before" me have initialized
     }

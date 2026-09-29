@@ -88,7 +88,7 @@ struct DistGKey :
             throw ("DistGKey: not enough space in Pub Content to carry PQ ephemeral PK in request");
         maxKR_ = (maxContent_) / (sizeof(DistKey::pkeSize_));
 #else
-        if (maxContent_ < ssize_t(thumbPrint) + DistKey::encSKSz_))
+        if (maxContent_ < ssize_t(sizeof(thumbPrint) + DistKey::encSKSz_))
             throw ("DistGKey: not enough space in Pub Content to carry group key list");
         maxKR_ = (maxContent_) / (sizeof(thumbPrint) + DistKey::encSKSz_);
 #endif

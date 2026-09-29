@@ -99,8 +99,8 @@ static constexpr bool deliveryConfirmation = false; // get per-publication deliv
  * not an issue, but it is not recommended
  */
 static void msgsRecv(ptps* s, const Publication& p) {
-     // auto now = std::chrono::system_clock::now();
-    //  dct::print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
+    //auto now = std::chrono::system_clock::now();
+    //dct::print("{:%M:%S} {}:{}:{} receives {}\n", ticks(now.time_since_epoch()), s->attribute("_role"), s->label(), s->relayTo(), p.name());
     try {
         for (auto sp : transList)
             if (sp != s && sp->isConnected()) {
@@ -127,8 +127,8 @@ static void chainRecv(ptps* s, const rData c, const certStore& cs) {
         for (auto sp : transList)
             if (sp != s && sp->isConnected()) {
                 sp->addRelayedChain(c, cs);
-                // if (!sp->addRelayedChain(c, cs))
-                    // print("relay::chainRecv: {} signing chain from {}-{} does not validate at interFace {}-{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
+                //if (!sp->addRelayedChain(c, cs))
+                  //   print("relay::chainRecv: {} signing chain from {}-{} does not validate at interFace {}-{}\n", c.name(), s->label(), s->relayTo(), sp->label(), sp->relayTo());
             }
     } catch (const std::exception& e) { }
 }

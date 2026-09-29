@@ -114,18 +114,22 @@ for nm in ${device[@]}; do
 done
 
 # make the relay certs and bundles for local interfaces
-# in this example, the relays can never be keymakers for the multicast subdomain's pduValidator
-# so the Loc Relay capability cert is signed by the RootCert
 subdom=Loc
 for nm in ${relay[@]}; do
     echo $nm$subdom
     # make a local multicast relay capability cert
     LocRelayCap=locRly$nm.cap
+    if [ -n "$KMCapCert" ]; then
+    make_cert -s $CertValidator -o $LocRelayCap $PubPrefix/CAP/RLY/$LLM $KMCapCert
+    make_cert -s $CertValidator -o $nm$subdom.cert $PubPrefix/relay/$nm$subdom $LocRelayCap
+    make_bundle -v -o $nm$subdom.bundle $RootCert $SchemaCert $KMCapCert $LocRelayCap +$nm$subdom.cert
+    else
     make_cert -s $CertValidator -o $LocRelayCap $PubPrefix/CAP/RLY/$LLM $RootCert
-    # change for next pass
-    LLM=ff02::5678
     make_cert -s $CertValidator -o $nm$subdom.cert $PubPrefix/relay/$nm$subdom $LocRelayCap
     make_bundle -v -o $nm$subdom.bundle $RootCert $SchemaCert $LocRelayCap +$nm$subdom.cert
+    fi;
+    # change for next pass
+    LLM=ff02::5678
 done
 
 #

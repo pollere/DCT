@@ -27,7 +27,6 @@
  * subtopic ak is used by the (winning) key maker to announce the current key,
  * subtopic rk is used by members of the group to request a copy of the encryption key, and
  * subtopic sk is used by the key maker to publish the encrypted secret key in response to the rk.
- * subtopic nk is used by members to indicate an unreachable keymaker
  * The PDU prefix the distributor's sync uses is <tp_id>/keys/<msgs || pdus>, in the "keys" collection
  *
  * As soon as its syncps is registered, it will receive pubs into its collection(s) but the pubs don't invoke
@@ -66,8 +65,8 @@ namespace dct {
 
 // Following allows use of different options via compile flags.
 // Eventually, need to use schema to select, this is just in-progress
-// Can use LST = 1 to get the orignal DIstKey with a member list
-// Use LST=0 to get KEM DistKey and then PQC=0 for X25519 only and PQC=1 for xwing
+// Default gets the orignal DIstKey with a member list
+// Use KEM=1 to get KEM DistKey and then PQC=0 for X25519 only and PQC=1 for xwing
 
 // PQC of 0 uses X25519 ephemeral keys, PQC of 1 uses X-wing PQ ephemeral keys
 #ifndef PQC
@@ -286,7 +285,7 @@ struct DistKey : Dist {
     /*
      * Receipt of  new key announcement causes non-keymakers to publish request for key
      * (key makers resolve if multiples)
-     *      name: <akPrefix_><epoch><keyId><timestamp> content holds key creation time and public key, if any
+     *      name: <akPrefix_><epoch><keyId><timestamp> content holds key valid time and public key, if any
      */
 #if PQC>0
     void getEphemeralKP() {    // hybrid PQ X-wing
@@ -354,7 +353,7 @@ struct DistKey : Dist {
         kmtp_ = tp;
         KMepoch_ = epoch;
         keyId_ = keyId;
-        grpKT_ = newKT;
+        grpKT_ = newKT; // might want to test for grpKT_ older than rekey interval
         grpPK_ = newPK;
 
         if (! subscriber_) { // publish-only: set public key to received value, secret key to size 0 and finish
@@ -465,7 +464,7 @@ struct DistKey : Dist {
      *
      * Calls its syncps's start() before returning to start participating in collection
      */
-    void start(connectedCb&& ccb) {
+    void start(connectedCb&& ccb) override {
         connCb_ = std::move(ccb);
         if (!sync_.autoStart_) sync_.start();  // all distributors "before" me have initialized
 

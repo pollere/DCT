@@ -5,7 +5,7 @@
 # or "-n 0" for run forever
 
 # members=(gate bob)
-members=(gate bob frontdoor backdoor patio sidedoor window1 window2) # alice)
+members=(gate bob frontdoor backdoor) # patio sidedoor window1 window2) # alice)
 
 #get rid of any leftovers
 killall app2
@@ -15,7 +15,7 @@ export DCT_DEFAULT_IF
 DCT_MULTICAST_ADDR=ff01::1234
 export DCT_MULTICAST_ADDR
 for mbr in ${members[@]}; do
-  ./app2 -n 3 id2/$mbr.bundle &
+  ./app2 -n 4 id2/$mbr.bundle &
 #  ./app2 -n 0 -q id2/$mbr.bundle &
   echo -n " $mbr"
   echo
