@@ -64,6 +64,8 @@ struct DCTmodel {
     SigMgrAny csm_;         // cert publication signing/validation
     SigMgrAny psm_;         // pdu signing/validation
     SigMgrSchema syncSm_;   // msgs syncps pub validator
+    uint8_t  logging_{};   // set to a non-zero value if using logging
+    bool virtClk_{false};     // becomes true if using trust domain virtual clock distributor
     SyncPS sync_;  // sync collection for msgs
     static inline std::function<size_t(std::string_view)> _s2i;
     DistCert ckd_;         // cert collection distributor
@@ -76,13 +78,11 @@ struct DCTmodel {
     std::vector<Dist*> dists_{};    // ptrs to distributors in required start order
     connectedCb connectCb_;   // shim callback when dct_model finishes start()
     tpToValidator pv_{};    // map signer thumbprint to pub structural validator
-    bool virtClk_{false};     // true if using trust domain virtual clock distributor
-    bool vcRdy_{false};      // true if the virtClk_ has done a calibration
-    bool logging_{false};   // true if using the logs distributor
     logEvCb logsCb_;
     pTimer makeSP_{std::make_shared<Timer>(getDefaultIoContext())}; // timer for making next signing pair
 
     // Trust Domain Virtual Clock access is via face (many things need its 'now()' method)
+    bool vcRdy_{false};      // set to true if the virtClk_ has done a calibration
     auto tdvcNow() const noexcept { return face_.tdvcNow(); }
     auto tdvcAdjust() const noexcept { return face_.tdvcAdjust(); }
     tdv_clock::duration tdvcAdjust(tdv_clock::duration  dur) noexcept { return face_.tdvcAdjust(dur); }
@@ -113,10 +113,11 @@ struct DCTmodel {
         logsCb_( topic , content);
    }
 
-   void setLogging() {  // to allow logging to be set from shim - needs a way to set logsCb_ in distributors - could keep dists_?
+   void setLogging(uint8_t n=1) {  // to allow logging to be set from shim - needs a way to set logsCb_ in distributors - could keep dists_?
        if (logging_) return;
-       logging_ = true;
-       lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs());
+       logging_ = n;
+       //dists_.push_back(lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs()) );
+       dists_.insert(dists_.begin()+1, lgd_ = new DistLogs(face_, pubPrefix(), pduPrefix()/"logs", certs()) ); // to set in position 1
        logsCb_ = [lgd=lgd_] (crName&& ln, std::span<const uint8_t> c) mutable { lgd->publishLog(std::move(ln), c); };
        for (size_t i=0; i< dists_.size(); ++i)  dists_[i]->logsCb_ = logsCb_;
    }
@@ -214,14 +215,8 @@ struct DCTmodel {
                 if (validateChain(bs_, cs_, cert) < 0) return; // chain structure invalid
                 cs_.add(cert, !(virtClk_ && vcRdy_)); // second arg true => no check of validNow
                 setupPubValidator(tp);
-                // let all attached collections know there is a new signer in case have pending Publications
-                // start with PDU key collection, then Pub key collection, then msgs collection
-                if (virtClk_) vcd_->sync_.newSigner(tp);
-                if (logging_) lgd_->sync_.newSigner(tp);
-                if (gkd_)   gkd_->sync_.newSigner(tp);
-                else if (sgkd_) sgkd_->sync_.newSigner(tp);
-                if (pgkd_)   pgkd_->sync_.newSigner(tp);
-                else if (psgkd_) psgkd_->sync_.newSigner(tp);
+                // let all attached collections (distributors) know there is a new signer in case have pending Publications
+                for (size_t i=1; i< dists_.size(); ++i)  dists_[i]->sync_.newSigner(tp);
                 sync_.newSigner(tp);
                 return; // done since signing cert validation completes the chain
             }
@@ -316,6 +311,8 @@ struct DCTmodel {
             csm_{getCertSigMgr(bs_)},
             psm_{getPduSigMgr(bs_)},
             syncSm_{msm_.ref(), bs_, pv_},
+            logging_{getLogging(bs_)},
+            virtClk_{getVirtClock(bs_)},
             sync_{face_, pduPrefix()/"msgs", pduSigMgr(), syncSm_},
             ckd_{face_, pubPrefix(), pduPrefix()/"cert", cs_, [this](auto cert){ addCert(cert);}}
     {

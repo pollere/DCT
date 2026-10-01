@@ -18,7 +18,7 @@ The version 10 release implements suppression of excess cStates and cAdds on a b
 
 ### Directories
 
-This repository is organized into directories:
+This repository contains a document with further information on DeftT modules and is organized into directories:
 
 - tools: contains tools for creating the schemas and certs needed by a DCT-enabled application (described in its README) and two subdirectories:
   
@@ -52,6 +52,8 @@ The included versec compiler is required to compile new schemas but pre-compiled
 ### References and related work
 
 DeftT is described in: https://pollere.net/Txtdocs/defTrust.html and in an internet draft: https://datatracker.ietf.org/doc/draft-nichols-iotops-defined-trust-transport/ with overview talk at: https://youtu.be/YSmxis1puuE?t=2170 slides at: http://pollere.net/Pdfdocs/slides-114-iotops-defined-trust-transport-00.pdf
+
+DCT's approach to creating a shared virtual clock (when needed) is described in "Defined-trust Domain Virtual Clock" (https://www.tdcommons.org/dpubs_series/7887/) and https://ndncomm2025.named-data.net/slides/NDNComm2025/s3-4-Kathie-Nichols.pdf with video https://www.youtube.com/watch?v=Z_0OEXPnT0c This is implemented in the Trust Domain Virtual Clock distributor module.
 
 Some concepts here may be better understood by referencing earlier Pollere work: 
 

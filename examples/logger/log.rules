@@ -76,6 +76,7 @@ domainCert: _domain/_certinfo
 #certValidator: "EdDSA"
 // used for cAdds
 #pduValidator: "AEAD"
+#Logging: "1"
 
 // uses NDN certificate format v2 suffix for a cert name, final four
 // components are KEY, keyID, issuerID, and version

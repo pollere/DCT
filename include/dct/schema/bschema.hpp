@@ -187,6 +187,14 @@ struct bSchema {
     // return the value of a pub's first template as a string
     std::string pubVal(bTok nm) const { return bNameToStr(pubTmpl0(findPub(nm))); }
 
+    std::string pubValOrNull(bTok nm) const {
+        std::string res{};
+        try {
+            res = pubVal(nm);
+        } catch (const runtime_error& e) { }
+        return res;
+    }
+
     auto tagNames(bTok nm) const {
         std::vector<std::string> res{};
         for (const auto& t : tag_[pub_[findPub(nm)].tag]) res.emplace_back(tok_[t]);

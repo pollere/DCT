@@ -120,6 +120,16 @@ static inline int validateChain(const bSchema& bs, const certStore& cs, const dc
 static inline auto getSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#msgsValidator").substr(1)); }
 static inline auto getCertSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#certValidator").substr(1)); }
 static inline auto getPduSigMgr(const bSchema& bs) { return sigMgrByType(bs.pubVal("#pduValidator").substr(1)); }
+// optional settings
+// XXXX should probably go somewhere else but not clear where
+static inline auto getLogging(const bSchema& bs) {
+    if(auto v = bs.pubValOrNull("#Logging"); !v.empty()) {  return (uint8_t)stoi(v.substr(1)); }
+    return (uint8_t)0;
+}
+static inline auto getVirtClock(const bSchema& bs) {
+    if(auto v = bs.pubValOrNull("#VirtClock"); !v.empty()) {  return (bool)stoi(v.substr(1)); }
+    return false;
+}
 
 } // namespace dct
 
