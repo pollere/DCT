@@ -17,3 +17,4 @@ x4. Re-election enabled
 7. Evaluate whether IBLT advances can be useful for syncps
 8. Home Assistant integration
 9. Implement guest/worker framework
+10. Specify distributor publications in rules file

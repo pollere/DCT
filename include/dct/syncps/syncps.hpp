@@ -27,7 +27,7 @@
 #include <functional>
 #include <limits>
 #include <map>
-#include <random>
+// #include <random>
 #include <ranges>
 #include <type_traits>
 #include <unordered_map>
@@ -35,6 +35,7 @@
 #include <dct/face/direct.hpp>
 #include <dct/format.hpp>
 #include <dct/schema/dct_cert.hpp>
+#include "dct/rand.hpp"
 #include "iblt.hpp"
 
 namespace dct {
@@ -68,6 +69,8 @@ static constexpr tdv_clock::duration stateLifetime = 1357ms;
 
 // set an estimated processing overhead that will dominate distDelay for higher speed networks
 static constexpr tdv_clock::duration pduProc = 50ms;
+
+dct::rand rand_{};
 
 /*
  * In syncps constructor, add the mtu()/rate() to distDelay. distDelay is (an estimate of) the time to
@@ -188,8 +191,8 @@ struct SyncPS {
             iblt_.insert(h);
             return h;
         }
-        auto addLocal(PubHash h, Item&& i) { return add(h, std::forward<Item>(i), Ent::loc|Ent::act); }
 
+        auto addLocal(PubHash h, Item&& i) { return add(h, std::forward<Item>(i), Ent::loc|Ent::act); }
         auto add(Item&& i, decltype(Ent::s_) s) { return add(hashPub(i), std::forward<Item>(i), s); }
         auto addLocal(Item&& i) { return add(std::forward<Item>(i), Ent::loc|Ent::act); }
         auto addNet(Item&& i) { return add(std::forward<Item>(i), Ent::act); }
@@ -270,7 +273,7 @@ struct SyncPS {
     std::chrono::system_clock::time_point lastNeed_{};       // if non-zero, hold time for "needs" cStates
     tdv_clock::duration signerHold_{distDelay_};        // set to zero to never hold a publication that may arrive before signing cert
     pTimer scheduledCStateId_{std::make_shared<Timer>(getDefaultIoContext())};
-    std::uniform_int_distribution<unsigned short> randInt_{0u, 10u}; //  cState delay  randomization
+  //  std::uniform_int_distribution<unsigned short> randInt_{0u, 10u}; //  cState delay  randomization
     Nonce  nonce_{};            // nonce of current cState
     uint32_t publications_{};   // # locally originated publications
     uint32_t noSignerPubs_{};   // # publications whose signer isn't in my certstore (yet)
@@ -326,7 +329,7 @@ struct SyncPS {
         }
     };
 
-    constexpr auto randInt() { return randInt_(randGen()); }
+//   constexpr auto randInt() { return randInt_(randGen()); }
 
     constexpr auto maxInfoSize() const noexcept { return maxInfoSize_; }
     constexpr auto mtu() const noexcept { return face_.mtu(); }
@@ -640,7 +643,7 @@ struct SyncPS {
     void sendCStateSoon(tdv_clock::duration dly = 0ms) {
         scheduledCStateId_->cancel();
         if (unicast()) sendCState();    // no delay    
-        else scheduledCStateId_ = schedule(dly + std::chrono::milliseconds(randInt()), [this]{ sendCState(); });
+        else scheduledCStateId_ = schedule(dly + std::chrono::milliseconds(rand_(0,23)), [this]{ sendCState(); });
     }
 
     auto name2iblt(const rName& name) const noexcept {
@@ -831,7 +834,7 @@ struct SyncPS {
                 uint32_t csId = mhashView(name);
                 if (!noOthers_ && pendOthers_.find(csId) == pendOthers_.end()) {
                     pendOthers_.emplace(csId, phOth);
-                    oneTime(distDelay_ + std::chrono::milliseconds(randInt()), [this,csId]{ sendOthers(csId); });
+                    oneTime(distDelay_ + std::chrono::milliseconds(rand_(7,37)), [this,csId]{ sendOthers(csId); });
                 }
             }
             if (need.size()) sendNeed(now);

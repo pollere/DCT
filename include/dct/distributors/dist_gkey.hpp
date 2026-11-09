@@ -77,7 +77,7 @@ struct DistGKey :
      */
 
     DistGKey(DirectFace& face, const Name& pPre, const Name& dPre, const certStore& cs,  addKeyCb&& keyCb,
-             tdv_clock::duration reKeyInterval = 3600s) :
+             tdv_clock::duration reKeyInterval = 300s) :
              DistKey("kygrp", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval) {
        //      DistKey("kygrp", face, pPre, dPre, cs, std::move(keyCb), reKeyInterval, expirationGB) {
         // compute space for content for the key list Publication. Other Pubs are smaller, so use worst-case

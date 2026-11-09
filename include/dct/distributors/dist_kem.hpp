@@ -77,7 +77,7 @@ namespace dct {
 #include "kem_xwing_grpkey.c"
 #endif
 
- static constexpr uint8_t reqLimit = 5;
+ static constexpr uint8_t ReqLimit = 5;
 
 template <std::size_t skSize, std::size_t encSKSz, std::size_t pkSize = 0>
 struct DistKey : Dist {
@@ -108,14 +108,16 @@ struct DistKey : Dist {
     keyVal ePK_{};                  // a ephemeral pk sent in a kr; use with
     keyVal eSK_{};                   // ephemeral sk to decrypt group key
     keyVal grpSK_{};              // current secret key
-    keyVal grpPK_{};               // current public key (not set for symmetric group key sigmgrs)
+    keyVal grpPK_{};             // current public key (not set for symmetric group key sigmgrs)
     uint64_t grpKT_{};          // current key (pair) "valid after" time in microsecs
+    keyVal lstSK_{};              // KM saves previously made secret key
+    uint64_t lstKT_{};            // KM saves previous SK "valid after" time
     uint64_t preKT_{};          // saves current gk time when enter election (for later testing)
     keyVal grpSeed_{};           // the current seed so the group symmetric key is repeatable for xwing
 
     tdv_clock::duration reKeyInt_{};
     tdv_clock::duration announceLifetime_{};
-    tdv_clock::duration newKeyDly_{20*sync_.distDelay_}; // KM sets new several dispersion delays in future
+    tdv_clock::duration newKeyDly_{}; // valid time for new SKs is this far in future
     tdv_clock::duration rkLifetime_{10*sync_.distDelay_}; // request for key and key records pubs, set to ~ several dispersion delays
     tdv_clock::duration elecDuration_{10*sync_.distDelay_};
     kmElection* kme_{};
@@ -141,7 +143,8 @@ struct DistKey : Dist {
           rkPrefix_{pPre/"rk"},  // request for secret key pubs
           akPrefix_{pPre/"ak"}, // announce key pubs
           newKeyCb_{std::move(keyCb)},  //called when a (new) group key arrives or is created
-          reKeyInt_{reKeyInterval} {
+          reKeyInt_{reKeyInterval},
+          newKeyDly_{reKeyInterval/10} {
         announceLifetime_ = reKeyInt_ + newKeyDly_;
         if ( sync_.collName_.last().toSv() == "msgs") { msgsDist_ = true; dtype_.append("/msgs"); }
         else dtype_.append("/pdus");
@@ -170,6 +173,7 @@ struct DistKey : Dist {
     // distributor-specific check if particular tp is not qualified to receive a copy of the group secret key
     virtual bool isSubscriber(thumbPrint&) { return true; }
     virtual void setPK(keyVal&) { }
+    bool expiredGK() { return (grpKT_ + reKeyInt_.count() + sync_.distDelay_.count() <= (uint64_t)(sync_.tdvcNow().time_since_epoch()).count()); }
 
     /*
      * Called when my identity has a new signing key pair
@@ -192,7 +196,6 @@ struct DistKey : Dist {
     // members with KM capability call this when a keymaker election is needed
     void enterElection() {
         if (kmPri_(tp_)==0 || keyElection_) return;
-        print("enterElection called by {}, epoch {} at {}\n", cs_[tp_].name().first(3), KMepoch_, sync_.tdvcNow());
         preKT_ = grpKT_;
         keyElection_ = true;    // in an election
         kme_->startElection(KMepoch_);
@@ -206,39 +209,37 @@ struct DistKey : Dist {
         auto n = p.name();
         auto r =  n.nextAt(skPrefix_.size()).toByte();
         auto e = n.nextBlk().toNumber();
-          print("rcvNoKm: {} e={}({}) i={} gets r={} {}\n", cs_[tp_].name()[2].toSv(), KMepoch_, e, keyId_, r, p.name());
-        if (r == reqLimit && e == KMepoch_ && n.nextBlk().toByte() == keyId_)
+        if (r == ReqLimit && e == KMepoch_ && n.nextBlk().toByte() == keyId_)
               sync_.oneTime(std::chrono::milliseconds(rand_(1,19)), [this](){ enterElection(); });
     }
 
-    // call newKeyCb_ to pass the new group key info. If key time sufficiently in future, use a timer to delay
-    // after the first key in an epoch, keymaker sets KT to newKeyDly_ in future so members have time to
+    // call newKeyCb_ to pass the next group key info. If key time sufficiently in future, use a timer to delay
+    // after the first key in an epoch, keymaker sets KT newKeyDly_ in future so members have time to
     // acquire the new key.
-    // Note: if a member starts up during the time after the new key is made and before its
-    // KT is reached, it won't be able to init until KT so delay should be kept relatively short
     // Non-keymakers with the KM capability monitor if the elected keymaker becomes incapacitated or unreachable
     // The KM should make a new key reKeyInt_ - newKeyDly_ after the grpKT_
-    // adding reKeyInt_ to the grpKT_ gives an extra newKeyDly_ to receive news of the new key but
-    // multiples of newKeyDly_ can be added for more conservative re-election but longer delays in electing a
+    // adding reKeyInt_ to the grpKT_ gives an extra newKeyDly_ to receive news of the new key
+    // more time can be added for more conservative re-election but longer delays in electing a
     // new KM - only a problem for newly joining members.
     void installNewKey() {
-        auto install = [this](){    // does key installation
+        // does key installation
+        auto install = [this](){
             newKeyCb_(grpSK_, grpPK_, grpKT_); //use addKeyCb to set new group key in sigmgr - starts using to sign immediately
-            if (kmPri_(tp_)) {    // >0 if I have KM capability
+            if (keyMaker_) { lstKT_ = 0; lstSK_.resize(0); }    // no longer give out previous key
+            else if (kmPri_(tp_)) {    // >0 if I have KM capability but this is silly if I am the current keyMaker
                 uint64_t now =  std::chrono::duration_cast<std::chrono::microseconds>(sync_.tdvcNow().time_since_epoch()).count();
-                tdv_clock::duration d{grpKT_ < now ? now-grpKT_ : 0};
-                // here adds two  extra newKeyDly_ for check if a new grpKT_ has been set
-                sync_.oneTime(reKeyInt_ - d + 2*newKeyDly_ + std::chrono::milliseconds(rand_(1,19)), [this,kt=grpKT_](){
-                print("installCB:: grpKT_={}, kt={}\n", grpKT_, kt); if (grpKT_== kt) enterElection(); });
+                tdv_clock::duration d{grpKT_ < now ? now-grpKT_  : 0};
+                sync_.oneTime(reKeyInt_ - d + std::chrono::milliseconds(rand_(1,23)), [this,kt=grpKT_](){ if (grpKT_== kt) { enterElection(); }});
+           //      if (expiredGK()) enterElection(); }});
             }
             if (init_)  { initDone(); if(!keyMaker_) sync_.sendCState();} // can exit init; send a confirming cState in case KM starting, too
         };
 
-        uint64_t now =  std::chrono::duration_cast<std::chrono::microseconds>(sync_.tdvcNow().time_since_epoch()).count();
+        installKP_->cancel();   // cancel any pending KP install as this has to be a superseding key
+        uint64_t now =  std::chrono::duration_cast<std::chrono::microseconds>(sync_.tdvcNow().time_since_epoch()).count();     
         if (grpKT_ > now) { // times may be off by distDelay_ but shouldn't be an issue
             installKP_ = sync_.schedule(std::chrono::microseconds(grpKT_ - now), std::move(install));
         } else {
-            installKP_->cancel();   // cancel any pending KP install
             install();
         }
      }
@@ -250,7 +251,7 @@ struct DistKey : Dist {
      * requests have a lifetime on order of a few distribution delays and are reissued until  a key is received
      * called when a key announcement is received, reschedules self until canceled
      * uses the same ephemeral key pair until a valid key is received which cancels requests
-     * If request is unsuccessful reqLimit times in a row, need a new keymaker
+     * If request is unsuccessful ReqLimit times in a row, need a new keymaker
      */
 
     void publishRequestForKey() {
@@ -258,28 +259,31 @@ struct DistKey : Dist {
         /*using ticks = std::chrono::duration<double,std::ratio<1,1000000>>;
         auto now = std::chrono::system_clock::now();
         print("{:%M:%S} {} publishes a {} request for key\n",  ticks(now.time_since_epoch()), cs_[tp_].name(), sync_.collName_.last().toSv());*/
-        rkRefresh_->cancel();  // if a request key refresh is scheduled, cancel it
-        auto rdly = rkLifetime_ + std::chrono::milliseconds(rand_(1,13));
-        if (++keyReqCtr_ > reqLimit) {
-            keyReqCtr_ = reqLimit;
+        rkRefresh_->cancel();  // if a request key refresh is scheduled, cancel it    
+        auto exp = expiredGK(); // test if the requested key has expired
+        if (exp && kmPri_(tp_) == 0) {
+            rkPending_ = false;
+            return;  // if don't have keymaker capability, just return and wait for a new ak
+        }
+        if (exp || ++keyReqCtr_ > ReqLimit) { // an expiredGK and hitting ReqLimit both indicate an unresponsive keymaker
+            keyReqCtr_ = ReqLimit;
             if (!keyElection_ && kmPri_(tp_)) { // If I have KM capability, enter election. Potentially just elect self - fastest resolution
                 rkPending_ = false;
                 enterElection();
                 return;
             }
-            rdly = elecDuration_;   // wait longer before request key again
+            return;     // don't have KM capability, wait for a new ak, or wait for election
         }
 
         crData p(rkPrefix_/keyReqCtr_/KMepoch_/keyId_/sync_.tdvcNow());
         p.content(ePK_);
         rkPending_ = true;
         try {
-           // print("DistKey::publishRequestForKey: name size={} content size={} available={}\n", p.name().size(), ePK_.size(), sync_.maxInfoSize_);
             sync_.signThenPublish(std::move(p));
         } catch (const std::exception& e) {
             std::cerr << "dist_" << dtype_ << "::publishRequestForKey: " << e.what() << std::endl;
         }
-        rkRefresh_ = sync_.schedule(rdly, [this](){ publishRequestForKey(); });
+        rkRefresh_ = sync_.schedule(rkLifetime_ + std::chrono::milliseconds(rand_(1,13)), [this](){ publishRequestForKey(); });
     }
 
     /*
@@ -301,16 +305,36 @@ struct DistKey : Dist {
     }
 #endif
 
+
+    // initiate process to acquire group secret key
+    void acquireSK(auto kid, auto kt, auto pk){
+        std::string s = std::format("acqSK/{}/{}/{}/{}", cs_[tp_].name()[2].toSv(), KMepoch_, keyId_, kid);
+        logEvent(s);  // log
+        // set/change to this keyId, KT to values of the group key
+        keyId_ = kid;
+        grpKT_ = kt;
+        grpPK_ = pk;
+        if (! subscriber_) { // publish-only: set public key to received value, secret key to size 0 and finish
+            grpSK_.resize(0);
+            installNewKey();
+            return;
+        }
+        // subscribers need the group secret key
+        skRecv_ = false;    // don't have sk for this ak
+        keyReqCtr_ = 0;
+        getEphemeralKP(); // make a new ephemeral key pair for each new key announcement
+        publishRequestForKey();
+    }
+
     void receiveKeyAnnounce(const rPub& p) {
         if (msgsDist_ && isRelay(tp_))  return;   // relays don't get pub keys for msgs collection
         const auto& tp = p.signer();    // get thumbprint of this Pub's signer; must have KM capability
         if (!cs_.contains(tp) || kmPri_(tp) <= 0) return;  // ignore if signed by expired or unauthorized identity
         auto n = p.name();
-        auto epoch = n.nextAt(skPrefix_.size()).toNumber();
-        auto reqNo = n.nextAt(skPrefix_.size()).toNumber();
+        auto epoch = n.nextAt(akPrefix_.size()).toNumber();
         uint8_t keyId = n.nextBlk().toByte();
         //illustrate simple logging
-        std::string s = std::format("akRec/{}/{}/{}/{}", cs_[tp].name()[2].toSv(), reqNo, epoch, keyId);
+        std::string s = std::format("akRec/{}/{}/{}", cs_[tp].name()[2].toSv(), epoch, keyId);
         logEvent(s);  // log
 
         if (cs_[tp].signer() == cs_[tp_].signer()) { // From earlier signing key of my own identity?
@@ -333,11 +357,9 @@ struct DistKey : Dist {
             else return;    // remaining as keyMaker
         }
 
-        // get here => not a key maker
+        // get here => not the key maker
         // ignore announcements from earlier epoch or keyId or smaller tp than my KM or (if larger) not if it's a late joiner
-        if (epoch < KMepoch_ || (epoch == KMepoch_ && (keyId < keyId_ || (keyId ==keyId_ && tp <= kmtp_)))) {
-        return; // older key that has been superseded
-        }
+        if (epoch < KMepoch_ || (epoch == KMepoch_ && (keyId < keyId_ || (keyId ==keyId_ && tp <= kmtp_)))) return; // older key that has been superseded
 
         // extract key time and PK (if any) from content
         decltype(grpKT_) newKT{};
@@ -349,24 +371,34 @@ struct DistKey : Dist {
             if constexpr (pkSize_) newPK = content.nextBlk(150).toVector();
         } catch (std::runtime_error& ex) { return; } //ignore this publication
 
-        // set/change to this sending keyMaker, epoch, keyId, KT to values of the group key
+
+        /*
+         * For a member that is starting up (or waking up) while the current key's ak is active as well as the next one,
+         * check if getting the next key's ak before the current one OR getting the next key's ak while still acquiring current key
+         * If so, save the relevant info from the ak to acquire it just before its valid time after a delay
+         * After the delay, make sure that a different epoch / km hasn't taken over
+         */
+        uint64_t now =  (std::chrono::duration_cast<std::chrono::microseconds>(sync_.tdvcNow().time_since_epoch())).count();
+        if ((expiredGK() && newKT > now + 2*rkLifetime_.count()) || (rkPending_ && !expiredGK() && keyId==keyId_+1 && epoch==KMepoch_ && tp==kmtp_) )
+        {
+            tdv_clock::duration dly{newKT - now - rkLifetime_.count()};
+            sync_.oneTime(dly, [this, tp, epoch, keyId, newKT, newPK](){
+                      if (expiredGK()) { // still haven't received an ak for a currently active group key
+                          kmtp_ = tp;
+                          KMepoch_ = epoch;
+                      } else if (KMepoch_ != epoch || kmtp_ != tp || keyId != keyId_+1) return;  // this is not the next key of current key
+                      acquireSK(keyId, newKT, newPK);
+                      });
+            return;
+         }
+
+        // set/change to this sending keyMaker and epoch
         kmtp_ = tp;
         KMepoch_ = epoch;
-        keyId_ = keyId;
-        grpKT_ = newKT; // might want to test for grpKT_ older than rekey interval
-        grpPK_ = newPK;
-
-        if (! subscriber_) { // publish-only: set public key to received value, secret key to size 0 and finish
-            grpSK_.resize(0);
-            installNewKey();
-            return;
-        }
-
-        // subscribers need the group secret key
-        skRecv_ = false;    // don't have sk for this ak
-        keyReqCtr_ = 0;
-        getEphemeralKP(); // make a new ephemeral key pair for each new key announcement
-        publishRequestForKey();
+        if (newKT > now + rkLifetime_.count()) { // for future valid keys, spread requests out
+            tdv_clock::duration dly{rand_(newKT - now - rkLifetime_.count())};
+            sync_.oneTime(dly, [this, keyId, newKT, newPK](){ acquireSK(keyId, newKT, newPK); });
+        } else acquireSK(keyId, newKT, newPK);
     }
 
     /*
@@ -498,6 +530,12 @@ struct DistKey : Dist {
             sync_.subscribe(skPrefix_, [this](const auto& p){ receiveSecretKey(p); });
             return;
         }
+        // this is not likely unless delay a bit after subscribe to akPrefix_ but could let a later joiner skip election
+        if (rkPending_ || !expiredGK()) { // have km capability but received a request or key after subscribe
+            sync_.subscribe(skPrefix_, [this](const auto& p){ receiveSecretKey(p); });
+            sync_.subscribe(rkPrefix_/ReqLimit, [this](const auto& p){ receiveReqLimit(p);});
+            return;
+        }
 
         auto eDone = [this](auto elected, uint8_t epoch) {
             keyElection_ = false;   // election over
@@ -505,7 +543,7 @@ struct DistKey : Dist {
                     if (keyMaker_) sync_.unsubscribe(rkPrefix_);    // no longer keyMaker
                     keyMaker_ = false;
                     sync_.subscribe(skPrefix_, [this](const auto& p){ receiveSecretKey(p); });
-                    sync_.subscribe(rkPrefix_/reqLimit, [this](const auto& p){ receiveReqLimit(p);});
+                    sync_.subscribe(rkPrefix_/ReqLimit, [this](const auto& p){ receiveReqLimit(p);});
                     return;
             }
             KMepoch_ = epoch;
@@ -516,6 +554,7 @@ struct DistKey : Dist {
             }
             if (!keyMaker_) { // not previously keyMaker: subscribe to rk pubs and may need to unsubscribe sk pubs
                     sync_.unsubscribe(skPrefix_);
+                    sync_.unsubscribe(rkPrefix_/ReqLimit);
                     sync_.subscribe(rkPrefix_, [this](const auto& p){ receiveKeyRequest(p); }); // keymakers need the member requests
             }
             keyMaker_ = elected;
@@ -550,7 +589,7 @@ struct DistKey : Dist {
      * the content of one pub. This will be large so future versions could split this up
      */
 #if PQC==1
-    auto encKey(const auto& pk, auto& ek) {     // X-wing - encSKSz_ is set when created for dist versions
+    auto encKey(const auto& pk, auto& ek, const auto& sk) {     // X-wing - encSKSz_ is set when created for dist versions
          uint8_t ess[encSSSz_];    // encrypted ephemeral (two-way) shared secret
          uint8_t ss[skSize_];          // ephemeral shared secret
          if (crypto_kem_enc(ess, ss, pk.data()) != 0) return -1;
@@ -561,12 +600,12 @@ struct DistKey : Dist {
          randombytes_buf(n, sizeof(n));
          ek.insert(ek.end(), n, n+sizeof(n));    // add nonce to ek
          uint8_t egk[encSKSz_]; // encrypted group key
-         if (crypto_secretbox_easy(egk, grpSK_.data(), skSize_, n, ss) != 0) return -1;
+         if (crypto_secretbox_easy(egk, sk, skSize_, n, ss) != 0) return -1;
          ek.insert(ek.end(), egk, egk+encSKSz_);   // add encrypted grpSK to ek
          return 0;
      }
 #elif PQC==2
-     auto encKey(const auto& pk, auto& ek) {     // X-wing - encSKSz_ is set when created for dist versions
+     auto encKey(const auto& pk, auto& ek, const auto& sk) {     // X-wing - encSKSz_ is set when created for dist versions
          uint8_t ct[encSSSz_];    // should be size crypto_kem_CIPHERTEXTBYTES
          uint8_t ss[skSize_];
          if (crypto_kem_enc(ct, ss, pk.data()) != 0) return -1;
@@ -579,9 +618,9 @@ struct DistKey : Dist {
          return 0;
      }
 #else
-   auto encKey(const auto& pk, auto& ek) {     // X25519 - encSKSz_ is set when created for dist_key versions
+   auto encKey(const auto& pk, auto& ek, const auto& sk) {     // X25519 - encSKSz_ is set when created for dist_key versions
        uint8_t m[encSKSz_];
-       if (crypto_box_seal(m, grpSK_.data(), skSize_, pk.data()) != 0) return -1;
+       if (crypto_box_seal(m, sk, skSize_, pk.data()) != 0) return -1;
        ek.assign(m, m + encSKSz_);
        return 0;
    }
@@ -589,11 +628,14 @@ struct DistKey : Dist {
 
    // Publish a secret key encrypted for member with tp <skPrefix_><epoch><keyId><tpId><timestamp>
    // this member has sent a request - KM can start using new key and be initialized
-     void publishSecretKey(const auto& tp,  const auto& pk) {
+     void publishSecretKey(const auto& tp,  const auto& pk, const auto kId) {
         std::vector<uint8_t> ek;
-        if (encKey(pk, ek) != 0) return;    // XXXX might want to print the error for testing
+        if (kId == keyId_) {
+             if (encKey(pk, ek, grpSK_.data()) != 0) return;    // XXXX might want to print the error for testing
+        } else  if (encKey(pk, ek, lstSK_.data()) != 0) return;    // need to encrypt and send the last SK made
+
         const auto TP = [](const auto& tp){ return std::span(tp).first(TPbytes_); };
-        crData p(skPrefix_/KMepoch_/keyId_/TP(tp)/sync_.tdvcNow()); //set timestamp using the domain virtual clock
+        crData p(skPrefix_/KMepoch_/kId/TP(tp)/sync_.tdvcNow()); //set timestamp using the domain virtual clock
         p.content(ek);
     //    print("publishSecretKey: {} publishes sk for {}\n", cs_[tp_].name(), cs_[tp].name());
         try {
@@ -604,7 +646,7 @@ struct DistKey : Dist {
         }
      }
 
-     // When keymaker creates a new group key, it announces it. ck publication has a lifetime until next key's valid time
+     // When keymaker creates a new group key, it announces it. ak publication has a lifetime until next key's valid time
      // If there may be publish only members, use confirmation cb to start to use new key locally and move out of init
      // <akPrefix_><epoch><keyId><timestamp> content holds key creation time and public key, if any
      void announceKey() {
@@ -614,7 +656,7 @@ struct DistKey : Dist {
         crData p(akPrefix_/KMepoch_/keyId_/sync_.tdvcNow()); //set timestamp using the domain virtual clock
         p.content(ckEnc.vec());
         try {
-            // start using key locally when the announcement is in a member's collection (could wait for key request unless pubOnlyPossible_)
+            // start or schedule use of key locally once the announcement is in a member's collection (could wait for key request unless pubOnlyPossible_)
             //print("announceKey: {} announces(msgs={}) sk {}\n", cs_[tp_].name().first(3),  msgsDist_, p.name());
             sync_.signThenPublish(std::move(p), [this](const rData&, bool s){ if(s) installNewKey(); });
        } catch (const std::exception& e) {
@@ -652,9 +694,12 @@ struct DistKey : Dist {
   #endif
 
     void makeNewKey() {
+        if (keyId_) {   // if not start of epoch, save the previous key in case a new member requests it before new key is valid
+            lstSK_ = grpSK_;
+            lstKT_ = grpKT_;
+        }
         getNewKey();    // sets new grpSK_ (and public if any) for specific type of distributor
-        keyId_++;
-        if (keyId_ == 1)  grpKT_ = std::chrono::duration_cast<std::chrono::microseconds>(sync_.tdvcNow().time_since_epoch()).count();
+        if (++keyId_ == 1)  grpKT_ = std::chrono::duration_cast<std::chrono::microseconds>(sync_.tdvcNow().time_since_epoch()).count();
         else grpKT_ = std::chrono::duration_cast<std::chrono::microseconds>(sync_.tdvcNow().time_since_epoch() + newKeyDly_).count();
         sentSKs_ = 0;
         announceKey();    // start using locally after publication feedback
@@ -666,7 +711,9 @@ struct DistKey : Dist {
         if (!keyMaker_ || e != KMepoch_) return;    // need to stop if I lose a future election, another keymaker took priority, or I got a new signing key
         makeNewKey();
  //     dct::print("makeKeyTimeout: {} makes new sk (msgs={}) grpKT_={}\n", cs_[tp_].name().first(3), msgsDist_, grpKT_);
-        sync_.oneTime(reKeyInt_, [this, e=KMepoch_](){ makeKeyTimeout(e);});  //next re-keying event
+        // schedule next re-keying event; first key of an epoch become valid immediately, others newKeyDly_ in future
+        if (keyId_ == 1) sync_.oneTime(reKeyInt_  - newKeyDly_, [this, e=KMepoch_](){ makeKeyTimeout(e);});
+        else sync_.oneTime(reKeyInt_, [this, e=KMepoch_](){ makeKeyTimeout(e);});
     }
 
     /*
@@ -684,13 +731,17 @@ struct DistKey : Dist {
 
         auto n = p.name();  // check if request is for the current key
         n.nextAt(skPrefix_.size()).toByte();  // skip over request number
-        if (n.nextBlk().toNumber() != KMepoch_) return;
-        if (n.nextBlk().toByte() != keyId_) return;
+        if (n.nextBlk().toNumber() != KMepoch_) return;     
+        auto k = n.nextBlk().toByte();  // must be either keyId_ or nonzero and one smaller => last key
+        if (k != keyId_) {
+            if (k>0 && k != keyId_-1 ) return;
+            if (lstKT_ == 0) return;    // no previous key to send
+        }
 
         // extract ephemeral public key to encrypt response - check size/len
         if (p.content().len() != pkeSize_) { print("receiveKeyRequest: content size is not correct for PK\n"); return; }
         const keyVal& pk = p.content().toVector(); // XXX should this be toSpan keyVal?
-        publishSecretKey(tp,  pk);    // publish SK encrypted for member tp using appropriate encryption method
+        publishSecretKey(tp,  pk, k);    // publish SK encrypted for member tp using appropriate encryption method
     }
 
     /*

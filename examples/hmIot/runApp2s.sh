@@ -15,10 +15,12 @@ export DCT_DEFAULT_IF
 DCT_MULTICAST_ADDR=ff01::1234
 export DCT_MULTICAST_ADDR
 for mbr in ${members[@]}; do
-  ./app2 -n 4 id2/$mbr.bundle &
-#  ./app2 -n 0 -q id2/$mbr.bundle &
+#  ./app2 -n 2 id2/$mbr.bundle &
+  ./app2 -n 0 -q id2/$mbr.bundle &
   echo -n " $mbr"
   echo
 #  sleep .1 
 done
+sleep 290
+./app2 -n 0 -q id2/patio.bundle &
 echo
